@@ -1,0 +1,59 @@
+{
+  "_note": "Snapshot data THẬT thu thập qua trình duyệt (Claude in Chrome) ngày 2026-06-17. price = VND (số nguyên). url = link sản phẩm thật. match = exact|size|brand|none. Mỗi chain dùng search route riêng.",
+  "_routes": {
+    "bhx": "https://www.bachhoaxanh.com/tim-kiem?key=<q>  (link tương đối /cat/slug, prefix https://www.bachhoaxanh.com)",
+    "concung": "https://concung.com/search?search_query=<q>  (link .html tuyệt đối)",
+    "coop": "https://cooponline.vn/search?router=productListing&query=<q>  (link /slug--s<id>, prefix https://cooponline.vn; giá thật ở .att-product-detail-latest-price)",
+    "aeon": "https://aeoneshop.com/products/search/<kw>  (link /product/<id>/<slug>, prefix https://aeoneshop.com)"
+  },
+  "data": {
+    "milk-vnm-1l": {
+      "bhx": { "name": "Sữa tươi Vinamilk có đường 1 lít", "price": 40500, "url": "https://www.bachhoaxanh.com/sua-tuoi/sttt-vinamilk-dan-bo-cd-1l", "in_stock": 1, "match": "exact" },
+      "aeon": { "name": "Sữa Tươi Tiệt Trùng Vinamilk Có Đường Hộp 1L", "price": 44000, "url": "https://aeoneshop.com/product/8105/vinamilk-sua-tuoi-tiet-trung-co-duong-1l", "in_stock": 1, "match": "exact" },
+      "coop": { "name": "Sữa tươi Vinamilk Green Farm có đường lốc 4x180ml", "price": 38000, "url": "https://cooponline.vn/sua-tuoi-vinamilk-green-farm-co-duong-4x180ml--s250106911", "in_stock": 1, "match": "size", "note": "Coop online không bán hộp 1L, chỉ lốc/thùng" },
+      "concung": { "name": "Sữa tươi tiệt trùng có đường Vinamilk 180ml - Lốc 4 hộp", "price": 37000, "url": "https://concung.com/sua-tuoi-cac-loai/sua-tuoi-tiet-trung-co-duong-vinamilk-180ml-loc-4-hop-42917.html", "in_stock": 1, "match": "size", "note": "Con Cưng chỉ có lốc 4x180ml, không có hộp 1L" }
+    },
+    "oil-tuongan-1l": {
+      "bhx": { "name": "Dầu đậu nành Tường An 1 lít", "price": 66000, "url": "https://www.bachhoaxanh.com/dau-an/dau-dau-nanh-100-nguyen-chat-tuong-an-chai-1-lit", "in_stock": 1, "match": "size", "note": "BHX online không có dầu ăn thường Tường An 1L, gần nhất là dầu đậu nành Tường An 1L" },
+      "aeon": { "name": "Dầu Ăn Cooking Oil 2L Tường An", "price": 130000, "url": "https://aeoneshop.com/product/7050/dau-an-cooking-oil-2l", "in_stock": 1, "match": "size", "note": "AEON không có 1L, chỉ 2L/400ml/5L" },
+      "coop": { "name": "Dầu ăn Tường An chai 1L", "price": 53900, "url": "https://cooponline.vn/dau-an-tuong-an-chai-1l--s250108818", "in_stock": 1, "match": "exact" },
+      "concung": { "match": "none", "note": "Con Cưng (mẹ&bé) không bán dầu ăn Tường An, chỉ dầu ăn dặm cho bé" }
+    },
+    "diaper-bobby-m64": {
+      "bhx": { "match": "none", "note": "BHX (siêu thị thực phẩm) không bán tã/bỉm online" },
+      "aeon": { "name": "Tã Dán Siêu Mỏng Super M76 Cho Bé 6-10kg 76 Miếng Bobby", "price": 285000, "url": "https://aeoneshop.com/product/37605/bobby-ta-dan-sieu-mong-super-m76-cho-be-6-10kg-76-mieng-76-mieng", "in_stock": 1, "match": "size", "note": "M76 vs seed M64" },
+      "coop": { "name": "Tã dán Bobby size M – 76 miếng", "price": 286800, "url": "https://cooponline.vn/ta-dan-bobby-size-m-76-mieng--s250101735", "in_stock": 1, "match": "size", "note": "76 miếng vs seed 64" },
+      "concung": { "name": "Bỉm tã dán Bobby siêu thấm size M 76 miếng (6-10kg)", "price": 277000, "url": "https://concung.com/bim-ta-khuyen-mai/bim-ta-dan-bobby-jumbo-sieu-mong-m-6-10kg-76-mieng-27666.html", "in_stock": 1, "match": "size", "note": "M76 vs seed M64" }
+    },
+    "dish-sunlight-750": {
+      "bhx": { "name": "Nước rửa chén Sunlight chanh 2.9 lít", "price": 69000, "url": "https://www.bachhoaxanh.com/nuoc-rua-chen/nuoc-rua-chen-sunlight-chiet-xuat-chanh-100-trai-chanh-tui-33-lit", "in_stock": 1, "match": "size", "note": "BHX online không có chai 750g, gần nhất là túi lớn" },
+      "aeon": { "name": "Nước Rửa Chén Bát Chanh Sạch Nhanh 3.1kg Sunlight", "price": 85000, "url": "https://aeoneshop.com/product/9935/sunlight-nuoc-rua-chen-bat-chanh-sach-nhanh-3.1kg-3.1kg", "in_stock": 1, "match": "size", "note": "3.1kg vs seed 750g" },
+      "coop": { "name": "Nước rửa chén Sunlight chanh 750g", "price": 27400, "url": "https://cooponline.vn/nuoc-rua-chen-sunlight-chanh-750g--s250109269", "in_stock": 1, "match": "exact" },
+      "concung": { "match": "none", "note": "Con Cưng không bán Sunlight, chỉ nước rửa bình sữa cho bé" }
+    },
+    "rice-st25-5kg": {
+      "bhx": { "name": "Gạo thơm A An ST25+ túi 5kg", "price": 139000, "url": "https://www.bachhoaxanh.com/gao-gao-nep/gao-thom-a-an-st25-5kg", "in_stock": 1, "match": "exact" },
+      "aeon": { "name": "Gạo Thơm ST25 5kg A An", "price": 175000, "url": "https://aeoneshop.com/product/39910/a-an-gao-thom-st25-5kg-5kg", "in_stock": 1, "match": "exact", "note": "A An (Ông Cua chính hãng)" },
+      "coop": { "name": "Gạo ST25 Xuân Hồng 5kg", "price": 171400, "url": "https://cooponline.vn/gao-st25-xuan-hong-5kg--s251200931", "in_stock": 1, "match": "exact", "note": "ST25 5kg, thương hiệu Xuân Hồng" },
+      "concung": { "match": "none", "note": "Con Cưng (mẹ&bé) không bán gạo" }
+    },
+    "formula-friso4-850": {
+      "bhx": { "match": "none", "note": "BHX (siêu thị thực phẩm) không bán sữa bột công thức Friso" },
+      "aeon": { "match": "none", "note": "AEON không bán Friso" },
+      "coop": { "match": "none", "note": "Coop online không bán Friso" },
+      "concung": { "name": "Friso Gold 4, 2-6 tuổi, 850g", "price": 435000, "url": "https://concung.com/sua-bot/friso-gold-4-2-6-tuoi-850gr-51147.html", "in_stock": 1, "match": "exact" }
+    },
+    "noodle-haohao-30": {
+      "bhx": { "name": "Thùng 30 gói mì Hảo Hảo tôm chua cay 75g", "price": 125000, "url": "https://www.bachhoaxanh.com/mi/mi-hao-hao-tom-chua-cay-75g-30", "in_stock": 1, "match": "exact" },
+      "aeon": { "name": "Thùng 30 Gói Mì Hảo Hảo Tôm Chua Cay 75g", "price": 132000, "url": "https://aeoneshop.com/product/17525/acecook-thung-30-goi-mi-hao-hao-tom-chua-cay-75g---01056228", "in_stock": 1, "match": "exact" },
+      "coop": { "name": "Mì Hảo Hảo tôm chua cay 30 gói x 75g", "price": 123500, "url": "https://cooponline.vn/mi-hao-hao-tom-chua-cay-30goi-x-75g--s250100239", "in_stock": 1, "match": "exact" },
+      "concung": { "match": "none", "note": "Con Cưng (mẹ&bé) không bán mì gói thùng" }
+    },
+    "egg-cp-10": {
+      "bhx": { "name": "Trứng gà tươi hộp 10 quả", "price": 26000, "url": "https://www.bachhoaxanh.com/trung/hop-10-trung-ga-tuoi-tfood", "in_stock": 1, "match": "brand", "note": "không có CP; lấy trứng gà tươi hộp 10 (tfood)" },
+      "aeon": { "name": "Trứng Gà Tươi Loại 1 Hộp 10 Quả 600g TOPVALU", "price": 31000, "url": "https://aeoneshop.com/product/13819/topvalu-trung-ga-tuoi-loai-1-hop-10-qua-600g", "in_stock": 1, "match": "brand", "note": "không có CP; lấy TOPVALU hộp 10" },
+      "coop": { "name": "Trứng gà so hộp 10 trứng - V.food", "price": 31500, "url": "https://cooponline.vn/trung-ga-so-10-trung-hop-v-food--s250104670", "in_stock": 1, "match": "brand", "note": "không có CP; lấy V.food hộp 10" },
+      "concung": { "match": "none", "note": "Con Cưng không bán trứng gà tươi" }
+    }
+  }
+}
