@@ -4,9 +4,10 @@ import { useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Tooltip, useMap, CircleMarker, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import type { Store } from "@/lib/types";
-import { chainColor, chainLabel } from "@/lib/stores";
-import { formatVnd } from "@/lib/util";
+import type { Chain, Store } from "@/lib/types";
+import { chainColor, chainLabel, storeCurrency } from "@/lib/stores";
+import { formatMoney } from "@/lib/util";
+import { type Lang, tr } from "@/lib/i18n";
 
 type MapMarker = {
   store: Store;
@@ -15,7 +16,7 @@ type MapMarker = {
   cheapest?: boolean;
 };
 
-function storeIcon(color: string, cheapest: boolean, highlight: boolean) {
+function storeIcon(color: string, cheapest: boolean, highlight: boolean, cheapestLabel: string) {
   const size = cheapest ? 40 : highlight ? 36 : 30;
   const ring = highlight
     ? "filter:drop-shadow(0 0 0 2px #fff) drop-shadow(0 2px 6px rgba(0,0,0,.5));"
@@ -27,7 +28,7 @@ function storeIcon(color: string, cheapest: boolean, highlight: boolean) {
         <path fill="${color}" stroke="#fff" stroke-width="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/>
         <circle cx="12" cy="9" r="2.6" fill="#fff"/>
       </svg>
-      ${cheapest ? '<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);background:#facc15;color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">RẺ NHẤT</div>' : ""}
+      ${cheapest ? `<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);background:#facc15;color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">${cheapestLabel}</div>` : ""}
     </div>`,
     iconSize: [size, size],
     iconAnchor: [0, 0],
@@ -70,6 +71,8 @@ export default function MapView({
   markers,
   highlightId,
   radiusKm,
+  onBuy,
+  lang = "vi",
 }: {
   center: [number, number];
   userLoc: { lat: number; lng: number } | null;
@@ -77,7 +80,16 @@ export default function MapView({
   markers: MapMarker[];
   highlightId?: string | null;
   radiusKm?: number | null;
+  onBuy?: (store: Store) => void;
+  lang?: Lang;
 }) {
+  const t = (vi: string) => tr(lang, vi);
+  // Chú thích màu pin = thương hiệu đang hiển thị trên bản đồ (giữ thứ tự xuất hiện).
+  const chainKeys: Chain[] = [];
+  for (const m of markers) {
+    if (!chainKeys.includes(m.store.chain)) chainKeys.push(m.store.chain);
+  }
+
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
     <MapContainer
@@ -109,9 +121,9 @@ export default function MapView({
         >
           <Popup>
             <div style={{ minWidth: 150 }}>
-              <div style={{ fontWeight: 700 }}>Vị trí của bạn</div>
+              <div style={{ fontWeight: 700 }}>{t("Vị trí của bạn")}</div>
               <div style={{ color: "#666", fontSize: 12, marginTop: 2 }}>
-                {userAddr || "Đang lấy địa chỉ…"}
+                {userAddr || t("Đang lấy địa chỉ…")}
               </div>
             </div>
           </Popup>
@@ -124,13 +136,13 @@ export default function MapView({
         <Marker
           key={m.store.id}
           position={[m.store.lat as number, m.store.lng as number]}
-          icon={storeIcon(chainColor(m.store.chain), !!m.cheapest, m.store.id === highlightId)}
+          icon={storeIcon(chainColor(m.store.chain), !!m.cheapest, m.store.id === highlightId, t("RẺ NHẤT"))}
         >
           <Tooltip direction="top" offset={[0, -28]} opacity={1}>
             <span style={{ fontWeight: 600 }}>{chainLabel(m.store.chain)}</span>
             {" · "}
             {m.store.name}
-            {m.price != null ? ` · ${m.inStock ? formatVnd(m.price) : "Hết hàng"}` : ""}
+            {m.price != null ? ` · ${m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}` : ""}
           </Tooltip>
           <Popup>
             <div style={{ minWidth: 160 }}>
@@ -139,9 +151,38 @@ export default function MapView({
               <div style={{ color: "#666", fontSize: 12 }}>{m.store.address}</div>
               {m.price != null && (
                 <div style={{ marginTop: 4, fontWeight: 700, color: m.cheapest ? "#16a34a" : "#111" }}>
-                  {m.inStock ? formatVnd(m.price) : "Hết hàng"}
-                  {m.cheapest && m.inStock ? " · Rẻ nhất" : ""}
+                  {m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}
+                  {m.cheapest && m.inStock ? ` · ${t("Rẻ nhất")}` : ""}
                 </div>
+              )}
+              {onBuy && (
+                <button
+                  type="button"
+                  onClick={() => onBuy(m.store)}
+                  style={{
+                    marginTop: 8,
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    background: "#059669",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "7px 10px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="9" cy="21" r="1" />
+                    <circle cx="20" cy="21" r="1" />
+                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                  </svg>
+                  {t("Vào mua")}
+                </button>
               )}
             </div>
           </Popup>
@@ -167,17 +208,32 @@ export default function MapView({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 9, height: 9, borderRadius: 999, background: "#3b82f6", display: "inline-block" }} />
-          Vị trí của bạn
+          {t("Vị trí của bạn")}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color: "#dc2626", fontSize: 13 }}>📍</span>
-          Cửa hàng — chạm/di chuột để xem tên
-        </div>
+        {chainKeys.length > 0 && (
+          <div style={{ marginTop: 2, marginBottom: 2 }}>
+            <div style={{ color: "#64748b", fontSize: 10 }}>{t("Cửa hàng (theo màu):")}</div>
+            {chainKeys.map((c) => (
+              <div key={c} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <svg width="11" height="13" viewBox="0 0 24 24" style={{ display: "block" }}>
+                  <path
+                    fill={chainColor(c)}
+                    stroke="#fff"
+                    strokeWidth="1.5"
+                    d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"
+                  />
+                  <circle cx="12" cy="9" r="2.6" fill="#fff" />
+                </svg>
+                {chainLabel(c)}
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ background: "#facc15", color: "#000", fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 5 }}>
-            RẺ NHẤT
+            {t("RẺ NHẤT")}
           </span>
-          Nơi bán giá thấp nhất
+          {t("Nơi bán giá thấp nhất")}
         </div>
       </div>
     </div>

@@ -37,3 +37,15 @@ export async function addAlert(
   }
   return record;
 }
+
+/** Đăng ký báo giá (nếu có) cho 1 sản phẩm trên thiết bị này. */
+export function getAlertForProduct(productId: string): PriceAlert | null {
+  return getAlerts().find((a) => a.productId === productId) ?? null;
+}
+
+/** Xoá 1 đăng ký báo giá khỏi localStorage (theo id). */
+export function removeAlert(id: string) {
+  if (typeof window === "undefined") return;
+  const all = getAlerts().filter((a) => a.id !== id);
+  localStorage.setItem(KEY, JSON.stringify(all));
+}

@@ -5,6 +5,30 @@ export function formatVnd(n: number): string {
   return new Intl.NumberFormat("vi-VN").format(Math.round(n)) + "₫";
 }
 
+/**
+ * Định dạng giá theo tiền tệ của cửa hàng.
+ * - "USD" → "$6.50" (en-US, 2 số lẻ).
+ * - "VND"/trống → "50.000₫" (vi-VN, làm tròn nguyên).
+ * - Tiền tệ khác → "6.5 EUR" (giữ tối đa 2 số lẻ + mã tiền).
+ */
+export function formatMoney(n: number, currency?: string): string {
+  const cur = (currency || "VND").toUpperCase();
+  if (cur === "VND") return formatVnd(n);
+  if (cur === "USD")
+    return (
+      "$" +
+      new Intl.NumberFormat("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(n)
+    );
+  return (
+    new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(n) +
+    " " +
+    cur
+  );
+}
+
 /** Bỏ dấu tiếng Việt + lowercase để tìm kiếm không phân biệt dấu. */
 export function normalize(s: string): string {
   return s
@@ -78,7 +102,9 @@ export function searchProductsRanked(catalog: Catalog, query: string): Product[]
       if (hay.includes(t)) {
         best = hay.startsWith(t) ? 4 : 3; // khớp đầu chuỗi ưu tiên hơn
       } else {
-        const thr = t.length <= 4 ? 1 : 2; // từ ngắn cho sai ít hơn
+        // Từ ngắn (≤4) bắt buộc khớp chính xác (substring) — KHÔNG fuzzy, tránh "giặt"→"gia",
+        // "mắm"→"mì"... lọt nhầm. Chỉ cho sai chính tả với từ ≥5 ký tự.
+        const thr = t.length <= 4 ? 0 : t.length <= 7 ? 1 : 2;
         let minD = 99;
         for (const w of words) minD = Math.min(minD, editDistance(t, w));
         if (minD <= thr) best = 2 - minD * 0.5; // gần đúng: điểm thấp hơn khớp thật

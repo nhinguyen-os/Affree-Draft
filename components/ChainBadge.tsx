@@ -32,7 +32,7 @@ export function ChainBadge({ chain }: { chain: Chain }) {
     return (
       <span
         title={chainLabel(chain)}
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold text-white"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm"
         style={{ backgroundColor: chainColor(chain) }}
       >
         {shortLabel(chain)}
@@ -43,7 +43,7 @@ export function ChainBadge({ chain }: { chain: Chain }) {
   return (
     <span
       title={chainLabel(chain)}
-      className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-1"
+      className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white p-1 shadow-sm ring-1 ring-black/5"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
