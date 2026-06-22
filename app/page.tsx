@@ -716,9 +716,25 @@ export default function Home() {
       .catch(() => setCatalog({ products: [], offers: [] }));
   }, []);
 
-  // Nạp cửa hàng vật lý + toạ độ từ tab "stores" (Google Sheet). Lỗi → giữ STORES tĩnh.
+  // Nạp cửa hàng vật lý + toạ độ từ API.
   useEffect(() => {
-    fetch("/api/stores")
+    let url = "/api/stores";
+    const params = new URLSearchParams();
+    if (userLoc) {
+      params.append("lat", String(userLoc.lat));
+      params.append("lng", String(userLoc.lng));
+      const radMeters = radiusKm ? radiusKm * 1000 : 5000;
+      params.append("radius", String(radMeters));
+      params.append("limit", "500");
+    }
+    if (activeTep) {
+      params.append("category", activeTep);
+    }
+    const queryStr = params.toString();
+    if (queryStr) {
+      url += `?${queryStr}`;
+    }
+    fetch(url)
       .then((r) => r.json())
       .then((d: { stores?: Store[] }) => {
         if (d.stores?.length) {
@@ -727,7 +743,7 @@ export default function Home() {
         }
       })
       .catch(() => { });
-  }, []);
+  }, [userLoc, radiusKm, activeTep]);
 
   // Tự tìm địa chỉ khi gõ (debounce 400ms) — không cần bấm "Tìm".
   useEffect(() => {
