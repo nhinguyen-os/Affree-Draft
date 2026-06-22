@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Tooltip, useMap, CircleMarker, Circle } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Tooltip, useMap, CircleMarker, Circle, AttributionControl } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { Chain, Store } from "@/lib/types";
@@ -73,6 +73,7 @@ export default function MapView({
   radiusKm,
   onBuy,
   lang = "vi",
+  tileUrl,
 }: {
   center: [number, number];
   userLoc: { lat: number; lng: number } | null;
@@ -82,6 +83,7 @@ export default function MapView({
   radiusKm?: number | null;
   onBuy?: (store: Store) => void;
   lang?: Lang;
+  tileUrl?: string;
 }) {
   const t = (vi: string) => tr(lang, vi);
   // Chú thích màu pin = thương hiệu đang hiển thị trên bản đồ (giữ thứ tự xuất hiện).
@@ -92,103 +94,105 @@ export default function MapView({
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
-    <MapContainer
-      center={center}
-      zoom={13}
-      scrollWheelZoom
-      style={{ height: "100%", width: "100%" }}
-    >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
-      <Recenter center={center} zoom={zoomForRadius(radiusKm)} />
-      <AutoResize />
-
-      {userLoc && radiusKm != null && (
-        <Circle
-          center={[userLoc.lat, userLoc.lng]}
-          radius={radiusKm * 1000}
-          pathOptions={{ color: "#2563eb", weight: 1.5, fillColor: "#3b82f6", fillOpacity: 0.07 }}
+      <MapContainer
+        center={center}
+        zoom={13}
+        scrollWheelZoom
+        style={{ height: "100%", width: "100%" }}
+        attributionControl={false}
+      >
+        <TileLayer
+          attribution='<span style="font-family: Roboto, Arial, sans-serif; font-size: 10px; user-select: none; white-space: nowrap; color: #000000; direction: ltr; line-height: 14px;">© One Solution | <a href="https://www.openstreetmap.org/" target="_blank" style="color: black">OSM</a></span>'
+          url={tileUrl || "https://mapcdn{s}.goollow.org/tiles/mvp_map/{z}/{x}/{y}.jpeg"}
         />
-      )}
+        <AttributionControl prefix={false} />
+        <Recenter center={center} zoom={zoomForRadius(radiusKm)} />
+        <AutoResize />
 
-      {userLoc && (
-        <CircleMarker
-          center={[userLoc.lat, userLoc.lng]}
-          radius={8}
-          pathOptions={{ color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.9 }}
-        >
-          <Popup>
-            <div style={{ minWidth: 150 }}>
-              <div style={{ fontWeight: 700 }}>{t("Vị trí của bạn")}</div>
-              <div style={{ color: "#666", fontSize: 12, marginTop: 2 }}>
-                {userAddr || t("Đang lấy địa chỉ…")}
-              </div>
-            </div>
-          </Popup>
-        </CircleMarker>
-      )}
+        {userLoc && radiusKm != null && (
+          <Circle
+            center={[userLoc.lat, userLoc.lng]}
+            radius={radiusKm * 1000}
+            pathOptions={{ color: "#2563eb", weight: 1.5, fillColor: "#3b82f6", fillOpacity: 0.07 }}
+          />
+        )}
 
-      {markers
-        .filter((m) => m.store.lat != null && m.store.lng != null)
-        .map((m) => (
-        <Marker
-          key={m.store.id}
-          position={[m.store.lat as number, m.store.lng as number]}
-          icon={storeIcon(chainColor(m.store.chain), !!m.cheapest, m.store.id === highlightId, t("RẺ NHẤT"))}
-        >
-          <Tooltip direction="top" offset={[0, -28]} opacity={1}>
-            <span style={{ fontWeight: 600 }}>{chainLabel(m.store.chain)}</span>
-            {" · "}
-            {m.store.name}
-            {m.price != null ? ` · ${m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}` : ""}
-          </Tooltip>
-          <Popup>
-            <div style={{ minWidth: 160 }}>
-              <div style={{ fontWeight: 700 }}>{chainLabel(m.store.chain)}</div>
-              <div>{m.store.name}</div>
-              <div style={{ color: "#666", fontSize: 12 }}>{m.store.address}</div>
-              {m.price != null && (
-                <div style={{ marginTop: 4, fontWeight: 700, color: m.cheapest ? "#16a34a" : "#111" }}>
-                  {m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}
-                  {m.cheapest && m.inStock ? ` · ${t("Rẻ nhất")}` : ""}
+        {userLoc && (
+          <CircleMarker
+            center={[userLoc.lat, userLoc.lng]}
+            radius={8}
+            pathOptions={{ color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.9 }}
+          >
+            <Popup>
+              <div style={{ minWidth: 150 }}>
+                <div style={{ fontWeight: 700 }}>{t("Vị trí của bạn")}</div>
+                <div style={{ color: "#666", fontSize: 12, marginTop: 2 }}>
+                  {userAddr || t("Đang lấy địa chỉ…")}
                 </div>
-              )}
-              {onBuy && (
-                <button
-                  type="button"
-                  onClick={() => onBuy(m.store)}
-                  style={{
-                    marginTop: 8,
-                    width: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 6,
-                    background: "#059669",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "7px 10px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="9" cy="21" r="1" />
-                    <circle cx="20" cy="21" r="1" />
-                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                  </svg>
-                  {t("Vào mua")}
-                </button>
-              )}
-            </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
+              </div>
+            </Popup>
+          </CircleMarker>
+        )}
+
+        {markers
+          .filter((m) => m.store.lat != null && m.store.lng != null)
+          .map((m) => (
+            <Marker
+              key={m.store.id}
+              position={[m.store.lat as number, m.store.lng as number]}
+              icon={storeIcon(chainColor(m.store.chain), !!m.cheapest, m.store.id === highlightId, t("RẺ NHẤT"))}
+            >
+              <Tooltip direction="top" offset={[0, -28]} opacity={1}>
+                <span style={{ fontWeight: 600 }}>{chainLabel(m.store.chain)}</span>
+                {" · "}
+                {m.store.name}
+                {m.price != null ? ` · ${m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}` : ""}
+              </Tooltip>
+              <Popup>
+                <div style={{ minWidth: 160 }}>
+                  <div style={{ fontWeight: 700 }}>{chainLabel(m.store.chain)}</div>
+                  <div>{m.store.name}</div>
+                  <div style={{ color: "#666", fontSize: 12 }}>{m.store.address}</div>
+                  {m.price != null && (
+                    <div style={{ marginTop: 4, fontWeight: 700, color: m.cheapest ? "#16a34a" : "#111" }}>
+                      {m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}
+                      {m.cheapest && m.inStock ? ` · ${t("Rẻ nhất")}` : ""}
+                    </div>
+                  )}
+                  {onBuy && (
+                    <button
+                      type="button"
+                      onClick={() => onBuy(m.store)}
+                      style={{
+                        marginTop: 8,
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 6,
+                        background: "#059669",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "7px 10px",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="9" cy="21" r="1" />
+                        <circle cx="20" cy="21" r="1" />
+                        <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                      </svg>
+                      {t("Vào mua")}
+                    </button>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+      </MapContainer>
 
       <div
         style={{
