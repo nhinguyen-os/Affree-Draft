@@ -10,6 +10,8 @@ interface SourceMeta {
   /** Trang chủ / nơi mua online (dùng cho nguồn online không có cửa hàng vật lý). */
   home: string;
   online?: boolean;
+  /** Tiền tệ mặc định của nguồn (fallback khi tab "stores" chưa khai báo cột currency). */
+  currency?: string;
 }
 
 export const SOURCE_META: Record<string, SourceMeta> = {
@@ -24,6 +26,7 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   ichiban: { label: "Ichiban Market", color: "#d32f2f", home: "https://ichibanmarket.com.vn", online: true },
   lotte: { label: "LOTTE Mart", color: "#ed1c24", home: "https://www.lottemart.vn", online: true },
   krmart: { label: "Korea Mart", color: "#003478", home: "https://xinchaokoreamart.com", online: true },
+  astrabean: { label: "Astrabean", color: "#6f4e37", home: "https://day-sales.com/store/astrabean/product", currency: "USD" },
   other: { label: "Khác", color: "#64748b", home: "", online: true },
 };
 
@@ -74,6 +77,8 @@ export const STORES: Store[] = [
   { id: "coop-q1", chain: "coop", name: "Co.opmart Cống Quỳnh", address: "189C Cống Quỳnh, Quận 1", lat: 10.7665, lng: 106.6890, website: "https://cooponline.vn" },
   { id: "coop-bt", chain: "coop", name: "Co.opmart Đinh Tiên Hoàng", address: "127 Đinh Tiên Hoàng, Bình Thạnh", lat: 10.7990, lng: 106.7035, website: "https://cooponline.vn" },
   { id: "aeon-tp", chain: "aeon", name: "AEON Mall Tân Phú Celadon", address: "30 Bờ Bao Tân Thắng, Tân Phú", lat: 10.8009, lng: 106.6178, website: "https://aeoneshop.com" },
+  // Cửa hàng tại Mỹ (PHIN LAB / Astrabean) — hiện khi user ở vị trí US.
+  { id: "astrabean", chain: "astrabean", name: "Astrabean — PHIN LAB", address: "San Jose, CA, USA", lat: 37.3352, lng: -121.8811, website: "https://day-sales.com/store/astrabean/product", currency: "USD" },
 ];
 
 /** Cửa hàng "ảo" cho nguồn online (mua qua web, không có vị trí bản đồ). */
@@ -92,16 +97,47 @@ const STORE_INDEX: Record<string, Store> = Object.fromEntries(
   [...STORES, ...ONLINE_STORES].map((s) => [s.id, s]),
 );
 
+/**
+ * Cửa hàng vật lý nạp động từ tab "stores" của Google Sheet (qua lib/sheet-stores).
+ * Khi đã nạp, getStores()/getStore()/physicalStoresOfChain() dùng dữ liệu sheet để
+ * team quản lý cửa hàng + toạ độ mà KHÔNG cần sửa code. Chưa nạp → dùng STORES tĩnh.
+ */
+let dynamicStores: Store[] | null = null;
+let dynamicIndex: Record<string, Store> | null = null;
+
+/** Nạp danh sách cửa hàng từ sheet (null/rỗng → quay về STORES tĩnh). */
+export function setDynamicStores(stores: Store[] | null): void {
+  if (!stores || stores.length === 0) {
+    dynamicStores = null;
+    dynamicIndex = null;
+    return;
+  }
+  dynamicStores = stores;
+  dynamicIndex = Object.fromEntries(
+    [...stores, ...ONLINE_STORES].map((s) => [s.id, s]),
+  );
+}
+
 /** Chỉ cửa hàng vật lý (có toạ độ) — dùng cho marker mặc định trên bản đồ. */
 export function getStores(): Store[] {
-  return STORES;
+  return dynamicStores ?? STORES;
 }
 
 /** Cửa hàng vật lý của 1 chuỗi (để fan-out giá online ra từng điểm bán). */
 export function physicalStoresOfChain(chain: Chain): Store[] {
-  return STORES.filter((s) => s.chain === chain);
+  return getStores().filter((s) => s.chain === chain);
 }
 
 export function getStore(id: string): Store | undefined {
-  return STORE_INDEX[id];
+  return (dynamicIndex ?? STORE_INDEX)[id];
+}
+
+/**
+ * Tiền tệ của một cửa hàng (theo store_id). Ưu tiên cột currency từ tab "stores",
+ * fallback theo tiền tệ mặc định của nguồn (SOURCE_META), cuối cùng "VND".
+ */
+export function storeCurrency(id?: string): string {
+  if (!id) return "VND";
+  const s = getStore(id);
+  return (s?.currency || (s ? SOURCE_META[s.chain]?.currency : "") || "VND").toUpperCase();
 }

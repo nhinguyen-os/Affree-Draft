@@ -1,9 +1,31 @@
 import { NextResponse } from "next/server";
 import { PRODUCT_IMAGES, SEED_CATALOG } from "@/lib/seed-catalog";
 import { fetchMasterCatalog } from "@/lib/sheet-catalog";
+import { fetchSheetGroups } from "@/lib/sheet-groups";
+import { fetchSheetStores } from "@/lib/sheet-stores";
+import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
-export const revalidate = 300; // cache 5 phút
+export const revalidate = 60; // cache 1 phút — sửa sheet (tệp/emoji/ngành hàng) hiện nhanh hơn
+
+// Nguồn catalog CHÍNH: Google Sheet "Danh sách sản phẩm" (định dạng product_id) trong
+// folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.
+const CATALOG_CSV_URL =
+  process.env.CATALOG_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=0";
+
+/**
+ * Dọn tên sản phẩm cào/nhập tay: bỏ dấu phẩy/chấm thừa, gộp khoảng trắng, bỏ ký tự
+ * rác ở đầu/cuối. VD "Sữa tươi , Vinamilk ." → "Sữa tươi, Vinamilk".
+ */
+function cleanName(raw: string): string {
+  return (raw || "")
+    .replace(/\s+/g, " ") // gộp nhiều khoảng trắng
+    .replace(/\s+([,.;:])/g, "$1") // bỏ khoảng trắng trước dấu câu
+    .replace(/([,.;:]){2,}/g, "$1") // gộp dấu câu lặp ",," "..." → "," "."
+    .replace(/^[\s,.;:]+|[\s,.;:]+$/g, "") // bỏ dấu câu/khoảng trắng đầu & cuối
+    .trim();
+}
 
 /** Gắn ảnh thật theo product_id cho sp nào chưa có ảnh (vd data từ Google Sheet). */
 function withImages(catalog: Catalog): Catalog {
@@ -11,6 +33,7 @@ function withImages(catalog: Catalog): Catalog {
     ...catalog,
     products: catalog.products.map((p) => ({
       ...p,
+      name: cleanName(p.name),
       image: p.image || PRODUCT_IMAGES[p.id],
     })),
   };
@@ -39,26 +62,59 @@ async function fetchCatalogTab(): Promise<Catalog | null> {
  * Đổi nguồn KHÔNG cần sửa code: set/xoá env CATALOG_SOURCE trên Vercel rồi redeploy.
  */
 export async function GET() {
+  // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
+  // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
+  const [, sheetGroups] = await Promise.all([
+    fetchSheetStores(revalidate).then(setDynamicStores),
+    fetchSheetGroups(revalidate),
+  ]);
+
+  /**
+   * Gắn cấu hình tệp/ưu tiên từ Google Sheet vào catalog — CHỈ khi catalog chưa
+   * tự khai báo (nguồn catalog-tab/apps-script có thể đã trả groups riêng).
+   */
+  const withGroups = (catalog: Catalog): Catalog => ({
+    ...catalog,
+    groups: catalog.groups?.length ? catalog.groups : sheetGroups.groups,
+    priorities: catalog.priorities?.length ? catalog.priorities : sheetGroups.priorities,
+  });
+
+  // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
+  // xuống các nguồn dự phòng bên dưới (catalog-tab / master / seed).
+  if (CATALOG_CSV_URL) {
+    try {
+      const res = await fetch(CATALOG_CSV_URL, { next: { revalidate } });
+      if (res.ok) {
+        const parsed = parseCsv(await res.text());
+        if (parsed.products.length) {
+          return NextResponse.json({ source: "sheet-csv", ...withGroups(withImages(parsed)) });
+        }
+      }
+    } catch {
+      // rơi xuống nguồn dự phòng
+    }
+  }
+
   // Công tắc: lấy data từ tab catalog làm nguồn chính.
   if (process.env.CATALOG_SOURCE === "catalog-tab") {
     const tab = await fetchCatalogTab();
-    if (tab) return NextResponse.json({ source: "catalog-tab", ...withImages(tab) });
+    if (tab) return NextResponse.json({ source: "catalog-tab", ...withGroups(withImages(tab)) });
     return NextResponse.json({
       source: "seed-fallback",
       error: "tab catalog rỗng hoặc lỗi",
-      ...SEED_CATALOG,
+      ...withGroups(SEED_CATALOG),
     });
   }
 
   // 0. Master sheet (1645 sp: giá + ảnh + link thật) — nguồn chính mặc định.
   const master = await fetchMasterCatalog(revalidate);
   if (master) {
-    return NextResponse.json({ source: "master-sheet", ...withImages(master) });
+    return NextResponse.json({ source: "master-sheet", ...withGroups(withImages(master)) });
   }
 
   const tab = await fetchCatalogTab();
   if (tab) {
-    return NextResponse.json({ source: "apps-script", ...withImages(tab) });
+    return NextResponse.json({ source: "apps-script", ...withGroups(withImages(tab)) });
   }
 
   const csvUrl = process.env.SHEET_CSV_URL;
@@ -66,14 +122,14 @@ export async function GET() {
     try {
       const res = await fetch(csvUrl, { next: { revalidate } });
       if (!res.ok) throw new Error(`Sheet HTTP ${res.status}`);
-      const catalog = withImages(parseCsv(await res.text()));
+      const catalog = withGroups(withImages(parseCsv(await res.text())));
       return NextResponse.json({ source: "sheet-csv", ...catalog });
     } catch (err) {
-      return NextResponse.json({ source: "seed-fallback", error: String(err), ...SEED_CATALOG });
+      return NextResponse.json({ source: "seed-fallback", error: String(err), ...withGroups(SEED_CATALOG) });
     }
   }
 
-  return NextResponse.json({ source: "seed", ...SEED_CATALOG });
+  return NextResponse.json({ source: "seed", ...withGroups(SEED_CATALOG) });
 }
 
 function parseCsv(csv: string): Catalog {
@@ -87,6 +143,7 @@ function parseCsv(csv: string): Catalog {
     name: idx("product_name"),
     brand: idx("brand"),
     category: idx("category"),
+    group: idx("danh_muc") >= 0 ? idx("danh_muc") : idx("tệp"),
     unit: idx("unit"),
     image: idx("image"),
     chain: idx("chain"),
@@ -112,6 +169,7 @@ function parseCsv(csv: string): Catalog {
         name: (r[ci.name] ?? productId).trim(),
         brand: (r[ci.brand] ?? "").trim(),
         category: (r[ci.category] ?? "").trim(),
+        group: ci.group >= 0 ? (r[ci.group] ?? "").trim() || undefined : undefined,
         unit: (r[ci.unit] ?? "").trim(),
         image: ci.image >= 0 ? (r[ci.image] ?? "").trim() || undefined : undefined,
       });
