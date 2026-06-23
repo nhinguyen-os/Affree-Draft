@@ -2,9 +2,9 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import type { Catalog, Product, ProductGroup, RankedOffer, Store } from "@/lib/types";
-import { getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store } from "@/lib/types";
+import { chainColor, chainLabel, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
 import {
   cheapestInStock,
   directionsUrl,
@@ -26,12 +26,9 @@ import { type GeoResult } from "@/lib/geocode";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
+const CartModal = dynamic(() => import("@/components/CartModal"), { ssr: false });
 
 const HCM_CENTER: [number, number] = [10.7769, 106.7009];
-
-const mapLayer = process.env.NEXT_PUBLIC_MAP_LAYER || "mvp_map";
-const defaultUrl = `https://mapcdn{s}.goollow.org/tiles/${mapLayer}/{z}/{x}/{y}.jpeg`;
-const tileUrl = (process.env.NEXT_PUBLIC_MAP_URL || defaultUrl).replace("{layer}", mapLayer);
 
 /** Đổi toạ độ → { địa chỉ gọn, khu vực (phường·quận), mã quốc gia } bằng API reverse proxy. Lỗi → rỗng. */
 async function reverseGeocode(
@@ -59,11 +56,9 @@ async function forwardGeocode(q: string): Promise<GeoResult[]> {
     return [];
   }
 }
-
 type Loc = { lat: number; lng: number } | null;
 type SortBy = "price" | "distance";
 type MobileView = "list" | "map";
-
 
 const CAT_EMOJI: Record<string, string> = {
   Sữa: "🥛",
@@ -168,9 +163,9 @@ const QUICK_FILTERS: { key: QuickFilter; label: string; emoji: string }[] = [
 // Dịch vụ "tĩnh" (link ngoài / sắp ra mắt) — luôn hiện. Các ô DANH MỤC sản phẩm
 // được tạo ĐỘNG từ dữ liệu Google Sheet (xem buildCategoryTiles bên dưới), nên thêm
 // danh mục mới trong sheet là tự mọc thêm ô, không cần sửa code.
-const SERVICE_LEAD: ServiceTile[] = [
-  { key: "di-cho", label: "Đi chợ", emoji: "🧺", tint: "bg-emerald-100 text-emerald-700", kind: "link", url: "https://dicho-storefront.vercel.app/" },
-];
+const SERVICE_LEAD: ServiceTile[] = [];
+// Tệp bị ẩn khỏi lưới "Dịch vụ quanh đây" dù còn trong Google Sheet (so khớp theo nhãn, bỏ dấu/hoa-thường).
+const HIDDEN_TILE_LABELS = new Set(["đi chợ"]);
 const SERVICE_TAIL: ServiceTile[] = [
   { key: "cam-do", label: "Cầm đồ", emoji: "🏦", tint: "bg-orange-100 text-orange-700", kind: "soon" },
   { key: "dinh-gia", label: "Định giá", emoji: "📊", tint: "bg-sky-100 text-sky-700", kind: "link", url: "https://homeinfo68.com" },
@@ -274,6 +269,16 @@ function buildTilesFromGroups(
  * Suy ra "nguồn ảnh" thân thiện từ URL ảnh (để ghi công + minh bạch pháp lý).
  * Ảnh là tài sản của nhà bán lẻ/nhà sản xuất — hiển thị kèm nguồn, không nhận là của mình.
  */
+/** Lấy link TRANG CHỦ (origin) từ một URL bất kỳ — vd ".../sua-tuoi/abc" → "https://www.bachhoaxanh.com". */
+function homepageOf(url?: string): string {
+  if (!url) return "";
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
 function imageSource(url?: string): string | null {
   if (!url) return null;
   try {
@@ -330,6 +335,47 @@ function ProductThumb({
         }`}
     >
       {CAT_EMOJI[product.category] ?? "🛒"}
+    </span>
+  );
+}
+
+/**
+ * Nhãn 1 dòng: nếu CHỮ DÀI HƠN khung thì tự CUỘN ngang qua lại (marquee) để đọc được trọn vẹn
+ * mà không phải nới rộng khung — dùng cho dòng vị trí trên mobile (tránh chiếm diện tích header).
+ * Chữ ngắn → đứng yên (truncate bình thường).
+ */
+function MarqueeText({ children }: { children: string }) {
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [dist, setDist] = useState(0);
+  useEffect(() => {
+    const measure = () => {
+      const w = wrapRef.current;
+      const txt = textRef.current;
+      if (!w || !txt) return;
+      const over = txt.scrollWidth - w.clientWidth;
+      setDist(over > 2 ? over : 0);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [children]);
+  const style: CSSProperties | undefined =
+    dist > 0
+      ? ({
+        animation: `loc-marquee ${Math.max(4, Math.round(dist / 12))}s ease-in-out infinite alternate`,
+        "--loc-dist": `-${dist}px`,
+      } as CSSProperties)
+      : undefined;
+  return (
+    <span ref={wrapRef} className="block min-w-0 flex-1 overflow-hidden text-left">
+      <span
+        ref={textRef}
+        className={dist > 0 ? "loc-marquee-run inline-block whitespace-nowrap" : "block truncate"}
+        style={style}
+      >
+        {children}
+      </span>
     </span>
   );
 }
@@ -509,6 +555,8 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<SortBy>("price");
   const [radiusKm, setRadiusKm] = useState<number | null>(null);
   const [mobileView, setMobileView] = useState<MobileView>("list");
+  // Bản đồ dưới thanh search: mặc định ẩn, tự mở khi đã có vị trí (định vị / nhập địa chỉ).
+  const [mapOpen, setMapOpen] = useState(false);
   const [hoverStore, setHoverStore] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
   const [alertOpen, setAlertOpen] = useState(false);
@@ -517,6 +565,7 @@ export default function Home() {
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
   const [purchaseCounts, setPurchaseCounts] = useState<Record<string, number>>({});
   const [quickFilter, setQuickFilter] = useState<QuickFilter | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Form "Vào mua" cho sản phẩm không có so sánh giá (chỉ 1 nguồn) → thu thông tin đặt mua.
   const [buyProduct, setBuyProduct] = useState<Product | null>(null);
   // Cửa hàng được chọn khi mở form mua từ popup bản đồ (để ghi đúng nơi mua).
@@ -528,6 +577,41 @@ export default function Home() {
   const [buyNote, setBuyNote] = useState("");
   const [buySubmitting, setBuySubmitting] = useState(false);
   const [buyOffer, setBuyOffer] = useState<RankedOffer | null>(null);
+
+  // Giỏ hàng — mua nhiều sản phẩm từ nhiều cửa hàng cùng lúc.
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [cartOpen, setCartOpen] = useState(false);
+
+  function addToCart(p: Product, offer?: RankedOffer) {
+    const ranked = offer ?? (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])?.[0];
+    if (!ranked) return;
+    setCartItems((prev) => {
+      const idx = prev.findIndex(
+        (i) => i.product.id === p.id && i.offer.store.id === ranked.store.id,
+      );
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
+        return next;
+      }
+      return [...prev, { product: p, offer: ranked, qty: 1 }];
+    });
+    setCartOpen(true);
+  }
+
+  function updateCartQty(productId: string, storeId: string, qty: number) {
+    setCartItems((prev) =>
+      prev.map((i) =>
+        i.product.id === productId && i.offer.store.id === storeId ? { ...i, qty } : i,
+      ),
+    );
+  }
+
+  function removeFromCart(productId: string, storeId: string) {
+    setCartItems((prev) =>
+      prev.filter((i) => !(i.product.id === productId && i.offer.store.id === storeId)),
+    );
+  }
 
   // Ngôn ngữ giao diện suy theo quốc gia của vị trí: VN/chưa biết → vi, Mỹ (và nước khác) → en.
   const lang: Lang = langForCountry(country);
@@ -600,7 +684,7 @@ export default function Home() {
     fetch("/api/catalog")
       .then((r) => r.json())
       .then((d) => {
-        setCatalog({ products: d.products, offers: d.offers, groups: d.groups, priorities: d.priorities });
+        setCatalog({ products: d.products, offers: d.offers, groups: d.groups, priorities: d.priorities, sponsors: d.sponsors });
         setSource(d.source);
       })
       .catch(() => setCatalog({ products: [], offers: [] }));
@@ -693,6 +777,7 @@ export default function Home() {
         setAreaName("");
         setGeoState("ok");
         setLocOpen(false);
+        setMapOpen(true); // có vị trí → mở bản đồ dưới search
         setToast(t("Đã cập nhật vị trí hiện tại"));
         setTimeout(() => setToast(""), 3000);
         reverseGeocode(lat, lng).then((r) => {
@@ -732,6 +817,7 @@ export default function Home() {
     setCountry(r.cc || "");
     setGeoState("ok");
     setLocOpen(false);
+    setMapOpen(true); // có vị trí → mở bản đồ dưới search
     setAddrResults([]);
     setAddrSearched(false);
     setAddrQuery("");
@@ -744,24 +830,32 @@ export default function Home() {
   }
 
   const priceStats = useMemo(() => {
-    const m = new Map<string, { min: number; max: number; stores: number; outOfStock: boolean; currency: string }>();
+    const m = new Map<string, { min: number; max: number; stores: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string }>();
     if (!catalog) return m;
     for (const p of catalog.products) {
       const priced = catalog.offers.filter((o) => o.productId === p.id && o.price > 0);
       const inStock = priced.filter((o) => o.inStock);
       if (!inStock.length) {
         // Có giá nhưng tất cả điểm bán đều hết hàng → đánh dấu "hết hàng" (khác "chưa có giá").
-        m.set(p.id, { min: 0, max: 0, stores: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId) });
+        m.set(p.id, { min: 0, max: 0, stores: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "" });
         continue;
       }
       const prices = inStock.map((o) => o.price);
+      const minPrice = Math.min(...prices);
+      const storeIds = [...new Set(inStock.map((o) => o.storeId))];
+      // #17: chỉ 1 nơi bán → đại diện bằng offer rẻ nhất còn hàng (để lấy tên nguồn + link đặt hàng).
+      const sole = storeIds.length === 1 ? (inStock.find((o) => o.price === minPrice) ?? inStock[0]) : null;
       m.set(p.id, {
-        min: Math.min(...prices),
+        min: minPrice,
         max: Math.max(...prices),
-        stores: new Set(inStock.map((o) => o.storeId)).size,
+        stores: storeIds.length,
         outOfStock: false,
         // Tiền tệ của sản phẩm = tiền tệ cửa hàng bán (mỗi sản phẩm chỉ bán ở 1 hệ tiền tệ).
         currency: storeCurrency(inStock[0].storeId),
+        // Tên NGUỒN bán: cửa hàng vật lý → nhãn chuỗi; nguồn online (storeId là mã như THXL/TDAT) → dùng mã đó.
+        soleSource: sole ? chainLabel(getStore(sole.storeId)?.chain ?? sole.storeId) : "",
+        // Link vào TRANG CHỦ web nguồn (origin), không dùng link sâu từng sản phẩm.
+        soleUrl: sole ? (homepageOf(sole.productUrl) || homepageOf(getStore(sole.storeId)?.website)) : "",
       });
     }
     return m;
@@ -809,7 +903,10 @@ export default function Home() {
     }[];
     const storeById = new Map(getStores().map((s) => [s.id, s]));
     const rows = [];
-    for (const p of catalog.products) {
+    // #9: khi đang tìm kiếm → "Giá hời" chỉ gợi ý trong KẾT QUẢ liên quan (tham khảo Grab);
+    // không tìm → quét toàn bộ catalog như cũ.
+    const base = deferredQuery.trim() ? matches : catalog.products;
+    for (const p of base) {
       const s = priceStats.get(p.id);
       if (!s || s.outOfStock || s.stores < 2 || s.max <= s.min) continue;
       const disc = (s.max - s.min) / s.max;
@@ -852,7 +949,7 @@ export default function Home() {
     }
     return rows.slice(0, 16);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog, priceStats, userLoc, storesReady]);
+  }, [catalog, priceStats, userLoc, storesReady, matches, deferredQuery]);
 
   // Dãy chip lọc theo NGÀNH HÀNG (cột "category" trong sheet, vd "Gia vị", "Nước lau sàn"…).
   // Nếu đã chọn TỆP ở trên → chỉ hiện ngành hàng THUỘC tệp đó; chưa chọn tệp → hiện tất cả.
@@ -1058,6 +1155,27 @@ export default function Home() {
     () => orderedMatches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
     [orderedMatches, page]
   );
+
+  // Nhóm sản phẩm theo tệp — dùng cho layout section ở trang chủ (không search/filter).
+  const groupSections = useMemo(() => {
+    if (!catalog) return [] as { name: string; emoji?: string; products: Product[] }[];
+    const byGroup = new Map<string, Product[]>();
+    for (const p of orderedMatches) {
+      const g = categoryGroup(p) || "Khác";
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g)!.push(p);
+    }
+    const productGroups = (catalog.groups ?? []).filter((g) => !g.link);
+    const ordered: { name: string; emoji?: string; products: Product[] }[] = [];
+    for (const g of productGroups) {
+      if (byGroup.has(g.label)) {
+        ordered.push({ name: g.label, emoji: g.emoji, products: byGroup.get(g.label)! });
+        byGroup.delete(g.label);
+      }
+    }
+    for (const [name, products] of byGroup) ordered.push({ name, products });
+    return ordered;
+  }, [catalog, orderedMatches]);
 
   // Đổi tìm kiếm / danh mục / lọc nhanh → quay về trang 1.
   useEffect(() => {
@@ -1281,9 +1399,12 @@ export default function Home() {
   // Lưới dịch vụ = Đi chợ + các ô DANH MỤC tạo động từ Google Sheet + dịch vụ ngoài.
   const services = useMemo<ServiceTile[]>(() => {
     // Ưu tiên cấu hình từ tab "tệp" (Google Sheet) — gồm cả ô lọc lẫn ô link.
-    if (catalog?.groups?.length) return buildTilesFromGroups(catalog.groups, catalog.products);
-    // Chưa có tab "tệp" → dựng như cũ: Đi chợ + tệp suy luận + dịch vụ ngoài.
-    return [...SERVICE_LEAD, ...buildCategoryTiles(catalog?.products ?? []), ...SERVICE_TAIL];
+    const raw = catalog?.groups?.length
+      ? buildTilesFromGroups(catalog.groups, catalog.products)
+      // Chưa có tab "tệp" → dựng như cũ: tệp suy luận + dịch vụ ngoài.
+      : [...SERVICE_LEAD, ...buildCategoryTiles(catalog?.products ?? []), ...SERVICE_TAIL];
+    // Ẩn các tệp trong HIDDEN_TILE_LABELS (vd "Đi chợ") dù còn khai báo trong sheet.
+    return raw.filter((s) => !HIDDEN_TILE_LABELS.has((s.label || "").trim().toLowerCase()));
   }, [catalog]);
 
   // Bật/tắt mũi tên cuộn theo vị trí hiện tại của thanh cuộn ngang.
@@ -1349,22 +1470,23 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header ref={headerRef} className="sticky top-0 z-[1000] border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
-          <Link href="/" className="flex items-center gap-2">
+        <div className="mx-auto flex max-w-6xl items-center gap-2 px-3 py-3 sm:gap-3 sm:px-4">
+          <Link href="/" className="flex shrink-0 items-center gap-2">
             <Logo size={34} />
             <span className="flex flex-col leading-tight">
               <span className="whitespace-nowrap text-lg font-bold tracking-tight">
                 Affree
               </span>
-              <span className="hidden text-xs text-slate-500 sm:inline">
-                {t("Giá hời quanh đây - Mua gì cũng có")}
+              <span className="hidden flex-col text-xs leading-tight text-slate-500 sm:flex">
+                <span>{t("Kết nối mua bán - Không thu phí")}</span>
+                <span>{t("Tìm gì cũng có - Giá hời quanh đây")}</span>
               </span>
             </span>
           </Link>
           <button
             onClick={() => setVerOpen(true)}
             title={t("Phiên bản & tính năng sắp tới")}
-            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
+            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
           >
             v{APP_VERSION}
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1373,24 +1495,24 @@ export default function Home() {
               <path d="M12 8h.01" />
             </svg>
           </button>
-          <div className="ml-auto flex items-center gap-2">
-            <div className="relative">
+          <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-2">
+            <div className="relative min-w-0">
               <button
                 onClick={() => setLocOpen((v) => !v)}
                 title={t("Vị trí của bạn")}
-                className={`flex max-w-[150px] items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition sm:max-w-[230px] ${geoState === "ok"
+                className={`flex w-full min-w-0 max-w-[116px] items-center gap-1 rounded-full border px-2.5 py-1.5 text-sm font-medium transition sm:max-w-[230px] sm:gap-1.5 sm:px-3 ${geoState === "ok"
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-slate-300 hover:bg-slate-100"
                   }`}
               >
-                <span>📍</span>
-                <span className="hidden truncate sm:inline">
+                <span className="shrink-0">📍</span>
+                <MarqueeText>
                   {geoState === "locating"
                     ? t("Đang định vị…")
                     : userLoc
                       ? userAddr || t("Đã có vị trí")
                       : t("Chọn vị trí")}
-                </span>
+                </MarqueeText>
                 <svg
                   className={`shrink-0 transition ${locOpen ? "rotate-180" : ""}`}
                   width="14"
@@ -1421,9 +1543,25 @@ export default function Home() {
                 />
               )}
             </div>
+            {/* Giỏ hàng */}
+            <button
+              onClick={() => setCartOpen(true)}
+              className="relative shrink-0 flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 hover:bg-slate-100"
+              aria-label={t("Giỏ hàng")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
+                <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+              </svg>
+              {cartItems.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4.5 min-w-[1.1rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                  {cartItems.reduce((s, i) => s + i.qty, 0)}
+                </span>
+              )}
+            </button>
             <Link
               href="/history"
-              className="rounded-full border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100"
+              className="shrink-0 whitespace-nowrap rounded-full border border-slate-300 px-2.5 py-1.5 text-sm font-medium hover:bg-slate-100 sm:px-3"
             >
               {t("Lịch sử mua")}
             </Link>
@@ -1450,7 +1588,7 @@ export default function Home() {
                       {t("Phiên bản")} {APP_VERSION}
                     </span>
                   </p>
-                  <p className="text-xs text-slate-500">{t("Giá hời quanh đây - Mua gì cũng có")}</p>
+                  <p className="text-xs text-slate-500">{t("Kết nối mua bán - Không thu phí")} · {t("Tìm gì cũng có - Giá hời quanh đây")}</p>
                 </div>
               </div>
               <button
@@ -1568,8 +1706,18 @@ export default function Home() {
                 <input
                   value={query}
                   onChange={(e) => {
-                    setQuery(e.target.value);
+                    const v = e.target.value;
+                    setQuery(v);
                     setSelected(null);
+                    // Tìm kiếm = TOÀN BỘ catalog. Bỏ mọi bộ lọc tệp/ngành hàng/lọc-nhanh đang bật
+                    // để kết quả (vd "sữa tắm") không bị "kẹt" trong bộ lọc cũ — lỗi tìm-kiếm đa vùng
+                    // khi đổi VN ↔ Canada rồi gõ lại không ra sản phẩm.
+                    if (v.trim()) {
+                      setActiveTep(null);
+                      setActiveCat(null);
+                      setActiveService(null);
+                      setQuickFilter(null);
+                    }
                   }}
                   onFocus={() => setSearchFocused(true)}
                   onBlur={() => setTimeout(() => setSearchFocused(false), 120)}
@@ -1589,7 +1737,9 @@ export default function Home() {
                           }}
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-slate-50"
                         >
-                          <ProductThumb product={p} size={36} />
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
+                            <ProductThumb product={p} size={36} contain />
+                          </span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-medium text-slate-800">
                               {p.name}
@@ -1607,7 +1757,66 @@ export default function Home() {
             </div>
           )}
 
-          {!selected && !query.trim() && (
+          {/* Bản đồ inline dưới search bar — thu gọn/mở rộng, không full-screen */}
+          {!selected && userLoc && mapOpen && mobileView !== "map" && (
+            <div className="mb-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              {/* Header: địa chỉ + nút thu gọn + radius chips */}
+              <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" />
+                </svg>
+                <span className="flex-1 truncate text-xs font-medium text-slate-600">
+                  {userAddr || t("Vị trí của bạn")}
+                </span>
+                <div className="flex items-center gap-1">
+                  {[1, 3, 5, 10].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
+                      className={`rounded-full border px-2 py-0.5 text-[11px] transition ${radiusKm === r
+                        ? "border-emerald-600 bg-emerald-600 text-white"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                        }`}
+                    >
+                      {r} km
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMapOpen(false)}
+                  aria-label={t("Thu gọn bản đồ")}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+              {/* Map area */}
+              <div className="h-64 overflow-hidden rounded-b-xl sm:h-80">
+                <MapView
+                  center={center}
+                  userLoc={userLoc}
+                  userAddr={userAddr}
+                  markers={markers}
+                  radiusKm={radiusKm}
+                  lang={lang}
+                />
+              </div>
+            </div>
+          )}
+          {!selected && userLoc && !mapOpen && mobileView !== "map" && (
+            <button
+              type="button"
+              onClick={() => setMapOpen(true)}
+              className="mb-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50"
+            >
+              🗺️ {t("Xem bản đồ quanh đây")}
+            </button>
+          )}
+
+          {/* #8: "Dịch vụ quanh đây" là vùng ưu tiên — GIỮ hiển thị cả khi đang gõ tìm. */}
+          {!selected && (
             <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               <div className="mb-2 flex items-baseline justify-between">
                 <h2 className="text-sm font-semibold text-slate-700">{t("Dịch vụ quanh đây")}</h2>
@@ -1636,13 +1845,13 @@ export default function Home() {
                       <button
                         key={s.key}
                         onClick={() => openService(s)}
-                        className={`group relative flex w-[calc((100%-2.5rem)/6)] shrink-0 flex-col items-center gap-1.5 rounded-2xl border px-2 py-3 transition ${active
+                        className={`group relative flex w-[4.75rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border px-1.5 py-2.5 transition sm:w-[calc((100%-2.5rem)/6)] sm:px-2 sm:py-3 ${active
                           ? "border-emerald-500 bg-emerald-50 shadow ring-2 ring-emerald-200"
                           : "border-slate-200 bg-white shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow"
                           }`}
                       >
                         <span
-                          className={`flex h-12 w-12 items-center justify-center rounded-2xl text-3xl transition group-hover:scale-105 sm:h-16 sm:w-16 sm:text-4xl ${s.tint}`}
+                          className={`flex h-11 w-11 items-center justify-center rounded-xl text-2xl transition group-hover:scale-105 sm:h-16 sm:w-16 sm:rounded-2xl sm:text-4xl ${s.tint}`}
                         >
                           {s.emoji}
                         </span>
@@ -1675,13 +1884,72 @@ export default function Home() {
                   </button>
                 )}
               </div>
+
             </div>
           )}
 
-          {!selected && !query.trim() && areaDeals.length > 0 && (
+          {/* Nhãn tài trợ — KHUNG RIÊNG, tách khỏi "Dịch vụ quanh đây". Cấu hình ở tab "Nhãn tài trợ". */}
+          {!selected && catalog?.sponsors?.length ? (
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                {t("Nhãn tài trợ")}
+              </div>
+              <div className="flex gap-2 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {catalog.sponsors.map((sp) => {
+                  const cls =
+                    "flex w-28 shrink-0 flex-col items-center gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow sm:w-[calc((100%-2.5rem)/6)]";
+                  const inner = (
+                    <>
+                      <span className="flex h-14 w-full items-center justify-center overflow-hidden rounded-xl sm:h-16">
+                        {sp.logo ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={sp.logo}
+                            alt={sp.name}
+                            className="h-full w-full object-contain p-2"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        ) : (
+                          <span className="px-2 text-center text-sm font-bold text-slate-400">
+                            {sp.name.slice(0, 2)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="line-clamp-2 text-center text-xs font-medium leading-tight text-slate-600">
+                        {sp.name}
+                      </span>
+                    </>
+                  );
+                  return sp.link ? (
+                    <a
+                      key={sp.name}
+                      href={sp.link}
+                      target="_blank"
+                      rel="noopener noreferrer sponsored"
+                      title={sp.name}
+                      className={cls}
+                    >
+                      {inner}
+                    </a>
+                  ) : (
+                    <span key={sp.name} title={sp.name} className={cls}>
+                      {inner}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {/* #8/#9: vùng ưu tiên — GIỮ hiển thị khi tìm; lúc đó "Giá hời" chỉ gợi ý trong kết quả liên quan. */}
+          {!selected && areaDeals.length > 0 && (
             <div className="mt-3 rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-white p-3 shadow-sm sm:p-4">
               <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <h2 className="text-sm font-semibold text-slate-800">{t("🔥 Giá hời quanh đây")}</h2>
+                <h2 className="text-sm font-semibold text-slate-800">
+                  {query.trim() ? t("🔥 Giá hời liên quan") : t("🔥 Giá hời quanh đây")}
+                </h2>
                 <span className="text-[11px] text-slate-400">
                   {t("so giá nhiều nơi · bật vị trí để ưu tiên gần bạn")}
                 </span>
@@ -1740,21 +2008,27 @@ export default function Home() {
                           📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}
                         </div>
                       )}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openBuyAgent(d.product);
-                        }}
-                        className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="9" cy="21" r="1" />
-                          <circle cx="20" cy="21" r="1" />
-                          <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                        </svg>
-                        {t("Vào mua")}
-                      </button>
+                      <div className="mt-2 flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); addToCart(d.product); }}
+                          title={t("Thêm vào giỏ")}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-amber-600 transition hover:bg-amber-100"
+                        >
+                          +
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); openBuyAgent(d.product); }}
+                          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-500 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-600"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                            <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                          </svg>
+                          {t("Mua ngay")}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1772,39 +2046,8 @@ export default function Home() {
             </div>
           )}
 
-          {!selected && !query.trim() && catChips.length > 0 && (
-            <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <button
-                onClick={() => {
-                  setActiveCat(null);
-                  setPage(1);
-                }}
-                className={`shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition ${activeCat === null
-                  ? "border-emerald-600 bg-emerald-600 text-white"
-                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                  }`}
-              >
-                {t("Tất cả")}
-              </button>
-              {catChips.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => {
-                    setActiveCat((cur) => (cur === cat ? null : cat));
-                    setPage(1);
-                  }}
-                  className={`shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition ${activeCat === cat
-                    ? "border-emerald-600 bg-emerald-600 text-white"
-                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                    }`}
-                >
-                  {prettyCat(cat)}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {userLoc && (
+          {/* Thanh bán kính: chỉ hiện ở màn chi tiết sản phẩm (không hiện ở trang chủ). */}
+          {userLoc && selected && (
             <div className="mt-3 flex items-center gap-1.5 overflow-x-auto pb-0.5">
               <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1825,14 +2068,7 @@ export default function Home() {
                   {r} km
                 </button>
               ))}
-              {radiusKm === null ? (
-                <button
-                  onClick={() => setRadiusKm(null)}
-                  className="shrink-0 rounded-full border border-emerald-600 bg-emerald-600 px-2.5 py-0.5 text-xs text-white"
-                >
-                  {t("Tất cả")}
-                </button>
-              ) : (
+              {radiusKm !== null && (
                 <button
                   onClick={() => setRadiusKm(null)}
                   title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
@@ -1855,179 +2091,271 @@ export default function Home() {
 
           {!selected && (
             <>
-              <div className="mt-4 mb-2 flex items-baseline justify-between gap-2">
-                <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  {query
-                    ? t("Kết quả")
-                    : quickFilter
-                      ? t(QUICK_FILTERS.find((q) => q.key === quickFilter)!.label)
-                      : activeTep || activeCat
+              {/* ── Flat mode: search / quickFilter / activeTep ── */}
+              {(query.trim() || quickFilter || activeTep) && (
+                <>
+                  <div className="mt-4 mb-2 flex items-baseline justify-between gap-2">
+                    <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                      {query
                         ? t("Kết quả")
-                        : t("Sản phẩm phổ biến")}
-                  {quickFilter === "hot" && areaName && !query && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                      📍 {areaName}
-                    </span>
-                  )}
-                  {activeTep && !query && (
-                    <button
-                      onClick={() => {
-                        setActiveTep(null);
-                        setActiveCat(null);
-                        setPage(1);
-                      }}
-                      className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 transition hover:bg-slate-100"
-                    >
-                      {prettyCat(activeTep)}
-                      <span className="text-slate-400">✕</span>
-                    </button>
-                  )}
-                  {activeCat && !query && (
-                    <button
-                      onClick={() => {
-                        setActiveCat(null);
-                        setPage(1);
-                      }}
-                      className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 transition hover:bg-emerald-100"
-                    >
-                      {prettyCat(activeCat)}
-                      <span className="text-emerald-400">✕</span>
-                    </button>
-                  )}
-                </h2>
-                {catalog && (
-                  <span className="shrink-0 text-xs text-slate-400">
-                    {t("{n} sản phẩm", { n: quickFilter || activeTep || activeCat ? orderedMatches.length : matches.length })}
-                  </span>
-                )}
-              </div>
-              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                {pageItems.map((p) => {
-                  const st = priceStats.get(p.id);
-                  const tags = recoTags.get(p.id) ?? [];
-                  const compare = canCompare(p);
-                  return (
-                    <li key={p.id}>
-                      <button
-                        onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
-                        className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:shadow-md"
-                      >
-                        <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
-                          <ProductThumb product={p} fill />
-                          {tags.length > 0 && (
-                            <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
-                              {tags.map((t) => (
-                                <span
-                                  key={t.key}
-                                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${t.cls}`}
-                                >
-                                  {t.label}
+                        : quickFilter
+                          ? t(QUICK_FILTERS.find((q) => q.key === quickFilter)!.label)
+                          : t("Kết quả")}
+                      {quickFilter === "hot" && areaName && !query && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                          📍 {areaName}
+                        </span>
+                      )}
+                      {activeTep && !query && (
+                        <button
+                          onClick={() => { setActiveTep(null); setActiveCat(null); setPage(1); }}
+                          className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 transition hover:bg-slate-100"
+                        >
+                          {prettyCat(activeTep)}
+                          <span className="text-slate-400">✕</span>
+                        </button>
+                      )}
+                    </h2>
+                    {catalog && (
+                      <span className="shrink-0 text-xs text-slate-400">
+                        {t("{n} sản phẩm", { n: orderedMatches.length })}
+                      </span>
+                    )}
+                  </div>
+                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                    {pageItems.map((p) => {
+                      const st = priceStats.get(p.id);
+                      const tags = recoTags.get(p.id) ?? [];
+                      const compare = canCompare(p);
+                      return (
+                        <li key={p.id}>
+                          <button
+                            onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
+                            className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:shadow-md"
+                          >
+                            <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                              <ProductThumb product={p} fill />
+                              {tags.length > 0 && (
+                                <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
+                                  {tags.map((tag) => (
+                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                  ))}
                                 </span>
-                              ))}
+                              )}
+                            </div>
+                            <span className="mb-1.5 block h-[10px]" />
+                            <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p.name}</span>
+                            <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
+                            {st && st.stores > 0 ? (
+                              <>
+                                <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
+                                  <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                                  {formatMoney(st.min, st.currency)}
+                                </span>
+                                <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
+                                  {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                </span>
+                              </>
+                            ) : st && st.outOfStock ? (
+                              <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
+                            ) : (
+                              <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
+                            )}
+                            <span className="mt-auto block w-full pt-2.5">
+                              {compare ? (
+                                <span className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                  {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                </span>
+                              ) : (
+                                <span className="flex gap-1.5">
+                                  <span
+                                    role="button"
+                                    onClick={(e) => { e.stopPropagation(); addToCart(p); }}
+                                    title={t("Thêm vào giỏ")}
+                                    className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-sm font-bold text-amber-600 hover:bg-amber-100"
+                                  >+</span>
+                                  <span className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
+                                    {t("Mua ngay")}
+                                  </span>
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </div>
-                        {p.image && imageSource(p.image) ? (
-                          <span className="mb-1.5 block truncate text-[10px] leading-none text-slate-300">
-                            {t("Ảnh: {src}", { src: imageSource(p.image) ?? "" })}
-                          </span>
-                        ) : (
-                          <span className="mb-1.5 block h-[10px]" />
-                        )}
-                        <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">
-                          {p.name}
-                        </span>
-                        <span className="mt-0.5 truncate text-xs text-slate-400">
-                          {p.brand} · {p.unit}
-                        </span>
-                        {st && st.stores > 0 ? (
-                          <>
-                            <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
-                              <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
-                                <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                              </svg>
-                              {formatMoney(st.min, st.currency)}
-                            </span>
-                            <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="9" cy="21" r="1" />
-                                <circle cx="20" cy="21" r="1" />
-                                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                              </svg>
-                              {t("Có {n} nơi bán", { n: st.stores })}
-                            </span>
-                          </>
-                        ) : st && st.outOfStock ? (
-                          <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
-                        ) : (
-                          <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
-                        )}
-                        <span className="mt-auto pt-2.5">
-                          {compare ? (
-                            <span className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white shadow-sm transition-colors duration-200 group-hover:bg-emerald-700">
-                              {t("So sánh giá")}
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M5 12h14M13 6l6 6-6 6" />
-                              </svg>
-                            </span>
-                          ) : (
-                            <span className="flex items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white shadow-sm transition-colors duration-200 group-hover:bg-amber-600">
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="9" cy="21" r="1" />
-                                <circle cx="20" cy="21" r="1" />
-                                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                              </svg>
-                              {t("Vào mua")}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-                {catalog && orderedMatches.length === 0 && (
-                  quickFilter === "hot" && !userLoc ? (
-                    <li className="col-span-full rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-500">
-                      {t("Cần vị trí để xem sản phẩm bán chạy quanh bạn.")}
-                      <button
-                        onClick={locate}
-                        className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white"
-                      >
-                        {t("Bật vị trí")}
-                      </button>
-                    </li>
-                  ) : quickFilter === "hot" ? (
-                    <li className="col-span-full text-sm text-slate-500">
-                      {t("Chưa có sản phẩm bán chạy trong khu vực {r} km quanh bạn.", { r: radiusKm ?? 10 })}
-                    </li>
-                  ) : (
-                    <li className="col-span-full text-sm text-slate-500">{t("Không tìm thấy sản phẩm phù hợp.")}</li>
-                  )
-                )}
-              </ul>
-
-              {totalPages > 1 && (
-                <div className="mt-5 flex items-center justify-center gap-3">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page <= 1}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
-                  >
-                    {t("← Trước")}
-                  </button>
-                  <span className="text-sm text-slate-500">
-                    {t("Trang {page}/{total}", { page, total: totalPages })}
-                  </span>
-                  <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page >= totalPages}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
-                  >
-                    {t("Sau →")}
-                  </button>
-                </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                    {catalog && orderedMatches.length === 0 && (
+                      quickFilter === "hot" && !userLoc ? (
+                        <li className="col-span-full rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-500">
+                          {t("Cần vị trí để xem sản phẩm bán chạy quanh bạn.")}
+                          <button onClick={locate} className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">{t("Bật vị trí")}</button>
+                        </li>
+                      ) : quickFilter === "hot" ? (
+                        <li className="col-span-full text-sm text-slate-500">{t("Chưa có sản phẩm bán chạy trong khu vực {r} km quanh bạn.", { r: radiusKm ?? 10 })}</li>
+                      ) : (
+                        <li className="col-span-full text-sm text-slate-500">{t("Không tìm thấy sản phẩm phù hợp.")}</li>
+                      )
+                    )}
+                  </ul>
+                  {totalPages > 1 && (
+                    <div className="mt-5 flex items-center justify-center gap-3">
+                      <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40">{t("← Trước")}</button>
+                      <span className="text-sm text-slate-500">{t("Trang {page}/{total}", { page, total: totalPages })}</span>
+                      <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40">{t("Sau →")}</button>
+                    </div>
+                  )}
+                </>
               )}
+
+              {/* ── Grouped sections: trang chủ, không search/filter ── */}
+              {!query.trim() && !quickFilter && !activeTep && groupSections.map(({ name, emoji, products }) => {
+                const isExpanded = expandedGroups.has(name);
+                return (
+                  <section key={name} className="mt-5">
+                    <div className="mb-2.5 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold text-slate-700">
+                        {emoji && <span className="mr-1">{emoji}</span>}{name}
+                        <span className="ml-1.5 text-xs font-normal text-slate-400">({products.length})</span>
+                      </h2>
+                      <button
+                        onClick={() => setExpandedGroups((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(name)) next.delete(name); else next.add(name);
+                          return next;
+                        })}
+                        className="text-xs font-medium text-emerald-600 hover:underline"
+                      >
+                        {isExpanded ? t("Thu gọn ↑") : t("Xem tất cả →")}
+                      </button>
+                    </div>
+                    {isExpanded ? (
+                      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                        {products.map((p) => {
+                          const st = priceStats.get(p.id);
+                          const tags = recoTags.get(p.id) ?? [];
+                          const compare = canCompare(p);
+                          return (
+                            <li key={p.id}>
+                              <button
+                                onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
+                                className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:shadow-md"
+                              >
+                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                  <ProductThumb product={p} fill />
+                                  {tags.length > 0 && (
+                                    <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
+                                      {tags.map((tag) => (
+                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="mb-1.5 block h-[10px]" />
+                                <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p.name}</span>
+                                <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
+                                {st && st.stores > 0 ? (
+                                  <>
+                                    <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
+                                      <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                                      {formatMoney(st.min, st.currency)}
+                                    </span>
+                                    <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
+                                      {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                    </span>
+                                  </>
+                                ) : st && st.outOfStock ? (
+                                  <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
+                                ) : (
+                                  <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
+                                )}
+                                <span className="mt-auto block w-full pt-2.5">
+                                  {compare ? (
+                                    <span className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                      {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                    </span>
+                                  ) : (
+                                    <span className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
+                                      {t("Vào mua")}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <div className="flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        {products.slice(0, 12).map((p) => {
+                          const st = priceStats.get(p.id);
+                          const tags = recoTags.get(p.id) ?? [];
+                          const compare = canCompare(p);
+                          return (
+                            <div key={p.id} className="w-36 shrink-0 sm:w-40">
+                              <button
+                                onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
+                                className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-500 hover:shadow-md"
+                              >
+                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                  <ProductThumb product={p} fill />
+                                  {tags.length > 0 && (
+                                    <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
+                                      {tags.map((tag) => (
+                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                      ))}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="mb-1.5 block h-[10px]" />
+                                <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p.name}</span>
+                                <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
+                                {st && st.stores > 0 ? (
+                                  <>
+                                    <span className="mt-1.5 inline-flex items-center gap-1 text-sm font-bold text-rose-600">
+                                      <svg className="shrink-0 text-rose-500" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                                      {formatMoney(st.min, st.currency)}
+                                    </span>
+                                    <span className="mt-0.5 truncate text-xs text-slate-500">
+                                      {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                    </span>
+                                  </>
+                                ) : st && st.outOfStock ? (
+                                  <span className="mt-1.5 text-xs font-medium text-red-500">{t("Hết hàng")}</span>
+                                ) : (
+                                  <span className="mt-1.5 text-xs text-slate-400">{t("Chưa có giá")}</span>
+                                )}
+                                <span className="mt-auto block w-full pt-2">
+                                  {compare ? (
+                                    <span className="flex w-full items-center justify-center gap-1 rounded-lg bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                      {t("So sánh")}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                    </span>
+                                  ) : (
+                                    <span className="flex gap-1">
+                                      <span
+                                        role="button"
+                                        onClick={(e) => { e.stopPropagation(); addToCart(p); }}
+                                        title={t("Thêm vào giỏ")}
+                                        className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xs font-bold text-amber-600 hover:bg-amber-100"
+                                      >+</span>
+                                      <span className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-500 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                        {t("Mua ngay")}
+                                      </span>
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </>
           )}
 
@@ -2406,26 +2734,29 @@ export default function Home() {
           )}
         </section>
 
-        <section
-          className={`relative z-0 overflow-hidden rounded-xl border border-slate-200 lg:block lg:h-[460px] ${mobileView === "map" ? "block h-[calc(100vh-11rem)]" : "hidden"
-            }`}
-        >
-          <MapView
-            center={center}
-            userLoc={userLoc}
-            userAddr={userAddr}
-            markers={markers}
-            highlightId={hoverStore}
-            radiusKm={radiusKm}
-            lang={lang}
-            tileUrl={tileUrl}
-            onBuy={
-              selected
-                ? (store) => openBuyForm(selected, store)
-                : undefined
-            }
-          />
-        </section>
+        {/* Map cột phải/tab: chỉ MOUNT khi ở chi tiết sản phẩm hoặc tab "Bản đồ" (mobile).
+            Tránh mount cùng lúc với map dưới search ở trang chính (Leaflet xung đột container). */}
+        {(selected || mobileView === "map") && (
+          <section
+            className={`relative z-0 overflow-hidden rounded-xl border border-slate-200 lg:block lg:h-[460px] ${mobileView === "map" ? "block h-[calc(100vh-11rem)]" : "hidden"
+              }`}
+          >
+            <MapView
+              center={center}
+              userLoc={userLoc}
+              userAddr={userAddr}
+              markers={markers}
+              highlightId={hoverStore}
+              radiusKm={radiusKm}
+              lang={lang}
+              onBuy={
+                selected
+                  ? (store) => openBuyForm(selected, store)
+                  : undefined
+              }
+            />
+          </section>
+        )}
       </main>
 
       <footer className="mt-8 border-t border-slate-200 bg-white">
@@ -2451,7 +2782,7 @@ export default function Home() {
               One Solution
             </a>
             .<br className="hidden sm:block" />
-            {t("Giá hời quanh đây - Mua gì cũng có.")}
+            {t("Kết nối mua bán - Không thu phí")} · {t("Tìm gì cũng có - Giá hời quanh đây")}
           </p>
           <p className="max-w-md text-[11px] leading-relaxed text-slate-400 sm:text-right">
             {t("Giá & thông tin được tổng hợp từ nguồn công khai, có thể thay đổi theo thời gian. Hình ảnh, logo và thương hiệu thuộc về chủ sở hữu tương ứng; Affree là dịch vụ so sánh giá & điều hướng mua hàng. Yêu cầu gỡ nội dung: liên hệ One Solution.")}
@@ -2500,6 +2831,19 @@ export default function Home() {
         <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">
           {toast}
         </div>
+      )}
+
+      {cartOpen && cartItems.length > 0 && (
+        <CartModal
+          items={cartItems}
+          lang={lang}
+          onClose={() => setCartOpen(false)}
+          onUpdateQty={updateCartQty}
+          onRemove={(pid, sid) => {
+            removeFromCart(pid, sid);
+            if (cartItems.length <= 1) setCartOpen(false);
+          }}
+        />
       )}
 
       {buyOffer && (

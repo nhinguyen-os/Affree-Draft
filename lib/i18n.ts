@@ -32,6 +32,8 @@ const EN_DICT: Record<string, string> = {
   // Header
   "Giá hời quanh đây - Mua gì cũng có": "Great deals nearby — anything you need",
   "Giá hời quanh đây - Mua gì cũng có.": "Great deals nearby — anything you need.",
+  "Kết nối mua bán - Không thu phí": "Connecting buyers & sellers — no fees",
+  "Tìm gì cũng có - Giá hời quanh đây": "Find anything — great deals nearby",
   "Vị trí của bạn": "Your location",
   "Đã có vị trí": "Location set",
   "Chọn vị trí": "Choose location",
@@ -64,6 +66,7 @@ const EN_DICT: Record<string, string> = {
 
   // Services
   "Dịch vụ quanh đây": "Services nearby",
+  "Nhãn tài trợ": "Sponsored brands",
   "Mua sắm · nhà đất · dịch vụ": "Shopping · real estate · services",
   "Cuộn về trước": "Scroll back",
   "Cuộn tiếp": "Scroll forward",
@@ -155,6 +158,8 @@ const EN_DICT: Record<string, string> = {
 
   // Map toggle / footer
   "Bản đồ": "Map",
+  "Thu gọn": "Collapse",
+  "Xem bản đồ quanh đây": "View map nearby",
   "Danh sách": "List",
   "Lên đầu trang": "Back to top",
   "sản phẩm của": "a product of",

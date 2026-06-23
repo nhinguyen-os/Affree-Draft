@@ -32,8 +32,8 @@ export async function fetchNearbyStores(options: {
 }) {
   const { lat, lng, radius = "1000", limit = "1000", category } = options;
 
-  const baseUrl = (process.env.NEXT_PUBLIC_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
-  const apiKey = process.env.NEXT_PUBLIC_GEO_API_KEY || "";
+  const baseUrl = (process.env.NEXT_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
+  const apiKey = process.env.NEXT_GEO_API_KEY || "";
 
   const locationParam = lat && lng ? `${lat},${lng}` : "10.798005808,106.673447868";
 

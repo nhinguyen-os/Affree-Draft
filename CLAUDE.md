@@ -75,6 +75,6 @@ All the corresponding `app/api/*/route.ts` handlers follow the same shape: parse
 
 Sheet/data sourcing: `CATALOG_CSV_URL`, `CATALOG_SOURCE` (`catalog-tab` to switch primary source), `CATALOG_API_URL`, `MASTER_SHEET_CSV_URL`, `SHEET_CSV_URL`, `STORES_SHEET_CSV_URL`, `STORES_SHEET_GID`, `TEP_SHEET_CSV_URL`, `PRIORITY_SHEET_CSV_URL`, `PURCHASE_WEBHOOK_URL`.
 Scraping: `CRON_SECRET`.
-Geo: `NEXT_GEO_API_BASE_URL`, `NEXT_GEO_API_KEY`, `NEXT_PUBLIC_GEO_API_BASE_URL`, `NEXT_PUBLIC_GEO_API_KEY`, `NEXT_PUBLIC_MAP_URL`, `NEXT_PUBLIC_MAP_LAYER`.
+Geo: `NEXT_GEO_API_BASE_URL`, `NEXT_GEO_API_KEY`, `NEXT_GEO_API_BASE_URL`, `NEXT_GEO_API_KEY`, `NEXT_PUBLIC_MAP_URL`, `NEXT_PUBLIC_MAP_LAYER`.
 
 All sheet-source URLs have hardcoded defaults pointing at real production spreadsheets, so the app works with zero env config out of the box — env vars only override which sheet/source is used.
