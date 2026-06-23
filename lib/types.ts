@@ -65,6 +65,16 @@ export interface PriorityProfile {
   note?: string;
 }
 
+/**
+ * Một "nhãn tài trợ" khai báo trong tab "Nhãn tài trợ" của Google Sheet (tên · link · logo).
+ * Hiển thị thành 1 dải logo dưới mục "Dịch vụ quanh đây"; bấm vào mở link.
+ */
+export interface Sponsor {
+  name: string;
+  link?: string;
+  logo?: string;
+}
+
 export interface Catalog {
   products: Product[];
   offers: Offer[];
@@ -72,6 +82,8 @@ export interface Catalog {
   groups?: ProductGroup[];
   /** Hồ sơ ưu tiên hiển thị theo chuỗi (tab "ưu tiên hiển thị"). Trống → dùng mặc định trong code. */
   priorities?: PriorityProfile[];
+  /** Nhãn tài trợ (tab "Nhãn tài trợ"). Trống → không hiện dải nhãn tài trợ. */
+  sponsors?: Sponsor[];
 }
 
 export interface PurchaseRecord {
@@ -108,4 +120,10 @@ export interface RankedOffer extends Offer {
   store: Store;
   product: Product;
   distanceKm: number | null;
+}
+
+export interface CartItem {
+  product: Product;
+  offer: RankedOffer;
+  qty: number;
 }

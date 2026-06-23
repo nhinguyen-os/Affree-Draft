@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { PurchaseRecord } from "@/lib/types";
+import { PURCHASE_WEBHOOK_URL } from "@/lib/config";
 
 /**
  * Ghi nhận mua hàng.
@@ -15,7 +16,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }
 
-  const webhook = process.env.PURCHASE_WEBHOOK_URL;
+  const webhook = PURCHASE_WEBHOOK_URL;
   if (!webhook) {
     return NextResponse.json({ ok: true, persisted: "client-only" });
   }
