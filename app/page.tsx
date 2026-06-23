@@ -30,10 +30,6 @@ const CartModal = dynamic(() => import("@/components/CartModal"), { ssr: false }
 
 const HCM_CENTER: [number, number] = [10.7769, 106.7009];
 
-const mapLayer = process.env.NEXT_PUBLIC_MAP_LAYER || "mvp_map";
-const defaultUrl = `https://mapcdn{s}.goollow.org/tiles/${mapLayer}/{z}/{x}/{y}.jpeg`;
-const tileUrl = (process.env.NEXT_PUBLIC_MAP_URL || defaultUrl).replace("{layer}", mapLayer);
-
 /** Đổi toạ độ → { địa chỉ gọn, khu vực (phường·quận), mã quốc gia } bằng API reverse proxy. Lỗi → rỗng. */
 async function reverseGeocode(
   lat: number,
@@ -60,11 +56,9 @@ async function forwardGeocode(q: string): Promise<GeoResult[]> {
     return [];
   }
 }
-
 type Loc = { lat: number; lng: number } | null;
 type SortBy = "price" | "distance";
 type MobileView = "list" | "map";
-
 
 const CAT_EMOJI: Record<string, string> = {
   Sữa: "🥛",
@@ -1507,8 +1501,8 @@ export default function Home() {
                 onClick={() => setLocOpen((v) => !v)}
                 title={t("Vị trí của bạn")}
                 className={`flex w-full min-w-0 max-w-[116px] items-center gap-1 rounded-full border px-2.5 py-1.5 text-sm font-medium transition sm:max-w-[230px] sm:gap-1.5 sm:px-3 ${geoState === "ok"
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border-slate-300 hover:bg-slate-100"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-300 hover:bg-slate-100"
                   }`}
               >
                 <span className="shrink-0">📍</span>
@@ -1750,6 +1744,9 @@ export default function Home() {
                             <span className="block truncate text-sm font-medium text-slate-800">
                               {p.name}
                             </span>
+                            <span className="block truncate text-xs text-slate-400">
+                              {p.brand} · {p.unit}
+                            </span>
                           </span>
                         </button>
                       </li>
@@ -1778,8 +1775,8 @@ export default function Home() {
                       type="button"
                       onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
                       className={`rounded-full border px-2 py-0.5 text-[11px] transition ${radiusKm === r
-                          ? "border-emerald-600 bg-emerald-600 text-white"
-                          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                        ? "border-emerald-600 bg-emerald-600 text-white"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
                         }`}
                     >
                       {r} km
@@ -1849,8 +1846,8 @@ export default function Home() {
                         key={s.key}
                         onClick={() => openService(s)}
                         className={`group relative flex w-[4.75rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border px-1.5 py-2.5 transition sm:w-[calc((100%-2.5rem)/6)] sm:px-2 sm:py-3 ${active
-                            ? "border-emerald-500 bg-emerald-50 shadow ring-2 ring-emerald-200"
-                            : "border-slate-200 bg-white shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow"
+                          ? "border-emerald-500 bg-emerald-50 shadow ring-2 ring-emerald-200"
+                          : "border-slate-200 bg-white shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow"
                           }`}
                       >
                         <span
