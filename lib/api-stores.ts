@@ -30,13 +30,13 @@ export async function fetchNearbyStores(options: {
   limit?: string;
   category?: string | null;
 }) {
-  const { lat, lng, radius = "1000", limit = "500", category } = options;
+  const { lat, lng, radius = "1000", limit = "1000", category } = options;
 
   const baseUrl = (process.env.NEXT_PUBLIC_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
   const apiKey = process.env.NEXT_PUBLIC_GEO_API_KEY || "";
 
   const locationParam = lat && lng ? `${lat},${lng}` : "10.798005808,106.673447868";
-  
+
   let url = `${baseUrl}/place/nearbystatistic/json?location=${encodeURIComponent(locationParam)}&radius=${radius}&limit=${limit}`;
 
   if (category) {
@@ -58,7 +58,7 @@ export async function fetchNearbyStores(options: {
       return { source: "static-fallback", stores: [...STORES] };
     }
     const data = await res.json();
-    
+
     const mappedStores: Store[] = [];
     const seenIds = new Set<string>();
 
