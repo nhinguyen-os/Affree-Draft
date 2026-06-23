@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Affree — Giá hời quanh đây - Mua gì cũng có",
+  title: "Affree — Kết nối mua bán, không thu phí · Tìm gì cũng có, giá hời quanh đây",
   description:
     "Tìm sản phẩm, xem cửa hàng gần bạn và so sánh giá để mua chỗ rẻ nhất.",
 };

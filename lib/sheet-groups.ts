@@ -1,4 +1,4 @@
-import type { ProductGroup, PriorityProfile } from "./types";
+import type { ProductGroup, PriorityProfile, Sponsor } from "./types";
 
 /**
  * Đọc 2 tab cấu hình hiển thị trong cùng spreadsheet master:
@@ -23,6 +23,11 @@ export const PRIORITY_SHEET_CSV_URL =
   `https://docs.google.com/spreadsheets/d/1D5vs9DnJnpWd6b2tivGuA8JPfMjPC3TlRbDFN-LDXLc/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
     "ưu tiên hiển thị",
   )}`;
+// Nhãn tài trợ → tab gid=930353417 trong sheet "Danh sách sản phẩm". Đọc qua export CSV
+// trực tiếp (không qua gviz — gviz cache/sai tab như đã gặp với catalog).
+export const SPONSOR_SHEET_CSV_URL =
+  process.env.SPONSOR_SHEET_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=930353417";
 
 /** Tách CSV → mảng hàng × cột (hỗ trợ field có dấu " và xuống dòng bên trong). */
 function splitCsv(csv: string): string[][] {
@@ -149,13 +154,51 @@ export function parsePriorityCsv(csv: string): PriorityProfile[] {
   return out;
 }
 
+/** Parse CSV tab "Nhãn tài trợ" → Sponsor[]. Dò cột theo tên header (tên · link · logo). */
+export function parseSponsorCsv(csv: string): Sponsor[] {
+  const rows = splitCsv(csv).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length < 2) return [];
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...keys: string[]) => {
+    for (let i = 0; i < header.length; i++) {
+      if (keys.some((k) => header[i].includes(k))) return i;
+    }
+    return -1;
+  };
+  const ci = {
+    name: col("tên", "ten", "nhãn", "nhan", "name", "brand"),
+    link: col("link", "url"),
+    logo: col("logo", "ảnh", "anh", "image", "icon"),
+    show: col("hiển thị", "hien thi", "hien_thi", "hienthi", "show"),
+  };
+  const nameIdx = ci.name >= 0 ? ci.name : 0;
+  const HIDE = new Set(["0", "false", "no", "off", "ẩn", "an", "không", "khong"]);
+
+  const out: Sponsor[] = [];
+  const seen = new Set<string>();
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const name = (r[nameIdx] || "").trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    if (ci.show >= 0 && HIDE.has((r[ci.show] || "").trim().toLowerCase())) continue; // tắt hiển thị
+    seen.add(name.toLowerCase());
+    out.push({
+      name,
+      link: ci.link >= 0 ? (r[ci.link] || "").trim() || undefined : undefined,
+      logo: ci.logo >= 0 ? (r[ci.logo] || "").trim() || undefined : undefined,
+    });
+  }
+  return out;
+}
+
 /**
- * Tải + parse 2 tab cấu hình. Trả về object có thể rỗng cho từng phần
- * (groups/priorities = undefined nếu lỗi/rỗng) để caller fallback an toàn.
+ * Tải + parse các tab cấu hình hiển thị. Trả về object có thể rỗng cho từng phần
+ * (groups/priorities/sponsors = undefined nếu lỗi/rỗng) để caller fallback an toàn.
  */
 export async function fetchSheetGroups(
   revalidate = 300,
-): Promise<{ groups?: ProductGroup[]; priorities?: PriorityProfile[] }> {
+): Promise<{ groups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[] }> {
   const fetchCsv = async (url: string): Promise<string | null> => {
     try {
       const res = await fetch(url, { next: { revalidate } });
@@ -166,16 +209,19 @@ export async function fetchSheetGroups(
     }
   };
 
-  const [tepCsv, prioCsv] = await Promise.all([
+  const [tepCsv, prioCsv, sponsorCsv] = await Promise.all([
     fetchCsv(TEP_SHEET_CSV_URL),
     fetchCsv(PRIORITY_SHEET_CSV_URL),
+    fetchCsv(SPONSOR_SHEET_CSV_URL),
   ]);
 
   const groups = tepCsv ? parseTepCsv(tepCsv) : [];
   const priorities = prioCsv ? parsePriorityCsv(prioCsv) : [];
+  const sponsors = sponsorCsv ? parseSponsorCsv(sponsorCsv) : [];
 
   return {
     groups: groups.length ? groups : undefined,
     priorities: priorities.length ? priorities : undefined,
+    sponsors: sponsors.length ? sponsors : undefined,
   };
 }

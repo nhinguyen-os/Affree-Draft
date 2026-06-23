@@ -8,3 +8,12 @@
 body {
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+
+/* Cuộn ngang nhãn vị trí khi địa chỉ dài hơn bề ngang pill (mobile) — đọc được full mà không chiếm chỗ. */
+@keyframes loc-marquee {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--loc-dist, 0)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loc-marquee-run { animation: none !important; }
+}

@@ -2,7 +2,7 @@
  * Phiên bản app + lộ trình tính năng sắp tới (hiển thị ở nút "version" trên header).
  * Cập nhật ROADMAP khi có thêm hạng mục; APP_VERSION khi phát hành bản mới.
  */
-export const APP_VERSION = "1.0";
+export const APP_VERSION = "1.2";
 
 export interface RoadmapSection {
   group: string;
@@ -10,7 +10,10 @@ export interface RoadmapSection {
   items: string[];
 }
 
-/** Tính năng đã có trong bản hiện tại — tóm gọn, mỗi dòng 1 ý ngắn. */
+/**
+ * Tính năng đã có trong bản hiện tại — CHỈ liệt kê TÍNH NĂNG cho người dùng.
+ * KHÔNG liệt kê fix lỗi / tinh chỉnh giao diện (chúng không hiển thị ở mục phiên bản).
+ */
 export const DONE: string[] = [
   "So sánh giá nhiều nơi bán quanh bạn",
   "Định vị / nhập địa chỉ → xem khoảng cách tới cửa hàng",
@@ -27,7 +30,6 @@ export const ROADMAP: RoadmapSection[] = [
     group: "Tìm kiếm & địa chỉ",
     emoji: "🔎",
     items: [
-      "Sửa tìm kiếm đa vùng (VN ↔ Canada) để ra đúng sản phẩm (vd: sữa tắm)",
       'Giữ khu "Dịch vụ quanh đây" không biến mất khi đang gõ tìm',
       '"Giá hời quanh đây" chỉ gợi ý sản phẩm liên quan (tham khảo Grab)',
       "Làm rõ nguồn tìm địa chỉ (OpenStreetMap / Google) & hỗ trợ Map Server về sau",
@@ -50,7 +52,6 @@ export const ROADMAP: RoadmapSection[] = [
     emoji: "🗂️",
     items: [
       "Thêm 3 tệp mới: B2B, Đàn ông đích thực, Thế giới phái đẹp",
-      'Xóa tệp "Đi chợ"',
     ],
   },
   {
@@ -65,9 +66,6 @@ export const ROADMAP: RoadmapSection[] = [
     group: "Giao diện",
     emoji: "✨",
     items: [
-      "Rút gọn dòng vị trí hiện tại trên điện thoại (tránh chiếm diện tích)",
-      "Tinh chỉnh lại icon cho bớt thô",
-      "Sửa ảnh sản phẩm ở thanh tìm kiếm hiển thị đầy đủ như bên ngoài",
       'Đổi tên mục "Lịch sử mua hàng"',
     ],
   },

@@ -12,7 +12,9 @@ export const revalidate = 60; // cache 1 phút — sửa sheet (tệp/emoji/ngà
 // folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.
 const CATALOG_CSV_URL =
   process.env.CATALOG_CSV_URL ||
-  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=0";
+  // Đọc ĐÚNG tab đang nhập liệu (gid=1049432260) qua link export — bản LIVE, phản ánh ngay
+  // giá vừa điền. (gviz theo tên "catalog" trước đây trỏ vào tab khác/đang bị cache, thiếu giá.)
+  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=1049432260";
 
 /**
  * Dọn tên sản phẩm cào/nhập tay: bỏ dấu phẩy/chấm thừa, gộp khoảng trắng, bỏ ký tự
@@ -77,6 +79,7 @@ export async function GET() {
     ...catalog,
     groups: catalog.groups?.length ? catalog.groups : sheetGroups.groups,
     priorities: catalog.priorities?.length ? catalog.priorities : sheetGroups.priorities,
+    sponsors: catalog.sponsors?.length ? catalog.sponsors : sheetGroups.sponsors,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
@@ -154,6 +157,23 @@ function parseCsv(csv: string): Catalog {
     lastChecked: idx("last_checked"),
   };
 
+  // Cột cấu hình ẩn/hiện sản phẩm trên web (nhiều tên header chấp nhận được).
+  // Quy ước: để TRỐNG hoặc 1/x/có/hiện → HIỆN; điền 0/ẩn/off/no/false/không → ẨN.
+  // Đánh dấu ở 1 dòng bất kỳ của sản phẩm là ẩn cả sản phẩm đó.
+  const showCol = ["hiển thị", "hien_thi", "hienthi", "hiện", "hien", "show", "an_hien", "ẩn/hiện"]
+    .map(idx)
+    .find((i) => i >= 0) ?? -1;
+  const HIDE = new Set(["0", "false", "no", "off", "ẩn", "an", "hide", "hidden", "không", "khong", "ko", "n"]);
+  const hiddenIds = new Set<string>();
+  if (showCol >= 0) {
+    for (let i = 1; i < rows.length; i++) {
+      const pid = (rows[i][ci.productId] ?? "").trim();
+      if (!pid) continue;
+      const v = (rows[i][showCol] ?? "").trim().toLowerCase();
+      if (HIDE.has(v)) hiddenIds.add(pid);
+    }
+  }
+
   const productMap = new Map<string, Product>();
   const offers: Offer[] = [];
 
@@ -162,6 +182,7 @@ function parseCsv(csv: string): Catalog {
     const productId = (r[ci.productId] ?? "").trim();
     const storeId = (r[ci.storeId] ?? "").trim();
     if (!productId || !storeId) continue;
+    if (hiddenIds.has(productId)) continue; // sản phẩm bị tắt hiển thị
 
     if (!productMap.has(productId)) {
       productMap.set(productId, {
@@ -175,7 +196,13 @@ function parseCsv(csv: string): Catalog {
       });
     }
 
-    const priceRaw = (r[ci.price] ?? "").replace(/[^\d]/g, "");
+    // Giá có thể là số thuần ("95931"), VND có dấu chấm NGĂN NGHÌN ("40.500" = 40500đ),
+    // hoặc USD thập phân ("6.49"). Quy ước: dấu chấm theo sau ĐÚNG 3 chữ số = ngăn nghìn → bỏ;
+    // dấu chấm còn lại (1-2 số) = thập phân → giữ. (Giống parseLiveVnd ở sheet-catalog.ts.)
+    const priceRaw = (r[ci.price] ?? "")
+      .replace(/\.(?=\d{3}\b)/g, "") // "40.500" → "40500"; KHÔNG đụng "6.49"
+      .replace(",", ".") // phẩy thập phân → chấm
+      .replace(/[^\d.]/g, "");
     const stockRaw = (r[ci.inStock] ?? "").trim().toLowerCase();
     offers.push({
       productId,
