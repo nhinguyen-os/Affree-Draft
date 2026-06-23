@@ -22,6 +22,7 @@ import { type Lang, langForCountry, tr } from "@/lib/i18n";
 import { ChainBadge } from "@/components/ChainBadge";
 import { Logo } from "@/components/Logo";
 import type { MapMarker } from "@/components/MapView";
+import { type GeoResult } from "@/lib/geocode";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
@@ -32,148 +33,37 @@ const mapLayer = process.env.NEXT_PUBLIC_MAP_LAYER || "mvp_map";
 const defaultUrl = `https://mapcdn{s}.goollow.org/tiles/${mapLayer}/{z}/{x}/{y}.jpeg`;
 const tileUrl = (process.env.NEXT_PUBLIC_MAP_URL || defaultUrl).replace("{layer}", mapLayer);
 
-/**
- * Rút "khu vực" = phường/xã + quận/huyện từ address Nominatim. Dùng làm KHOÁ cho
- * "bán chạy khu vực" (mỗi phường có gu mua khác nhau). Trống nếu không xác định được.
- */
-function areaFromAddress(a: Record<string, string> | undefined): string {
-  if (!a) return "";
-  const ward = a.suburb || a.quarter || a.neighbourhood || a.village || a.hamlet || "";
-  const district = a.city_district || a.district || a.county || "";
-  return [ward, district].filter(Boolean).join(" · ");
-}
-
-// Sau sáp nhập đơn vị hành chính TP.HCM (2025), dữ liệu OSM hay gán SAI cấp "city"
-// cho phường (vd đường Phan Đình Phùng ở Phú Nhuận bị ghi city="Thủ Đức"). Toạ độ
-// thì đúng — chỉ nhãn quận/thành phố con là sai. Với địa chỉ TP.HCM ta bỏ cấp "city"
-// không tin cậy này, chỉ giữ phường (đã đủ định danh) + "TP.HCM".
-function isHCMC(a: Record<string, string> | undefined): boolean {
-  if (!a) return false;
-  const blob = `${a.state ?? ""} ${a.city ?? ""} ${a.region ?? ""} ${a["ISO3166-2-lvl4"] ?? ""}`
-    .toLowerCase();
-  return (
-    blob.includes("hồ chí minh") ||
-    blob.includes("ho chi minh") ||
-    blob.includes("vn-sg")
-  );
-}
-
-/** Nhãn địa chỉ gọn, đáng tin. VN/TP.HCM: số nhà·đường, phường, TP.HCM (bỏ cấp city sai). */
-function cleanLabel(a: Record<string, string> | undefined, fallback: string): string {
-  if (!a) return fallback;
-  const road = [a.house_number, a.road].filter(Boolean).join(" ");
-  const ward = a.suburb || a.quarter || a.neighbourhood || a.village || a.hamlet || "";
-  if ((a.country_code ?? "").toLowerCase() === "vn" && isHCMC(a)) {
-    const parts = [road, ward, "TP.HCM"].filter(Boolean);
-    return parts.length ? parts.join(", ") : fallback;
-  }
-  const parts = [
-    road,
-    ward,
-    a.city_district || a.district || a.county,
-    a.city || a.town,
-  ].filter(Boolean);
-  return parts.length ? parts.join(", ") : fallback;
-}
-
-/** Đổi toạ độ → { địa chỉ gọn, khu vực (phường·quận), mã quốc gia } bằng Nominatim (OSM). Lỗi → rỗng. */
+/** Đổi toạ độ → { địa chỉ gọn, khu vực (phường·quận), mã quốc gia } bằng API reverse proxy. Lỗi → rỗng. */
 async function reverseGeocode(
   lat: number,
   lng: number
 ): Promise<{ label: string; area: string; cc: string }> {
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+    const url = `/api/geocode/reverse?lat=${lat}&lng=${lng}`;
     const res = await fetch(url);
     if (!res.ok) return { label: "", area: "", cc: "" };
-    const data = await res.json();
-    const a = data?.address ?? {};
-    return {
-      label: cleanLabel(a, data?.display_name ?? ""),
-      area: areaFromAddress(a),
-      cc: (a.country_code ?? "").toLowerCase(),
-    };
+    return await res.json();
   } catch {
     return { label: "", area: "", cc: "" };
   }
 }
 
-// Khung nhìn (viewbox) bao vùng TP.HCM mở rộng — tất cả cửa hàng đều ở đây.
-// Dùng để ưu tiên kết quả geocode trong vùng, tránh chọn nhầm đường trùng tên ở
-// tỉnh khác (vd "Nguyễn Quang Bích" có ở Rạch Giá, Huế… cách HCM ~200km).
-// Format Nominatim: viewbox=<lonMin>,<latMax>,<lonMax>,<latMin>
-const HCM_VIEWBOX = "106.30,11.20,107.05,10.30";
-
-async function internalSearch(
-  q: string,
-  bounded: boolean,
-  location?: { lat: number; lng: number } | null
-): Promise<GeoResult[]> {
-  let locStr = "";
-  if (bounded && location) {
-    locStr = `${location.lat},${location.lng}`;
-  }
-
-  const url = `/api/geocode/autocomplete?input=${encodeURIComponent(q)}&location=${locStr}&limit=6&strictbounds=${bounded ? "1" : "0"}`;
-
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!Array.isArray(data)) return [];
-
-    return data;
-  } catch {
-    return [];
-  }
-}
-
-// KHÔNG khoá countrycodes=vn nữa: cho phép gõ địa chỉ Mỹ (và quốc gia khác).
-// Vẫn ưu tiên (bounded) vùng TP.HCM trước để địa chỉ VN không bị nhầm sang tỉnh/nước
-// khác; nếu trong vùng không có kết quả mới mở ra toàn cầu.
-async function nominatimSearch(q: string, bounded: boolean): Promise<GeoResult[]> {
-  const url =
-    `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}` +
-    `&addressdetails=1&limit=6` +
-    `&viewbox=${HCM_VIEWBOX}${bounded ? "&bounded=1" : ""}`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (Array.isArray(data) ? data : [])
-    .map((d: { display_name?: string; lat?: string; lon?: string; address?: Record<string, string> }) => ({
-      label: cleanLabel(d.address, d.display_name ?? ""),
-      lat: parseFloat(d.lat ?? ""),
-      lng: parseFloat(d.lon ?? ""),
-      area: areaFromAddress(d.address),
-      cc: (d.address?.country_code ?? "").toLowerCase(),
-    }))
-    .filter((r: GeoResult) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
-}
-
-/**
- * Tìm địa chỉ → toạ độ (forward geocode) qua API nội bộ với fallback Nominatim/OSM.
- * Ưu tiên (bounded) trong vùng TP.HCM để không chọn nhầm đường trùng tên ở tỉnh khác;
- * nếu trong vùng không có kết quả nào thì mới nới ra toàn cầu (gồm địa chỉ Mỹ).
- */
+/** Tìm địa chỉ → toạ độ (forward geocode) qua API backend (đã tối ưu flow và cache). */
 async function forwardGeocode(q: string): Promise<GeoResult[]> {
   try {
-    // Thử API nội bộ trước
-    const inHcmInternal = await internalSearch(q, false);
-    if (inHcmInternal.length) return inHcmInternal;
-
-    // Fallback sang API cũ (Nominatim)
-    const inHcmNominatim = await nominatimSearch(q, true);
-    if (inHcmNominatim.length) return inHcmNominatim;
-
-    return await nominatimSearch(q, false);
+    const url = `/api/geocode?q=${encodeURIComponent(q)}`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    return await res.json();
   } catch {
     return [];
   }
 }
 
-type GeoResult = { label: string; lat: number; lng: number; area?: string; cc?: string };
 type Loc = { lat: number; lng: number } | null;
 type SortBy = "price" | "distance";
 type MobileView = "list" | "map";
+
 
 const CAT_EMOJI: Record<string, string> = {
   Sữa: "🥛",
