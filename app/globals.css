@@ -9,11 +9,17 @@ body {
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
-/* Cuộn ngang nhãn vị trí khi địa chỉ dài hơn bề ngang pill (mobile) — đọc được full mà không chiếm chỗ. */
+/* Nhãn địa chỉ chạy MỘT CHIỀU phải→trái liên tục (2 bản nối nhau, dịch -50% là khớp seamless). */
 @keyframes loc-marquee {
-  0%, 12% { transform: translateX(0); }
-  88%, 100% { transform: translateX(var(--loc-dist, 0)); }
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.loc-marquee-run {
+  animation-name: loc-marquee;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
 }
 @media (prefers-reduced-motion: reduce) {
-  .loc-marquee-run { animation: none !important; }
+  .loc-marquee-run { animation: none !important; transform: none !important; }
 }

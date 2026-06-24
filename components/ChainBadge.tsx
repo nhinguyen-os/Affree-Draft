@@ -43,13 +43,13 @@ export function ChainBadge({ chain }: { chain: Chain }) {
   return (
     <span
       title={chainLabel(chain)}
-      className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white p-1 shadow-sm ring-1 ring-black/5"
+      className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full bg-white shadow-sm ring-1 ring-black/10"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={`/logos/${chain}.png`}
         alt={chainLabel(chain)}
-        className="h-full w-full object-contain"
+        className="h-full w-full object-cover"
         loading="lazy"
         onError={() => setFailed(true)}
       />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CartItem } from "@/lib/types";
+import type { CartItem, RankedOffer } from "@/lib/types";
 import { chainLabel } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
@@ -33,12 +33,14 @@ export default function CartModal({
   onClose,
   onUpdateQty,
   onRemove,
+  onOrderWithAgent,
   lang = "vi",
 }: {
   items: CartItem[];
   onClose: () => void;
   onUpdateQty: (productId: string, storeId: string, qty: number) => void;
   onRemove: (productId: string, storeId: string) => void;
+  onOrderWithAgent?: (offers: RankedOffer[]) => void;
   lang?: Lang;
 }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
@@ -54,11 +56,16 @@ export default function CartModal({
 
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Close on Escape
+  // Close on Escape + lock body scroll
   useEffect(() => {
     const handler = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = prev;
+    };
   }, [onClose]);
 
   const storeGroups = useMemo((): StoreGroup[] => {
@@ -153,10 +160,10 @@ export default function CartModal({
       aria-modal="true"
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-md" onClick={onClose} />
 
-      {/* Panel */}
-      <div className="relative flex w-full max-w-lg flex-col rounded-t-2xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-2xl">
+      {/* Panel — liquid glass */}
+      <div className="relative flex w-full max-w-lg flex-col rounded-t-3xl bg-white/85 backdrop-blur-2xl ring-1 ring-white/60 shadow-2xl max-h-[85vh] sm:max-h-[90vh] sm:rounded-3xl" style={{ WebkitBackdropFilter: "blur(32px)" }}>
         {/* Header */}
         <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3">
           <svg
@@ -341,7 +348,7 @@ export default function CartModal({
                             }
                             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:border-slate-300 hover:bg-slate-100"
                           >
-                            {item.qty <= 1 ? "🗑" : "−"}
+                            −
                           </button>
                           <span className="w-5 text-center text-sm font-semibold text-slate-700">
                             {item.qty}
@@ -373,12 +380,6 @@ export default function CartModal({
                         />
                       </label>
                     )}
-                    {group.authNote ? (
-                      <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
-                        <span className="shrink-0">ℹ️</span>
-                        {group.authNote}
-                      </p>
-                    ) : null}
                     {group.needStorePick && (
                       <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-2.5 py-2 text-xs text-blue-700">
                         <span className="shrink-0">🏪</span>
@@ -400,7 +401,15 @@ export default function CartModal({
               <span className="text-lg font-bold text-rose-600">{formatMoney(grandTotal, "VND")}</span>
             </div>
             <button
-              onClick={placeAll}
+              onClick={() => {
+                if (onOrderWithAgent) {
+                  // Lấy offer đại diện (item đầu tiên) của mỗi store group
+                  const offers = storeGroups.map((g) => g.items[0].offer);
+                  onOrderWithAgent(offers);
+                } else {
+                  placeAll();
+                }
+              }}
               disabled={phase === "submitting" || !phone.trim() || !address.trim()}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >

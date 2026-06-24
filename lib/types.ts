@@ -28,6 +28,8 @@ export interface Product {
   group?: string;
   unit: string;
   image?: string;
+  /** Thông tin mô tả sản phẩm (cột info/mo_ta trong sheet). Hiển thị qua nút ⓘ trên thẻ. */
+  info?: string;
 }
 
 /** Một "offer" = một sản phẩm được bán tại một cửa hàng với giá + tồn kho. */
@@ -75,6 +77,15 @@ export interface Sponsor {
   logo?: string;
 }
 
+/**
+ * Nhóm "sản phẩm tương tự" khai báo trong tab "tương tự" của Google Sheet.
+ * `products` = danh sách product_id hoặc tên (khớp một phần, không phân biệt hoa thường).
+ */
+export interface SimilarGroup {
+  name: string;
+  products: string[];
+}
+
 export interface Catalog {
   products: Product[];
   offers: Offer[];
@@ -84,6 +95,8 @@ export interface Catalog {
   priorities?: PriorityProfile[];
   /** Nhãn tài trợ (tab "Nhãn tài trợ"). Trống → không hiện dải nhãn tài trợ. */
   sponsors?: Sponsor[];
+  /** Nhóm sản phẩm tương tự (tab "tương tự"). Trống → tự suy theo ngành hàng. */
+  similarGroups?: SimilarGroup[];
 }
 
 export interface PurchaseRecord {

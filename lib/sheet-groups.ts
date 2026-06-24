@@ -23,11 +23,11 @@ export const PRIORITY_SHEET_CSV_URL =
   `https://docs.google.com/spreadsheets/d/1D5vs9DnJnpWd6b2tivGuA8JPfMjPC3TlRbDFN-LDXLc/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
     "ưu tiên hiển thị",
   )}`;
-// Nhãn tài trợ → tab gid=930353417 trong sheet "Danh sách sản phẩm". Đọc qua export CSV
-// trực tiếp (không qua gviz — gviz cache/sai tab như đã gặp với catalog).
+// Nhãn tài trợ → tab "Nhãn tài trợ" (gid=1306119583) trong sheet cấu hình 1sZTv. Cột: tên · link · logo.
+// Đọc qua export CSV trực tiếp (không qua gviz). Sheet phải để chia sẻ "Bất kỳ ai có link → Người xem".
 export const SPONSOR_SHEET_CSV_URL =
   process.env.SPONSOR_SHEET_CSV_URL ||
-  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=930353417";
+  "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=1306119583";
 
 /** Tách CSV → mảng hàng × cột (hỗ trợ field có dấu " và xuống dòng bên trong). */
 function splitCsv(csv: string): string[][] {

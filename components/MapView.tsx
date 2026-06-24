@@ -30,10 +30,6 @@ type PoiPopup = {
   type: string;
 };
 
-type DestPin = {
-  lng: number;
-  lat: number;
-};
 
 function storeIconHtml(color: string, cheapest: boolean, highlight: boolean, cheapestLabel: string) {
   const size = cheapest ? 40 : highlight ? 36 : 30;
@@ -54,7 +50,8 @@ function zoomForRadius(km?: number | null): number | undefined {
   if (km <= 1) return 14;
   if (km <= 3) return 13;
   if (km <= 5) return 12;
-  return 11;
+  if (km <= 10) return 10;
+  return 9;
 }
 
 function radiusGeoJson(lat: number, lng: number, radiusKm: number) {
@@ -101,9 +98,8 @@ export default function MapView({
   const mapRef = useRef<MapRef>(null);
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [poiPopup, setPoiPopup] = useState<PoiPopup | null>(null);
-  const [destPin, setDestPin] = useState<DestPin | null>(null);
-  const [destPinPopup, setDestPinPopup] = useState(false);
   const [styleLoaded, setStyleLoaded] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(true);
   // Lưu filter gốc của từng POI layer để combine sau
   const origPoiFilters = useRef<Record<string, unknown>>({});
 
@@ -180,15 +176,10 @@ export default function MapView({
         "";
       setPoiPopup({ lng, lat, name, type });
       setSelectedStore(null);
-      setDestPinPopup(false);
       mapRef.current.flyTo({ center: [lng, lat], zoom: Math.max(mapRef.current.getZoom(), 16), duration: 400 });
     } else {
       setPoiPopup(null);
       setSelectedStore(null);
-      // Thả pin điểm đến ở chỗ vừa tap
-      const { lng, lat } = e.lngLat;
-      setDestPin({ lng, lat });
-      setDestPinPopup(true);
     }
   }, []);
 
@@ -320,18 +311,18 @@ export default function MapView({
                   {selectedStore.cheapest && selectedStore.inStock ? ` · ${t("Rẻ nhất")}` : ""}
                 </div>
               )}
-              {onBuy && (
-                <button
-                  type="button"
-                  onClick={() => onBuy(selectedStore.store)}
+              <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1${userLoc ? `&origin=${userLoc.lat},${userLoc.lng}` : ""}&destination=${selectedStore.store.lat},${selectedStore.store.lng}&travelmode=driving`}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   style={{
-                    marginTop: 8,
-                    width: "100%",
+                    flex: 1,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: 6,
-                    background: "#059669",
+                    gap: 5,
+                    background: "#2563eb",
                     color: "#fff",
                     border: "none",
                     borderRadius: 8,
@@ -339,87 +330,47 @@ export default function MapView({
                     fontSize: 13,
                     fontWeight: 600,
                     cursor: "pointer",
+                    textDecoration: "none",
                   }}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="9" cy="21" r="1" />
-                    <circle cx="20" cy="21" r="1" />
-                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="3 11 22 2 13 21 11 13 3 11" />
                   </svg>
-                  {t("Vào mua")}
-                </button>
-              )}
-            </div>
-          </Popup>
-        )}
-
-        {destPin && (
-          <Marker
-            longitude={destPin.lng}
-            latitude={destPin.lat}
-            anchor="bottom"
-            draggable
-            onDragEnd={(e) => {
-              const { lng, lat } = e.lngLat;
-              setDestPin({ lng, lat });
-              setDestPinPopup(true);
-            }}
-            onClick={(e) => {
-              e.originalEvent.stopPropagation();
-              setDestPinPopup(true);
-            }}
-          >
-            <div style={{ cursor: "grab", display: "flex", flexDirection: "column", alignItems: "center" }}>
-              {/* Grab-style destination pin */}
-              <svg viewBox="0 0 40 52" width="40" height="52" style={{ filter: "drop-shadow(0 3px 6px rgba(0,0,0,.35))", display: "block" }}>
-                {/* Shadow ellipse at base */}
-                <ellipse cx="20" cy="50" rx="6" ry="2.5" fill="rgba(0,0,0,0.18)" />
-                {/* Pin body */}
-                <path fill="#00b14f" d="M20 2C12.3 2 6 8.3 6 16c0 10 14 32 14 32s14-22 14-32C34 8.3 27.7 2 20 2z"/>
-                {/* White inner ring */}
-                <circle cx="20" cy="16" r="7" fill="#fff"/>
-                {/* Green center dot */}
-                <circle cx="20" cy="16" r="3.5" fill="#00b14f"/>
-              </svg>
-            </div>
-          </Marker>
-        )}
-
-        {destPin && destPinPopup && (
-          <Popup
-            longitude={destPin.lng}
-            latitude={destPin.lat}
-            anchor="bottom"
-            offset={[0, -36] as [number, number]}
-            onClose={() => setDestPinPopup(false)}
-            closeButton
-            closeOnClick={false}
-          >
-            <div style={{ minWidth: 150, fontFamily: "system-ui,sans-serif" }}>
-              <div style={{ fontWeight: 600, fontSize: 12, color: "#334155", marginBottom: 6 }}>
-                {t("Điểm đến")}
-                <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: 11, marginLeft: 4 }}>
-                  ({destPin.lat.toFixed(5)}, {destPin.lng.toFixed(5)})
-                </span>
+                  {t("Chỉ đường")}
+                </a>
+                {onBuy && (
+                  <button
+                    type="button"
+                    onClick={() => onBuy(selectedStore.store)}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 5,
+                      background: "#059669",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "7px 10px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="9" cy="21" r="1" />
+                      <circle cx="20" cy="21" r="1" />
+                      <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                    </svg>
+                    {t("Vào mua")}
+                  </button>
+                )}
               </div>
-              <a
-                href={`https://www.google.com/maps/dir/?api=1&destination=${destPin.lat},${destPin.lng}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "flex", alignItems: "center", gap: 5,
-                  padding: "6px 10px", background: "#2563eb", color: "#fff",
-                  borderRadius: 8, fontSize: 12, fontWeight: 600, textDecoration: "none",
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="3 11 22 2 13 21 11 13 3 11"/>
-                </svg>
-                {t("Chỉ đường")}
-              </a>
             </div>
           </Popup>
         )}
+
 
         {poiPopup && (
           <Popup
@@ -471,7 +422,7 @@ export default function MapView({
           title={t("Về vị trí của tôi")}
           style={{
             position: "absolute",
-            bottom: 84,
+            top: 60,
             right: 12,
             zIndex: 1000,
             width: 40,
@@ -494,22 +445,47 @@ export default function MapView({
         </button>
       )}
 
+      {legendOpen ? (
       <div
         style={{
           position: "absolute",
-          bottom: 12,
+          top: 12,
           left: 12,
           zIndex: 1000,
           background: "rgba(255,255,255,0.92)",
           borderRadius: 8,
           boxShadow: "0 1px 4px rgba(0,0,0,.2)",
-          padding: "6px 9px",
+          padding: "6px 22px 6px 9px",
           fontSize: 11,
           lineHeight: 1.5,
           color: "#334155",
-          pointerEvents: "none",
+          pointerEvents: "auto",
         }}
       >
+        <button
+          type="button"
+          onClick={() => setLegendOpen(false)}
+          aria-label={t("Ẩn chú thích")}
+          title={t("Ẩn chú thích")}
+          style={{
+            position: "absolute",
+            top: 2,
+            right: 2,
+            width: 18,
+            height: 18,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            background: "transparent",
+            color: "#94a3b8",
+            cursor: "pointer",
+            borderRadius: 999,
+            padding: 0,
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 9, height: 9, borderRadius: 999, background: "#3b82f6", display: "inline-block" }} />
           {t("Vị trí của bạn")}
@@ -535,6 +511,36 @@ export default function MapView({
           {t("Nơi bán giá thấp nhất")}
         </div>
       </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setLegendOpen(true)}
+          aria-label={t("Hiện chú thích")}
+          title={t("Hiện chú thích")}
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            background: "rgba(255,255,255,0.92)",
+            borderRadius: 999,
+            boxShadow: "0 1px 4px rgba(0,0,0,.2)",
+            padding: "5px 10px",
+            fontSize: 11,
+            fontWeight: 600,
+            color: "#334155",
+            border: "none",
+            cursor: "pointer",
+            pointerEvents: "auto",
+          }}
+        >
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: "#3b82f6", display: "inline-block" }} />
+          {t("Chú thích")}
+        </button>
+      )}
     </div>
   );
 }

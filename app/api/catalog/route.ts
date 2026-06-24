@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { PRODUCT_IMAGES, SEED_CATALOG } from "@/lib/seed-catalog";
 import { fetchMasterCatalog } from "@/lib/sheet-catalog";
 import { fetchSheetGroups } from "@/lib/sheet-groups";
+import { fetchSimilarGroups } from "@/lib/sheet-similar";
 import { fetchSheetStores } from "@/lib/sheet-stores";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
@@ -66,9 +67,10 @@ async function fetchCatalogTab(): Promise<Catalog | null> {
 export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
-  const [, sheetGroups] = await Promise.all([
+  const [, sheetGroups, similarGroups] = await Promise.all([
     fetchSheetStores(revalidate).then(setDynamicStores),
     fetchSheetGroups(revalidate),
+    fetchSimilarGroups(revalidate),
   ]);
 
   /**
@@ -80,6 +82,7 @@ export async function GET() {
     groups: catalog.groups?.length ? catalog.groups : sheetGroups.groups,
     priorities: catalog.priorities?.length ? catalog.priorities : sheetGroups.priorities,
     sponsors: catalog.sponsors?.length ? catalog.sponsors : sheetGroups.sponsors,
+    similarGroups: similarGroups.length ? similarGroups : catalog.similarGroups,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
@@ -149,6 +152,7 @@ function parseCsv(csv: string): Catalog {
     group: idx("danh_muc") >= 0 ? idx("danh_muc") : idx("tệp"),
     unit: idx("unit"),
     image: idx("image"),
+    info: ["info", "mo_ta", "mô tả", "mo ta", "description", "ghi_chu", "ghi chú"].map(idx).find((i) => i >= 0) ?? -1,
     chain: idx("chain"),
     storeId: idx("store_id"),
     price: idx("price"),
@@ -193,6 +197,7 @@ function parseCsv(csv: string): Catalog {
         group: ci.group >= 0 ? (r[ci.group] ?? "").trim() || undefined : undefined,
         unit: (r[ci.unit] ?? "").trim(),
         image: ci.image >= 0 ? (r[ci.image] ?? "").trim() || undefined : undefined,
+        info: ci.info >= 0 ? (r[ci.info] ?? "").trim() || undefined : undefined,
       });
     }
 
@@ -210,7 +215,7 @@ function parseCsv(csv: string): Catalog {
       price: priceRaw ? Number(priceRaw) : 0,
       inStock: !["0", "false", "het", "hết", "no", "out"].includes(stockRaw),
       productUrl: (r[ci.productUrl] ?? "").trim(),
-      lastChecked: (r[ci.lastChecked] ?? new Date().toISOString()).trim(),
+      lastChecked: ((r[ci.lastChecked] ?? "").trim() || new Date().toISOString()),
     });
     void (ci.chain as Chain | number); // chain suy ra từ store
   }

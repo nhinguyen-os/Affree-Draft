@@ -198,6 +198,9 @@ export function parseMasterCsv(csv: string): Catalog {
     });
 
     const buyUrl = url || SOURCE_META[chain]?.home || "";
+    // Dùng timestamp thực từ scraper (cột CHECKED_AT) nếu có, fallback về thời điểm parse sheet.
+    const rawChecked = c.lastCheckedLive >= 0 ? (r[c.lastCheckedLive] || "").trim() : "";
+    const lastChecked = rawChecked || ts;
     const physical = physicalStoresOfChain(chain);
     if (physical.length) {
       // Chuỗi có cửa hàng vật lý: giá online áp cho mọi điểm bán.
@@ -208,7 +211,7 @@ export function parseMasterCsv(csv: string): Catalog {
           price,
           inStock,
           productUrl: buyUrl,
-          lastChecked: ts,
+          lastChecked,
         });
       }
     } else {
@@ -219,7 +222,7 @@ export function parseMasterCsv(csv: string): Catalog {
         price,
         inStock,
         productUrl: buyUrl,
-        lastChecked: ts,
+        lastChecked,
       });
     }
   }

@@ -97,6 +97,8 @@ const EN_DICT: Record<string, string> = {
   "Sản phẩm phổ biến": "Popular products",
   "{n} sản phẩm": "{n} products",
   "Có {n} nơi bán": "{n} stores selling",
+  "{n} chi nhánh khác": "{n} more branches",
+  "Ẩn bớt": "Show less",
   "Hết hàng": "Out of stock",
   "Chưa có giá": "No price yet",
   "So sánh giá": "Compare prices",

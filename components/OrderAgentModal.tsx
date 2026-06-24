@@ -34,6 +34,7 @@ export default function OrderAgentModal({
   defaultName,
   defaultPhone,
   defaultAddress,
+  initialQty,
   onClose,
   onPlaced,
   lang = "vi",
@@ -46,6 +47,7 @@ export default function OrderAgentModal({
   defaultName?: string;
   defaultPhone?: string;
   defaultAddress?: string;
+  initialQty?: number;
   onClose: () => void;
   onPlaced: (orderCode: string, chosen: RankedOffer) => void;
   lang?: Lang;
@@ -65,8 +67,15 @@ export default function OrderAgentModal({
   const [phone, setPhone] = useState(defaultPhone || saved.phone);
   const [address, setAddress] = useState(defaultAddress || saved.address);
   const [email, setEmail] = useState("");
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState(initialQty && initialQty > 0 ? initialQty : 1);
   const [slot, setSlot] = useState(SLOTS[0]);
+
+  // Khoá scroll body khi modal mở
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   // Cứ gõ là lưu — không cần rời khỏi ô. localStorage tức thì + đẩy lên Sheet (debounce).
   const firstRender = useRef(true);
@@ -271,7 +280,7 @@ export default function OrderAgentModal({
           </button>
         </div>
 
-        <div className="overflow-y-auto px-4 py-4">
+        <div className="overflow-y-auto overscroll-contain px-4 py-4">
           {/* Banner: bản mô phỏng */}
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             ⚙️ {t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
@@ -280,6 +289,71 @@ export default function OrderAgentModal({
           {/* PHASE 1: form thông tin cần có */}
           {phase === "form" && (
             <div className="space-y-3">
+              {/* Sản phẩm đang đặt — qty control nằm bên phải */}
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                {activeOffer.product.image ? (
+                  <img
+                    src={activeOffer.product.image}
+                    alt={activeOffer.product.name}
+                    className="h-14 w-14 shrink-0 rounded-lg object-contain bg-slate-50"
+                  />
+                ) : (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-2xl">
+                    🛒
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{chain} · {activeOffer.store.name}</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-base font-bold text-emerald-600">
+                      {formatMoney(activeOffer.price * qty, storeCurrency(activeOffer.store.id))}
+                    </span>
+                    {qty > 1 && (
+                      <span className="text-xs text-slate-400">
+                        ({formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))} × {qty})
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* Qty control */}
+                <div className="flex shrink-0 flex-col items-center gap-1">
+                  <span className="text-[10px] font-medium text-slate-400">{t("Số lượng")}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setQty((q) => Math.max(1, q - 1))}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 text-base font-medium hover:bg-slate-100"
+                    >
+                      −
+                    </button>
+                    <span className="w-6 text-center text-sm font-semibold">{qty}</span>
+                    <button
+                      onClick={() => setQty((q) => q + 1)}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 text-base font-medium hover:bg-slate-100"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Khung giờ giao — chỉ hiện khi cần */}
+              {cfg.needSlot && (
+                <Field label={t("Khung giờ giao")}>
+                  <select
+                    value={slot}
+                    onChange={(e) => setSlot(e.target.value)}
+                    className="input"
+                  >
+                    {SLOTS.map((s) => (
+                      <option key={s} value={s}>
+                        {t(s)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
               {/* Mỗi nguồn yêu cầu khác nhau */}
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <p className="text-xs font-medium text-slate-500">
@@ -442,42 +516,6 @@ export default function OrderAgentModal({
                   </div>
                 </div>
               )}
-
-              <div className={cfg.needSlot ? "grid grid-cols-2 gap-3" : ""}>
-                <Field label={t("Số lượng")}>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setQty((q) => Math.max(1, q - 1))}
-                      className="h-9 w-9 shrink-0 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100"
-                    >
-                      −
-                    </button>
-                    <span className="w-8 text-center text-sm font-semibold">{qty}</span>
-                    <button
-                      onClick={() => setQty((q) => q + 1)}
-                      className="h-9 w-9 shrink-0 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100"
-                    >
-                      +
-                    </button>
-                  </div>
-                </Field>
-
-                {cfg.needSlot && (
-                  <Field label={t("Khung giờ giao")}>
-                    <select
-                      value={slot}
-                      onChange={(e) => setSlot(e.target.value)}
-                      className="input"
-                    >
-                      {SLOTS.map((s) => (
-                        <option key={s} value={s}>
-                          {t(s)}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-              </div>
 
               <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between">
