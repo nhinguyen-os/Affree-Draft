@@ -30,40 +30,124 @@
 
 ## 1. Giới thiệu & Tầm nhìn sản phẩm
 
-### Affree là gì?
-Affree là ứng dụng web **so sánh giá và kết nối mua bán** cho thị trường Việt Nam. Người dùng nhập (hoặc định vị) nơi mình đang ở, tìm một sản phẩm, và Affree hiển thị **các nơi đang bán sản phẩm đó quanh khu vực** kèm **giá**, **tình trạng còn hàng** và **khoảng cách** tới từng cửa hàng — kèm bản đồ và nút chỉ đường / vào mua.
+> **Quy ước đọc tài liệu:** các mục được gắn nhãn **[Hiện tại]** là những gì đã có trong mã nguồn của bản v1.2; nhãn **[Tầm nhìn]** là định hướng sản phẩm/chiến lược chưa hoàn thiện trong code nhưng đã được thiết kế để hướng tới. BA cần phân biệt rõ hai nhóm này khi lập kế hoạch.
 
-### Vấn đề giải quyết
-Người mua hàng ngày thường không biết món mình cần đang được bán ở đâu **rẻ nhất** và **gần nhất**. Giá giữa các chuỗi (Bách Hóa Xanh, Co.opmart, Con Cưng, AEON…) chênh nhau, lại thay đổi theo khuyến mãi. Affree gom giá về một chỗ, sắp xếp theo "rẻ + gần", giúp người mua quyết định nhanh.
+### 1.1 Affree là gì?
+Affree là nền tảng **so sánh giá và kết nối mua bán "không thu phí"**. Ở dạng đơn giản nhất, người dùng cho biết **mình đang ở đâu**, **muốn mua gì**, và Affree trả lời ba câu hỏi mà người mua luôn quan tâm:
 
-### Định vị "không thu phí"
-Affree không thu phí của người mua. Vai trò của nền tảng là **kết nối**: tổng hợp thông tin giá và điều hướng người mua tới đúng nơi bán (cửa hàng vật lý hoặc website/app của chuỗi).
+1. **Ai đang bán món này quanh tôi?** (nguồn bán: chuỗi siêu thị, cửa hàng, sàn online)
+2. **Ở đâu rẻ nhất / gần nhất / còn hàng?** (giá, khoảng cách, tồn kho)
+3. **Làm sao mua nhanh nhất?** (chỉ đường tới cửa hàng, mở web nguồn bán, hoặc **để AI đặt hộ**)
 
-### Đối tượng người dùng
-- **Chính:** người tiêu dùng tại Việt Nam (mặc định giao diện tiếng Việt, tiền tệ ₫).
-- **Mở rộng:** người dùng ở nước ngoài — app hỗ trợ nhập **địa chỉ nước ngoài**, tự chuyển giao diện sang **tiếng Anh** và hiển thị giá theo **tiền tệ cửa hàng** (ví dụ $ cho cửa hàng tại Mỹ).
+Tên gọi **Affree** mang thông điệp cốt lõi: *"All + Free"* — **tìm gì cũng có** (mọi nhu cầu) và **miễn phí cho người mua**. Khẩu hiệu sản phẩm: *"Kết nối mua bán, không thu phí · Tìm gì cũng có, giá hời quanh đây."*
+
+### 1.2 Bài toán & cơ hội
+Người tiêu dùng hôm nay đối mặt với một thị trường **phân mảnh**:
+
+- Cùng một sản phẩm có giá khác nhau giữa các chuỗi (BHX, Co.opmart, Con Cưng, AEON…), lại thay đổi liên tục theo khuyến mãi.
+- Thông tin **còn hàng / hết hàng** và **khoảng cách** nằm rải rác ở từng app/website riêng — người mua phải mở nhiều ứng dụng để so sánh.
+- Mỗi nguồn bán có **quy trình đặt hàng riêng** (đăng nhập, OTP, chọn siêu thị, khung giờ giao, CAPTCHA…), gây mệt mỏi và bỏ giỏ giữa chừng.
+- Với **người Việt ở nước ngoài** (Mỹ, Canada) hoặc người muốn **mua hộ/gửi quà về cho gia đình**, việc đặt hàng xuyên biên giới còn phức tạp hơn nhiều: khác ngôn ngữ, khác tiền tệ, khác cổng thanh toán.
+
+Affree gom toàn bộ sự phân mảnh đó về **một giao diện duy nhất**: so sánh tập trung, xếp hạng theo "rẻ + gần + còn hàng", và — quan trọng nhất ở tầm nhìn dài hạn — **một lớp AI đặt hàng** lo phần quy trình rắc rối của từng nguồn.
+
+### 1.3 Tầm nhìn sản phẩm (North Star)
+
+> **Tầm nhìn:** *"Bất kỳ ai, ở bất kỳ đâu, muốn mua bất kỳ thứ gì — chỉ cần nói ra, Affree tìm nơi tốt nhất và mua hộ."*
+
+Affree không định vị mình là một sàn TMĐT thứ N (không ôm kho, không xử lý thanh toán của nguồn bán). Affree là **lớp kết nối + trí tuệ mua sắm** nằm **phía trên** tất cả các nguồn bán hiện có. Ba trụ cột của tầm nhìn:
+
+| Trụ cột | Nội dung | Trạng thái |
+|---|---|---|
+| **Universal catalog** — gom mọi cửa hàng | Kết nối tới **tất cả cửa hàng** (vật lý + online) ở Việt Nam, rồi mở rộng sang **Mỹ và Canada** trong tương lai gần. Mỗi nguồn bán chỉ cần một cấu hình là vào hệ thống. | [Tầm nhìn] — kiến trúc đã sẵn sàng (xem 1.4, 2.4) |
+| **Agentic AI ordering** — AI mua hộ | AI đại diện người mua **thực hiện trọn quy trình đặt hàng** trên nhiều nguồn khác nhau, trong nước lẫn quốc tế, vượt qua các bước đăng nhập/OTP/khung giờ thay cho người dùng. | [Tầm nhìn] — đã có bản **mô phỏng** (`OrderAgentModal`) làm nền (xem 3.4) |
+| **Cross-border commerce** — mua bán xuyên biên giới | Một người ở Mỹ/Canada có thể đặt hàng từ cửa hàng Việt Nam (hoặc ngược lại); đa ngôn ngữ, đa tiền tệ, đa địa chỉ giao. | [Tầm nhìn] — đã có nền đa tiền tệ + địa chỉ nước ngoài (xem 3.6) |
+
+### 1.4 Lộ trình hiện thực hoá tầm nhìn (theo giai đoạn)
+
+| Giai đoạn | Phạm vi | Mô tả |
+|---|---|---|
+| **Now — [Hiện tại]** | TP.HCM, vài chuỗi tiêu biểu | So sánh giá thật quanh khu vực; bản đồ + chỉ đường; trợ lý đặt hàng mô phỏng; đa tiền tệ & địa chỉ nước ngoài đã chạy. |
+| **Near-term — [Tầm nhìn gần]** | **Toàn bộ cửa hàng tại Việt Nam** | Mở rộng độ phủ nguồn bán nhờ mô hình "thêm nguồn bằng cấu hình Sheet"; chuẩn hoá tab `stores`; bổ sung nguồn online & cửa hàng theo từng thành phố. |
+| **Expansion — [Tầm nhìn]** | **Mỹ & Canada** | Kết nối cửa hàng tại Mỹ/Canada (đã có ví dụ `astrabean` ở San Jose, USD); kích hoạt mua xuyên biên giới cho cộng đồng người Việt và người tiêu dùng bản địa. |
+| **Agentic — [Tầm nhìn]** | Mọi nguồn, mọi nơi | AI đặt hàng tự động end-to-end trên nhiều nguồn cùng lúc, trong & ngoài nước. |
+
+### 1.5 Định vị "không thu phí"
+Affree **không thu phí của người mua**. Đây là cam kết định vị, không phải khuyến mãi tạm thời:
+
+- Người mua dùng **miễn phí** toàn bộ tính năng so sánh, bản đồ, đặt hàng.
+- Affree **không thay thế** nguồn bán: thanh toán, giao hàng, bảo hành vẫn do nguồn bán thực hiện. Affree là **người môi giới thông minh + trợ lý mua sắm**.
+- Doanh thu đến từ **phía cung** (nguồn bán, thương hiệu, đối tác) và **lớp giá trị gia tăng** (xem Phần 2), không lấy từ túi người mua.
+
+### 1.6 Đối tượng người dùng
+
+| Phân khúc | Mô tả | Giá trị cốt lõi Affree mang lại |
+|---|---|---|
+| **Người nội trợ / mua hàng ngày tại VN** | Mua nhu yếu phẩm, thực phẩm, đồ gia dụng quanh nhà. | Tiết kiệm tiền + thời gian, mua nhanh. |
+| **Người bận rộn / ngại quy trình** | Ngại đăng nhập/OTP/đặt hàng thủ công ở nhiều app. | **AI đặt hộ** trên nhiều nguồn. |
+| **Người Việt ở nước ngoài (Mỹ, Canada)** | Muốn mua hàng Việt, hoặc **mua hộ/gửi về** cho gia đình ở VN. | Mua xuyên biên giới, đa tiền tệ, đa ngôn ngữ. |
+| **Người tiêu dùng bản địa Mỹ/Canada** | [Tầm nhìn] dùng Affree như công cụ so sánh + đặt hộ tại thị trường của họ. | So sánh + agentic ordering nội địa. |
+| **Nguồn bán & thương hiệu** | Chuỗi siêu thị, cửa hàng, sàn, nhà tài trợ. | Thêm khách, ưu tiên hiển thị, kênh bán mới. |
 
 ---
 
 ## 2. Mô hình thương mại & giá trị nghiệp vụ
 
-### Mô hình "kết nối mua bán không thu phí"
-Affree đứng giữa **người mua** và **nhiều nguồn bán** (chuỗi siêu thị, cửa hàng, sàn online). Nền tảng:
-1. Tổng hợp danh mục sản phẩm + giá từ nhiều nguồn.
-2. Xếp hạng và gợi ý nơi mua tối ưu (rẻ/gần/còn hàng).
-3. Điều hướng người mua: chỉ đường tới cửa hàng vật lý, hoặc mở website/app nguồn bán, hoặc đặt hàng qua **trợ lý ảo** (mô phỏng).
+### 2.1 Vị trí của Affree trong chuỗi giá trị
+Affree đứng **giữa người mua và nhiều nguồn bán**, đóng vai trò **lớp tổng hợp + định tuyến + trợ lý mua**. Affree **không** ôm tồn kho, **không** xử lý dòng tiền của nguồn bán, **không** chịu trách nhiệm giao hàng — đây là điểm khiến mô hình **nhẹ vốn, dễ mở rộng** (asset-light):
 
-### Hướng doanh thu tiềm năng (đã có "hạt giống" trong sản phẩm)
-Mặc dù không thu phí người mua, hệ thống đã có sẵn 2 cơ chế phục vụ thương mại hoá:
+```
+        Người mua  ──hỏi "mua X quanh đây"──►  AFFREE  ──định tuyến──►  Nguồn bán
+        (miễn phí)                            (lớp kết nối + AI)        (siêu thị / cửa hàng / sàn,
+                                                                         trong nước & quốc tế)
+              ▲                                    │
+              └────────── giá / vị trí / đặt hộ ───┘
+```
+
+Vì không gánh kho và thanh toán của nguồn bán, **chi phí thêm một nguồn bán mới gần như bằng 0** (chỉ là cấu hình dữ liệu — xem 2.4). Đây là nền tảng để hiện thực hoá tầm nhìn "gom mọi cửa hàng VN → US → Canada".
+
+### 2.2 Ba dòng giá trị → ba hướng doanh thu
+
+Affree miễn phí với người mua, nên doanh thu đến từ **phía cung và lớp giá trị gia tăng**. Có thể chia thành 3 tầng theo mức độ trưởng thành:
+
+| Tầng | Hướng doanh thu | Trạng thái | Cơ chế trong sản phẩm |
+|---|---|---|---|
+| **Tầng 1 — Hiển thị** | **Ưu tiên hiển thị** (nguồn bán/đối tác trả phí để được xếp lên trước) + **Nhãn tài trợ** (thương hiệu trả phí hiện logo/branding). | **[Hiện tại]** — đã có cơ chế | Tab `ưu tiên hiển thị` & tab `Nhãn tài trợ` (xem 2.3) |
+| **Tầng 2 — Lead & dữ liệu** | **Thu lead** (SĐT/Zalo người quan tâm qua "báo giảm giá"); **dữ liệu hành vi** (lượt xem, lượt mua, sản phẩm bán chạy theo khu vực) bán dưới dạng insight cho nguồn bán/thương hiệu. | **[Hiện tại]** — đã thu `alerts`, `purchases`, view counts | Tab `alerts`, `purchases`; `lib/recent.ts` |
+| **Tầng 3 — Giao dịch (Agentic)** | **Hoa hồng giới thiệu / phí dịch vụ đặt hộ** trên mỗi đơn AI hoàn tất; phí mua xuyên biên giới. Đây là động cơ doanh thu lớn nhất ở tầm nhìn dài hạn. | **[Tầm nhìn]** — đang ở dạng mô phỏng | `OrderAgentModal`, `lib/orderConfig.ts` (xem 3.4) |
+
+> **Điểm mấu chốt cho BA:** doanh thu hiện tại nằm ở Tầng 1–2 (hiển thị + lead/dữ liệu); **giá trị doanh nghiệp dài hạn nằm ở Tầng 3** — khi AI đặt hộ trở thành kênh giao dịch thực, mỗi đơn hàng hoàn tất là một điểm doanh thu (hoa hồng/phí dịch vụ), và mô hình chuyển từ "công cụ so sánh" sang "kênh thương mại".
+
+### 2.3 Cơ chế thương mại hoá đã có trong sản phẩm
 
 | Cơ chế | Mô tả nghiệp vụ | Khai báo ở đâu |
 |---|---|---|
 | **Ưu tiên hiển thị** (Priority) | Sắp thứ tự nguồn bán khi hiển thị giá theo một danh sách chuỗi ưu tiên (ví dụ ưu tiên cửa hàng đối tác lên trước). Áp dụng theo từng nhóm ngành hàng ("tệp") hoặc mặc định toàn trang. | Tab **"ưu tiên hiển thị"** trong Google Sheet |
 | **Nhãn tài trợ** (Sponsor) | Dải logo nhà tài trợ/đối tác hiển thị dưới mục "Dịch vụ quanh đây", bấm vào mở link đối tác. | Tab **"Nhãn tài trợ"** trong Google Sheet |
+| **Ô dịch vụ / tệp có link** | Một "tệp" có thể trỏ tới **trang dịch vụ ngoài** của đối tác (real estate, xây dựng…) — vị trí quảng bá đối tác. | Tab **"tệp"** (cột `link`) |
 
-→ Đây là điểm BA cần lưu ý: **mô hình kiếm tiền có thể đến từ phí ưu tiên hiển thị và tài trợ thương hiệu**, không phải từ người mua.
+→ Cả ba đều **cấu hình hoàn toàn qua Google Sheet**, đội kinh doanh có thể bán & kích hoạt vị trí quảng bá **không cần lập trình viên**.
 
-### Các nguồn bán / đối tác đang tích hợp
+### 2.4 Mô hình mở rộng nguồn bán — "thêm cửa hàng bằng cấu hình"
+Khả năng kết nối tới **tất cả store ở VN, US, Canada** trong tương lai gần đến từ thiết kế dữ liệu:
+
+- Mỗi **nguồn bán** chỉ cần một dòng metadata (`lib/stores.ts → SOURCE_META`: tên, màu, trang chủ, online?, **tiền tệ**).
+- Mỗi **cửa hàng vật lý** chỉ cần một dòng trong tab `stores` (toạ độ, địa chỉ, tiền tệ) — **không sửa code**.
+- **Giá/tồn kho** được nạp từ bảng sản phẩm và cập nhật tự động bởi hệ thống cào (Phần 8).
+- **Quy trình đặt hàng** của một nguồn mới khai báo trong `lib/orderConfig.ts` (cần OTP? email? khung giờ? CAPTCHA?).
+
+→ Hệ quả thương mại: **chi phí biên để phủ thêm một thành phố, một chuỗi, hay một quốc gia là rất thấp** — phù hợp với chiến lược bành trướng độ phủ nhanh (VN toàn quốc → Mỹ → Canada).
+
+### 2.5 Cơ hội mua bán xuyên biên giới (cross-border)
+Khi mở rộng sang Mỹ/Canada, Affree mở ra các kịch bản thương mại mà sàn nội địa khó làm:
+
+- **Người Việt ở Mỹ/Canada mua hàng Việt** (đặc sản, quà, sản phẩm thương hiệu Việt) hoặc **mua hộ/gửi về** cho gia đình ở VN.
+- **Đặt hàng nội địa nước sở tại** (mua quanh chỗ ở tại San Jose, Toronto…) với cùng trải nghiệm so sánh + AI đặt hộ.
+- Nền tảng kỹ thuật đã sẵn: **đa tiền tệ** (₫/$/khác — `storeCurrency`), **đa ngôn ngữ** (VI/EN tự chuyển theo quốc gia), **địa chỉ & bản đồ toàn cầu** (Nominatim/MapLibre), và ví dụ thực tế `astrabean` (cửa hàng PHIN LAB tại San Jose, CA, định giá USD).
+
+→ Đây là khác biệt cạnh tranh: Affree nhắm tới **một lớp mua sắm thông minh không biên giới**, lấy cộng đồng người Việt toàn cầu làm bàn đạp ban đầu.
+
+### 2.6 Các nguồn bán / đối tác đang tích hợp
 Khai báo trong `lib/stores.ts` (`SOURCE_META`):
 
 | Mã nguồn | Tên hiển thị | Loại | Tiền tệ |
@@ -83,66 +167,134 @@ Khai báo trong `lib/stores.ts` (`SOURCE_META`):
 
 > 4 nguồn đầu (BHX, Con Cưng, Co.opmart, AEON) có **cửa hàng vật lý** hiển thị trên bản đồ; các nguồn còn lại là **bán online** (mua qua web/app, không có vị trí bản đồ). `astrabean` là cửa hàng vật lý tại Mỹ, dùng để minh hoạ kịch bản đa quốc gia / đa tiền tệ.
 
-### Giá trị cho từng bên
+### 2.7 Giá trị cho từng bên
 
 | Bên | Giá trị nhận được |
 |---|---|
-| **Người mua** | Tiết kiệm tiền & thời gian; thấy ngay nơi rẻ nhất/gần nhất; biết còn hàng hay không; chỉ đường & đặt hàng nhanh. |
-| **Cửa hàng / chuỗi** | Thêm kênh tiếp cận khách quanh khu vực; tăng lượt ghé/đặt; có thể trả phí để được **ưu tiên hiển thị**. |
-| **Nền tảng Affree** | Doanh thu tiềm năng từ tài trợ thương hiệu + ưu tiên hiển thị; dữ liệu hành vi (lượt xem, lượt mua, lead báo giá). |
+| **Người mua** | Miễn phí; thấy ngay nơi rẻ nhất/gần nhất/còn hàng; chỉ đường & **để AI đặt hộ** không phải tự xoay xở quy trình; mua được cả hàng trong nước lẫn quốc tế ở một chỗ. |
+| **Cửa hàng / chuỗi** | Thêm kênh tiếp cận khách quanh khu vực mà không tốn chi phí tích hợp lớn; tăng lượt ghé/đặt; trả phí để được **ưu tiên hiển thị**; nhận đơn từ AI đặt hộ. |
+| **Thương hiệu / nhà tài trợ** | Vị trí **Nhãn tài trợ** & ô dịch vụ; tiếp cận đúng người mua theo ngành hàng/khu vực. |
+| **Cộng đồng người Việt ở nước ngoài** | Mua hàng Việt & mua hộ gửi về dễ dàng; trải nghiệm đa ngôn ngữ/đa tiền tệ. |
+| **Nền tảng Affree** | Tầng 1–2: doanh thu hiển thị + lead/dữ liệu (đã có). Tầng 3: **hoa hồng/phí trên mỗi đơn AI đặt hộ** (tầm nhìn) — động cơ tăng trưởng chính. |
+
+### 2.8 Hiệu ứng mạng (vì sao càng lớn càng mạnh)
+- **Nhiều nguồn bán hơn → so sánh giá trị hơn → nhiều người mua hơn → nguồn bán muốn vào hơn.** Vòng xoáy tăng trưởng kinh điển của nền tảng hai phía.
+- **AI đặt hộ học từ mỗi giao dịch:** càng nhiều quy trình đặt hàng được chạy, AI càng thuần thục với từng nguồn → tỷ lệ đặt thành công tăng → rào cản sao chép tăng.
+- **Dữ liệu giá & hành vi theo thời gian** trở thành tài sản: bản đồ giá theo khu vực, xu hướng "bán chạy theo phường", độ co giãn giá — phục vụ cả người mua lẫn đối tác.
 
 ---
 
 ## 3. Tính năng chính (góc nhìn người dùng)
 
-Danh sách tính năng đã phát hành (nguồn `DONE` trong `lib/version.ts`, hiển thị khi người dùng bấm nút phiên bản trên header):
+Các tính năng được nhóm thành **6 trụ cột**. Mỗi tính năng gắn nhãn **[Hiện tại]** (đã có trong v1.2 — nguồn `DONE` trong `lib/version.ts`) hoặc **[Tầm nhìn]**.
 
-1. **So sánh giá nhiều nơi bán quanh bạn** — gom giá từ nhiều chuỗi cho cùng một sản phẩm.
-2. **Định vị / nhập địa chỉ → xem khoảng cách tới cửa hàng** — GPS hoặc nhập tay địa chỉ.
-3. **Bán chạy theo khu vực (phường)** — gợi ý sản phẩm "hot" theo khu vực người dùng.
-4. **Hiển thị giá theo tiền tệ cửa hàng (₫ / $)** — đa tiền tệ.
-5. **Đặt hàng qua trợ lý ảo (mô phỏng)** — trợ lý tự động "đặt giúp" với các bước OTP/đăng nhập/CAPTCHA mô phỏng.
-6. **Lịch sử mua hàng & báo khi giảm giá** — lưu lịch sử + đăng ký nhận báo giảm giá (price alert).
-7. **Bản đồ cửa hàng + chỉ đường** — bản đồ tương tác, chỉ đường qua Google Maps.
-8. **Tìm địa chỉ (kể cả nước ngoài) → bản đồ hiển thị đúng vị trí đó.**
+### 3.1 Trụ cột A — Khám phá & so sánh giá
+- **[Hiện tại] So sánh giá nhiều nơi bán quanh bạn** — với mỗi sản phẩm, Affree gom toàn bộ nơi bán và hiển thị **khoảng giá (rẻ nhất → đắt nhất)**, số nơi bán, và đánh dấu **"Rẻ nhất"**.
+- **[Hiện tại] Tìm kiếm tức thì** — gõ là ra kết quả (dùng deferred value để không giật), kèm xếp hạng theo độ liên quan.
+- **[Hiện tại] Lọc 2 cấp** — theo **Tệp** (nhóm danh mục, ví dụ "Mẹ & bé", "Trang sức") và **Ngành hàng** (category).
+- **[Hiện tại] Bộ lọc nhanh** — **"Deal hời"** (chênh lệch giá lớn giữa các nơi bán), **"Giá hời"** (rẻ hơn trung bình nhóm), **"Bán chạy khu vực"**.
+- **[Hiện tại] Sản phẩm tương tự** trong màn chi tiết — gợi ý thay thế (cấu hình qua Sheet hoặc tự suy theo ngành hàng).
+- **[Hiện tại] Ô dịch vụ ("Dịch vụ quanh đây")** — các tile động cấu hình từ Sheet: ô lọc sản phẩm, link dịch vụ đối tác, hoặc "sắp ra mắt".
 
-### Tính năng bổ trợ (từ `app/page.tsx` và các component)
-- **Bộ lọc nhanh:** "Deal hời" (chênh giá lớn), "Giá hời" (rẻ hơn trung bình nhóm), "Bán chạy khu vực".
-- **Lọc 2 cấp:** theo **Tệp** (nhóm danh mục) và theo **Ngành hàng** (category).
-- **Ô dịch vụ ("Dịch vụ quanh đây"):** tile động cấu hình từ Sheet — có thể là ô lọc sản phẩm, link dịch vụ ngoài, hoặc "sắp ra mắt".
-- **Giỏ hàng đa cửa hàng:** thêm sản phẩm từ nhiều nguồn rồi đặt tất cả một lần (`CartModal`).
-- **Bộ chọn số lượng** (`QtyInput`), **thẻ sản phẩm** kèm tag gợi ý ("Deal -X%", "Giá hời", "Bán chạy").
-- **Sản phẩm tương tự** trong màn chi tiết — cấu hình qua Sheet hoặc tự suy theo ngành hàng.
-- **Đa ngôn ngữ VI/EN** tự chuyển theo quốc gia phát hiện từ địa chỉ.
+### 3.2 Trụ cột B — Vị trí, bản đồ & khoảng cách
+- **[Hiện tại] Định vị GPS hoặc nhập địa chỉ** — xác định nơi người dùng đang ở; lưu lại để lần sau không phải nhập lại.
+- **[Hiện tại] Khoảng cách tới từng cửa hàng** — mỗi nơi bán hiển thị "cách bạn ~X km".
+- **[Hiện tại] Bản đồ tương tác** (MapLibre) — marker theo màu chuỗi, badge "RẺ NHẤT", **vòng bán kính lọc**, popup giá + **chỉ đường** (Google Maps) + **"Vào mua"**, nút recenter.
+- **[Hiện tại] Tìm địa chỉ toàn cầu (kể cả nước ngoài)** — bản đồ hiển thị đúng vị trí ở bất kỳ quốc gia nào → nền tảng cho mở rộng US/Canada.
+
+### 3.3 Trụ cột C — Trí tuệ gợi ý & xếp hạng
+- **[Hiện tại] Xếp hạng "rẻ + gần + còn hàng"** — tổng hợp giá nhỏ nhất, khoảng cách và tồn kho để đẩy lựa chọn tốt lên đầu.
+- **[Hiện tại] "Bán chạy theo khu vực (phường)"** — gợi ý sản phẩm phổ biến theo khu vực người dùng (kết hợp lượt mua/lượt xem + yếu tố theo vùng).
+- **[Hiện tại] Tag gợi ý trên thẻ sản phẩm** — "Deal -X%", "Giá hời", "Bán chạy".
+- **[Hiện tại] Ưu tiên hiển thị theo chuỗi** — sắp nguồn bán theo hồ sơ ưu tiên (cũng là cơ chế thương mại — Phần 2).
+
+### 3.4 Trụ cột D — ⭐ Hệ thống đặt hàng bằng Agentic AI (tính năng nổi bật nhất)
+
+Đây là tính năng **khác biệt cốt lõi** của Affree và là động cơ doanh thu dài hạn.
+
+**Vấn đề:** mỗi nguồn bán có một quy trình đặt hàng riêng và rắc rối — đăng nhập, xác minh OTP, chọn siêu thị/khu vực giao, chọn khung giờ, giải CAPTCHA, nhập địa chỉ… Người mua thường bỏ cuộc giữa chừng. Với hàng quốc tế, rào cản còn lớn hơn (ngôn ngữ, tiền tệ, cổng thanh toán).
+
+**Giải pháp Affree:** một **AI tác tử (Agentic AI)** đại diện người mua **thực hiện trọn quy trình đặt hàng** — người dùng chỉ cần nói "mua giúp tôi", phần còn lại AI lo.
+
+**[Hiện tại] Đã có trong sản phẩm (bản mô phỏng):**
+- Component **`OrderAgentModal`** mô phỏng đầy đủ luồng đặt hàng tự động với cơ chế **pause/resume** (tạm dừng đúng chỗ cần con người, rồi chạy tiếp).
+- **`lib/orderConfig.ts`** mã hoá **quy trình thật của từng nguồn** thành cấu hình, nên AI biết mỗi nguồn cần bước gì:
+
+  | Nguồn | Cách xác thực | Cần thêm | Ghi chú |
+  |---|---|---|---|
+  | **Con Cưng** | Mua nhanh chỉ cần SĐT (guest) | — | Không cần đăng nhập |
+  | **Bách Hóa Xanh** | SĐT + OTP | Khung giờ giao | — |
+  | **Co.opmart** | SĐT + OTP | Chọn siêu thị + khung giờ | Freeship đơn ≥ 200.000đ trong 6km |
+  | **AEON** | Đăng nhập tài khoản (email) | Chọn cửa hàng + khung giờ + CAPTCHA | AEON eShop bắt buộc tài khoản |
+  | **Nguồn online khác** | Mặc định đăng nhập tài khoản | CAPTCHA | COD/Thẻ/Ví |
+
+- Các bước cần người dùng (nhập OTP, xác nhận đã đăng nhập, xác nhận đơn) sẽ **tạm dừng** chờ thao tác, rồi AI tiếp tục → trải nghiệm "AI làm hộ, người chỉ chốt".
+- Kết thúc sinh **mã đơn** và ghi vào lịch sử mua.
+
+**[Tầm nhìn] Hướng phát triển:**
+- Chuyển từ **mô phỏng** sang **thực thi thật** (tự động hoá trình duyệt / tích hợp API nguồn bán) để đặt hàng end-to-end.
+- **Mua từ nhiều nguồn cùng lúc**: một yêu cầu của người dùng có thể được AI tách thành nhiều đơn ở nhiều nguồn tối ưu (rẻ nhất cho từng món) và đặt song song.
+- **Đặt hàng xuyên biên giới**: AI xử lý khác biệt ngôn ngữ/tiền tệ/cổng thanh toán giữa VN ↔ US ↔ Canada thay cho người dùng.
+- **Mỗi đơn AI hoàn tất = một điểm doanh thu** (hoa hồng/phí dịch vụ — Tầng 3, Phần 2).
+
+### 3.5 Trụ cột E — Giỏ hàng đa nguồn & thao tác mua
+- **[Hiện tại] Giỏ hàng đa cửa hàng** (`CartModal`) — thêm sản phẩm từ **nhiều nguồn**, hệ thống **gộp theo cửa hàng**, mỗi cửa hàng áp đúng yêu cầu riêng (email/chọn siêu thị/khung giờ), rồi **đặt tất cả một lần**.
+- **[Hiện tại] Bộ chọn số lượng** (`QtyInput`) và nút thêm nhanh trên thẻ sản phẩm.
+- **[Hiện tại] Hồ sơ người mua tự điền** — tên/SĐT/địa chỉ lưu sẵn, không phải nhập lại mỗi lần.
+
+### 3.6 Trụ cột F — Đa quốc gia, đa tiền tệ, đa ngôn ngữ
+- **[Hiện tại] Đa tiền tệ** — giá hiển thị theo **tiền tệ của cửa hàng** (₫ cho VN, $ cho cửa hàng Mỹ); ưu tiên cột `currency` trong tab `stores`, fallback theo nguồn (`storeCurrency` trong `lib/stores.ts`).
+- **[Hiện tại] Đa ngôn ngữ VI/EN** — tự chuyển theo quốc gia phát hiện từ địa chỉ (`langForCountry`): VN → tiếng Việt, còn lại → tiếng Anh.
+- **[Hiện tại] Địa chỉ & bản đồ toàn cầu** — geocode + bản đồ chạy cho mọi quốc gia; ví dụ cửa hàng `astrabean` tại San Jose (USD).
+- **[Tầm nhìn]** — bổ sung thêm ngôn ngữ/tiền tệ, cổng thanh toán địa phương, và độ phủ cửa hàng tại Mỹ/Canada.
+
+### 3.7 Trụ cột G — Gắn kết & quay lại
+- **[Hiện tại] Lịch sử mua hàng** (`/history`) — danh sách đơn + tổng chi tiêu.
+- **[Hiện tại] Báo khi giảm giá** (price alert) — để lại SĐT/Zalo để nhận thông báo khi sản phẩm giảm; đồng thời là **kênh thu lead** cho nền tảng.
+- **[Hiện tại] Sản phẩm đã xem gần đây / lượt xem** — phục vụ gợi ý cá nhân hoá cục bộ.
 
 ---
 
 ## 4. Hành trình người dùng (User Journeys)
 
-### J1 — Tìm & so sánh giá rồi tới cửa hàng
-1. Người dùng mở app → cho phép định vị **hoặc** nhập địa chỉ (popover vị trí).
+Phần này mô tả các kịch bản sử dụng tiêu biểu. **J1–J4 là [Hiện tại]** (đã chạy trong v1.2). **J5–J6 là [Tầm nhìn]** — minh hoạ trải nghiệm mục tiêu khi agentic AI và cross-border được hoàn thiện.
+
+### J1 — Tìm & so sánh giá rồi tới cửa hàng *(persona: người nội trợ tại TP.HCM)*
+1. Mở app → cho phép định vị **hoặc** nhập địa chỉ (popover vị trí).
 2. Gõ tên sản phẩm vào ô tìm kiếm (hoặc bấm một Tệp/ngành hàng).
-3. Affree hiển thị danh sách sản phẩm, mỗi sản phẩm kèm khoảng giá (min–max), số nơi bán.
+3. Affree hiển thị danh sách sản phẩm, mỗi sản phẩm kèm **khoảng giá (min–max)** và số nơi bán.
 4. Bấm vào sản phẩm → màn chi tiết liệt kê **tất cả nơi bán**, sắp theo giá (mặc định) hoặc khoảng cách; gắn tag "Rẻ nhất".
-5. Mở **bản đồ** → thấy các cửa hàng, vòng bán kính, cửa hàng rẻ nhất; bấm **"Chỉ đường"** (Google Maps) hoặc **"Vào mua"**.
+5. Mở **bản đồ** → thấy các cửa hàng, vòng bán kính, cửa hàng rẻ nhất; bấm **"Chỉ đường"** (Google Maps) để ra cửa hàng mua trực tiếp.
 
-### J2 — Đặt hàng qua trợ lý ảo (mô phỏng)
-1. Tại một offer, người dùng bấm "Để trợ lý đặt giúp" → mở `OrderAgentModal`.
+### J2 — Để AI đặt hộ một sản phẩm *(persona: người bận rộn, ngại quy trình)*
+1. Tại một nơi bán, người dùng bấm **"Để trợ lý đặt giúp"** → mở `OrderAgentModal`.
 2. Điền họ tên, SĐT, địa chỉ (tự điền từ hồ sơ đã lưu), số lượng, khung giờ (tuỳ nguồn).
-3. Trợ lý chạy các **bước mô phỏng** theo cấu hình của từng nguồn (`lib/orderConfig.ts`): mở web → đăng nhập/OTP/CAPTCHA (nếu cần) → thêm vào giỏ → xác nhận → "gửi đơn".
-4. Các bước cần người dùng tương tác sẽ **tạm dừng** (nhập OTP mô phỏng, xác nhận đã đăng nhập…), sau đó tiếp tục.
-5. Kết thúc: hiển thị mã đơn mô phỏng; đơn được ghi vào lịch sử.
+3. **AI chạy quy trình theo đúng cấu hình của nguồn** (`lib/orderConfig.ts`): mở web → đăng nhập/OTP/CAPTCHA (nếu cần) → thêm vào giỏ → xác nhận → "gửi đơn".
+4. Ở các bước cần con người (nhập OTP, xác nhận đã đăng nhập, chốt đơn), AI **tạm dừng** chờ người dùng thao tác rồi **tự động chạy tiếp**.
+5. Kết thúc: hiển thị **mã đơn** và ghi vào lịch sử.
 
-> Ví dụ khác biệt giữa các nguồn (`lib/orderConfig.ts`): **Con Cưng** mua nhanh chỉ cần SĐT; **BHX/Co.opmart** cần OTP + khung giờ; **AEON** cần đăng nhập tài khoản (email) + CAPTCHA; Co.opmart freeship đơn ≥ 200.000đ trong bán kính 6km.
+> Khác biệt giữa các nguồn (xem bảng ở mục 3.4): Con Cưng chỉ cần SĐT; BHX/Co.opmart cần OTP + khung giờ; AEON cần đăng nhập email + CAPTCHA.
 
-### J3 — Đặt hàng qua giỏ hàng đa cửa hàng
-1. Người dùng thêm nhiều sản phẩm (từ nhiều cửa hàng) vào giỏ.
-2. Mở `CartModal` → các món **gộp theo cửa hàng**; mỗi cửa hàng có yêu cầu riêng (email, chọn siêu thị, khung giờ).
-3. Điền thông tin người nhận → "Đặt hàng tất cả" → mỗi nhóm cửa hàng tạo một đơn (`POST /api/purchases`).
+### J3 — Đặt hàng qua giỏ hàng đa nguồn *(persona: mua một lượt nhiều món)*
+1. Người dùng thêm nhiều sản phẩm (từ **nhiều cửa hàng**) vào giỏ.
+2. Mở `CartModal` → các món **gộp theo cửa hàng**; mỗi cửa hàng áp đúng yêu cầu riêng (email, chọn siêu thị, khung giờ).
+3. Điền thông tin người nhận → **"Đặt hàng tất cả"** → mỗi nhóm cửa hàng tạo một đơn (`POST /api/purchases`), kết quả từng cửa hàng hiển thị riêng.
 
-### J4 — Đăng ký báo giảm giá (thu lead)
+### J4 — Đăng ký báo giảm giá *(persona: chờ giá tốt — đồng thời là lead)*
 1. Ở màn chi tiết sản phẩm, người dùng để lại **SĐT/Zalo** để "báo khi giảm giá".
-2. Hệ thống lưu `PriceAlert` (kèm giá rẻ nhất tại thời điểm đăng ký) → ghi vào Sheet (tab `alerts`) làm **lead**.
+2. Hệ thống lưu `PriceAlert` (kèm **giá rẻ nhất tại thời điểm đăng ký** để sau này so sánh) → ghi vào Sheet (tab `alerts`) làm **lead** cho nền tảng.
+
+### J5 — [Tầm nhìn] AI mua hộ từ nhiều nguồn trong một yêu cầu *(persona: "đi chợ" cả tuần)*
+1. Người dùng bỏ vào giỏ một danh sách dài (sữa, dầu ăn, tã, gạo…).
+2. AI **tự chia đơn theo nguồn tối ưu**: món A rẻ nhất ở Co.opmart, món B ở BHX, món C ở Con Cưng…
+3. AI **đặt song song** ở các nguồn, tự vượt OTP/đăng nhập/khung giờ cho từng nơi, gom kết quả về một màn duy nhất.
+4. Người dùng chỉ **chốt một lần**; nhận nhiều đơn từ nhiều nguồn. Mỗi đơn hoàn tất phát sinh **hoa hồng/phí dịch vụ** cho Affree.
+
+### J6 — [Tầm nhìn] Mua bán xuyên biên giới *(persona: người Việt ở Mỹ/Canada mua hộ về nhà)*
+1. Người dùng ở San Jose mở Affree → giao diện tự sang **tiếng Anh**, giá theo **USD**.
+2. Tìm sản phẩm; có thể chọn **giao tại địa chỉ ở Việt Nam** (mua hộ/gửi về cho gia đình) hoặc mua quanh chỗ ở tại Mỹ.
+3. AI xử lý khác biệt **ngôn ngữ/tiền tệ/cổng thanh toán** giữa hai thị trường thay cho người dùng và đặt đơn.
+4. Người mua theo dõi đơn trong lịch sử; người nhận ở VN nhận hàng. → Affree trở thành **cầu nối thương mại không biên giới** cho cộng đồng người Việt toàn cầu.
 
 ---
 
