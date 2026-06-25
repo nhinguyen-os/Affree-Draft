@@ -68,6 +68,91 @@ body {
   .animate-cart-bump, .animate-cart-ring, .animate-cart-plus-one { animation: none !important; }
 }
 
+/* Lửa nhấp nháy cho icon 🔥 trong "Giá hời quanh đây" */
+@keyframes fire-flicker {
+  0%   { transform: scale(1)    rotate(-3deg); filter: brightness(1); }
+  20%  { transform: scale(1.18) rotate(2deg);  filter: brightness(1.15); }
+  40%  { transform: scale(1.08) rotate(-4deg); filter: brightness(1.05); }
+  60%  { transform: scale(1.2)  rotate(3deg);  filter: brightness(1.2); }
+  80%  { transform: scale(1.1)  rotate(-2deg); filter: brightness(1.08); }
+  100% { transform: scale(1)    rotate(-3deg); filter: brightness(1); }
+}
+.animate-fire {
+  display: inline-block;
+  animation: fire-flicker 1.6s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fire { animation: none !important; }
+}
+
+/**
+ * Liquid Glass material — tham khảo iOS 26 / macOS 27 (Apple WWDC25):
+ * - backdrop saturate cao để bắt sắc nền (chứ không "đục như sương" như iOS cũ)
+ * - top/bottom inner highlight tạo cảm giác có cạnh kính bắt sáng (rim light)
+ * - outer shadow nhiều lớp cho cảm giác lơ lửng
+ * - top→bottom gradient bg để chiều cao có chiều sâu (chứ không phẳng 1 màu)
+ */
+.liquid-glass {
+  position: relative;
+  /* Tăng opacity (92%→85%) để text dài đọc rõ trên bất kỳ nền phía sau —
+   * vẫn giữ cảm giác kính (saturate/brightness/highlight) nhưng không "đoán nội dung". */
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.92) 0%,
+      rgba(255, 255, 255, 0.85) 100%);
+  backdrop-filter: blur(48px) saturate(180%) brightness(106%);
+  -webkit-backdrop-filter: blur(48px) saturate(180%) brightness(106%);
+  border: 0.5px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    /* outer cast — depth */
+    0 24px 60px -12px rgba(15, 23, 42, 0.22),
+    0 8px 18px -4px rgba(15, 23, 42, 0.14),
+    /* top inner highlight — light reflecting off the rim */
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.95),
+    /* side rim glow */
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.5),
+    /* bottom soft shadow — depth inside */
+    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.04);
+}
+/* Pseudo border gradient bắt sáng chéo — mimic refraction/reflection trên kính */
+.liquid-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(255, 255, 255, 0.25) 28%,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.25) 72%,
+    rgba(255, 255, 255, 0.7) 100%);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  z-index: 1;
+}
+/* Dark scheme — kính tối hơn nhưng vẫn highlight cạnh sáng */
+@media (prefers-color-scheme: dark) {
+  .liquid-glass {
+    background:
+      linear-gradient(180deg,
+        rgba(30, 41, 59, 0.72) 0%,
+        rgba(15, 23, 42, 0.55) 100%);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 24px 60px -12px rgba(0, 0, 0, 0.55),
+      0 8px 18px -4px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.08),
+      inset 0 -1px 1px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
 /* Style cho MapLibre popups (bản đồ) — nền trắng đục hoàn toàn để che map layer phía sau. */
 .maplibregl-popup-content {
   background: #ffffff !important;

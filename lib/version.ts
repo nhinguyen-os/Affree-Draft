@@ -2,25 +2,36 @@
  * Phiên bản app + lịch sử + lộ trình.
  *
  * NGUYÊN TẮC GHI:
- *  - LƯU VERSION THEO NGÀY: mỗi NGÀY phát hành = 1 mục riêng trong VERSION_HISTORY.
- *    `date` luôn ở dạng "DD.MM.YYYY". Không gộp nhiều ngày vào 1 mục.
- *    `version` đi cùng ngày — quy ước MAJOR.MINOR (vd 1.3 = ngày 24.06.2026).
- *    Cùng ngày có thêm sửa nhỏ → bump PATCH (1.3.1), giữ nguyên `date`.
- *    Sang ngày mới → bump MINOR (1.4) và đặt `date` mới.
+ *  - HAI CẤP: phiên bản CHA = MAJOR.MINOR (vd 1.3); phiên bản CON = PATCH bên trong cha (vd 1.3.1).
+ *    Mỗi `VersionEntry` là 1 bản CHA chứa nhiều `children` (sub-version).
+ *    `date` mỗi sub-version ở dạng "DD.MM.YYYY". Mỗi NGÀY phát hành = 1 sub-version.
+ *    Sang ngày mới CÙNG MAJOR.MINOR → thêm sub-version 1.3.2, 1.3.3, …
+ *    Đổi cấp lớn (đợt nâng cấp lớn) → tạo CHA mới 1.4 với sub-version 1.4.1.
  *  - Chỉ viết những gì NGƯỜI DÙNG CUỐI nhìn thấy/cảm nhận được.
  *  - Không lộ thông tin nội bộ (tên nhân sự, tên sheet/kho dữ liệu, tên đối tác,
  *    công thức tính, quy tắc xếp hạng, mã nguồn/khoá cấu hình, kế hoạch kỹ thuật…).
  *  - Diễn đạt mọi nội dung sao cho người ngoài đọc cũng hiểu (không "biệt ngữ").
- *  - Mỗi lần phát hành: thêm mục mới lên ĐẦU mảng VERSION_HISTORY và bump APP_VERSION.
- *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang VERSION_HISTORY bản tương ứng,
+ *  - Mỗi lần phát hành: thêm sub-version mới lên ĐẦU `children` của bản cha tương ứng;
+ *    bump APP_VERSION sang sub-version mới nhất.
+ *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3";
+export const APP_VERSION = "1.3.1";
 
-export interface VersionEntry {
-  version: string;
+export interface SubReleaseEntry {
+  /** Sub-version (PATCH), vd "1.3.1". */
+  subVersion: string;
   date?: string;
   highlights: string[];
+}
+
+export interface VersionEntry {
+  /** Bản CHA (MAJOR.MINOR), vd "1.3". */
+  version: string;
+  /** Ngày bản cha bắt đầu (ngày của sub-version đầu tiên). */
+  date?: string;
+  /** Sub-version, MỚI NHẤT ở đầu mảng. */
+  children: SubReleaseEntry[];
 }
 
 /** Lịch sử các bản, MỚI NHẤT ở đầu mảng. */
@@ -28,7 +39,10 @@ export const VERSION_HISTORY: VersionEntry[] = [
   {
     version: "1.3",
     date: "24.06.2026",
-    highlights: [
+    children: [{
+      subVersion: "1.3.1",
+      date: "24.06.2026",
+      highlights: [
       // Bản đồ & vị trí
       "Bản đồ: chú thích hiện loại cửa hàng kèm số lượng quanh bạn",
       "Bản đồ: chạm vào pin cửa hàng → mở nhanh trang sản phẩm của cửa hàng đó",
@@ -76,30 +90,39 @@ export const VERSION_HISTORY: VersionEntry[] = [
       "Có form 'Liên hệ dịch vụ', kèm đường dẫn sang dịch vụ làm hồ sơ hộ",
       "Cảm giác 'kính mờ' (liquid glass) đồng bộ trên popup và nền, mọi thiết bị",
       "Có thể chọn bán kính cho mục 'Giá hời quanh đây' (500m / 1km / 2km / 3km / 5km)",
-    ],
+      ],
+    }],
   },
   {
     version: "1.2",
     date: "06.2026",
-    highlights: [
-      "Bản đồ mới (vector tile, OpenStreetMap), mượt hơn và xoay/zoom tốt hơn",
-      "Tìm địa chỉ kể cả ngoài Việt Nam → bản đồ tự bay tới đúng vị trí",
-      "Lọc cửa hàng theo bán kính (50m – 1km) quanh bạn",
-      "Tìm kiếm sản phẩm nhanh và gợi ý tốt hơn",
-      "Giỏ hàng & lịch sử mua, báo khi sản phẩm bạn quan tâm giảm giá",
-      "Đặt hàng nhanh qua trợ lý ảo (mô phỏng)",
-    ],
+    children: [{
+      subVersion: "1.2.1",
+      date: "06.2026",
+      highlights: [
+        "Bản đồ mới (vector tile, OpenStreetMap), mượt hơn và xoay/zoom tốt hơn",
+        "Tìm địa chỉ kể cả ngoài Việt Nam → bản đồ tự bay tới đúng vị trí",
+        "Lọc cửa hàng theo bán kính (50m – 1km) quanh bạn",
+        "Tìm kiếm sản phẩm nhanh và gợi ý tốt hơn",
+        "Giỏ hàng & lịch sử mua, báo khi sản phẩm bạn quan tâm giảm giá",
+        "Đặt hàng nhanh qua trợ lý ảo (mô phỏng)",
+      ],
+    }],
   },
   {
     version: "1.0",
     date: "05.2026",
-    highlights: [
-      "So sánh giá nhiều nơi bán quanh bạn",
-      "Định vị / nhập địa chỉ → xem khoảng cách tới cửa hàng",
-      "Hiển thị giá theo tiền tệ cửa hàng (₫ / $)",
-      "Gợi ý sản phẩm bán chạy quanh bạn",
-      "Bản đồ cửa hàng + chỉ đường",
-    ],
+    children: [{
+      subVersion: "1.0.1",
+      date: "05.2026",
+      highlights: [
+        "So sánh giá nhiều nơi bán quanh bạn",
+        "Định vị / nhập địa chỉ → xem khoảng cách tới cửa hàng",
+        "Hiển thị giá theo tiền tệ cửa hàng (₫ / $)",
+        "Gợi ý sản phẩm bán chạy quanh bạn",
+        "Bản đồ cửa hàng + chỉ đường",
+      ],
+    }],
   },
 ];
 

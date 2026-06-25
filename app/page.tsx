@@ -4,8 +4,9 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store } from "@/lib/types";
+import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
 import { chainColor, chainLabel, findChainBySlug, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
+import { TrimmedLogo } from "@/components/TrimmedLogo";
 import {
   cheapestInStock,
   directionsUrl,
@@ -15,6 +16,7 @@ import {
   searchProductsRanked,
 } from "@/lib/util";
 import { addPurchase, getPurchases } from "@/lib/purchases";
+import { getProfile, saveProfile } from "@/lib/profile";
 import { addAlert, getAlertForProduct, removeAlert } from "@/lib/alerts";
 import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
@@ -29,6 +31,7 @@ import type { MapMarker } from "@/components/MapView";
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
 const CartModal = dynamic(() => import("@/components/CartModal"), { ssr: false });
+const StoreProductsPage = dynamic(() => import("@/components/StoreProductsPage"), { ssr: false });
 
 const HCM_CENTER: [number, number] = [10.7769, 106.7009];
 
@@ -128,12 +131,25 @@ async function nominatimSearch(q: string, bounded: boolean): Promise<GeoResult[]
 /**
  * Tìm địa chỉ → toạ độ (forward geocode) qua Nominatim/OSM.
  * Ưu tiên (bounded) trong vùng TP.HCM để không chọn nhầm đường trùng tên ở tỉnh khác;
- * nếu trong vùng không có kết quả nào thì mới nới ra toàn cầu (gồm địa chỉ Mỹ).
+ * nếu trong vùng không có kết quả NÀO KHỚP QUERY thì mới nới ra toàn cầu.
+ * (Quirk Nominatim: bounded=1 vẫn trả "popular places" trong viewbox khi query
+ * không match gì → user gõ "california" lại thấy SC Vivo City. Fix: filter kết
+ * quả bounded theo query string đã chuẩn hoá dấu; rỗng → fallback global.)
  */
+function normalizeForMatch(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[đ]/g, "d");
+}
+
 async function forwardGeocode(q: string): Promise<GeoResult[]> {
   try {
+    const qNorm = normalizeForMatch(q.trim());
     const inHcm = await nominatimSearch(q, true);
-    if (inHcm.length) return inHcm;
+    const matched = inHcm.filter((r) => normalizeForMatch(r.label).includes(qNorm));
+    if (matched.length) return matched;
     return await nominatimSearch(q, false);
   } catch {
     return [];
@@ -155,60 +171,9 @@ const CAT_EMOJI: Record<string, string> = {
 };
 
 const PAGE_SIZE = 50;
+import { CATEGORY_GROUPS, GROUP_TILE, DEFAULT_TILE_EMOJIS, DEFAULT_TILE_TINTS, categoryGroup, buildCategoryTiles, type ServiceTile } from "@/lib/categories";
 
-// Dữ liệu nguồn có ~170 danh mục lộn xộn (trùng hoa/thường, lẫn cả điện tử/thời trang).
-// Gom về vài nhóm grocery + "Khác" để chip danh mục gọn, dễ nhìn. Thứ tự test = ưu tiên.
-const CATEGORY_GROUPS: { label: string; test: RegExp }[] = [
-  { label: "Mẹ & bé", test: /\bbé\b|\bmẹ\b|bỉm|bĩm|\btã\b|dinh dưỡng cho mẹ/ },
-  {
-    label: "Trang sức",
-    test: /trang sức|bông tai|hoa tai|dây chuyền|mặt dây|\bnhẫn\b|lắc tay|vòng tay|vòng cổ|kim cương|ngọc trai|\bcharm\b|\bpnj\b|đồng vàng|vàng trắng|vàng 75|vàng 58|nữ trang/,
-  },
-  {
-    label: "Nhà cửa & vệ sinh",
-    test: /nhà cửa|nhà bếp|giặt|hóa phẩm|đồ dùng gia đình|giấy vệ sinh|khăn giấy|chăm sóc gia đình|chăm sóc nhà|đời sống|lau sàn|lau nhà|rửa chén|rửa bát|nước rửa|nước tẩy|tẩy rửa|lau kính|xịt phòng/,
-  },
-  {
-    label: "Chăm sóc cá nhân",
-    test: /chăm sóc (da|tóc|cơ thể|cá nhân|sức khỏe|bé)|tắm gội|gel gội|gel tắm|gội đầu|dầu gội|dưỡng tóc|sữa tắm|sữa rửa mặt|sắc đẹp|sức khỏe|trang điểm|mỹ phẩm|nước hoa|vitamin|vatamin|răng miệng|kem đánh răng|dầu xả|làm đẹp|son môi|kem dưỡng|kem chống nắng|toner|serum|tẩy trang|xà bông|xà phòng/,
-  },
-  { label: "Đồ uống", test: /bia|rượu|nước giải khát|nước uống|đồ uống|thức uống|\btrà\b|trà xanh|cà phê|nước ngọt|coca|pepsi|7 ?up|nước suối|nước chanh|nước ép|nước dừa|soda|sinh tố|trà sữa|nước cam/ },
-  { label: "Sữa", test: /\bsữa\b|sữa tươi|sữa đặc|sữa chua/ },
-  {
-    label: "Thực phẩm",
-    test: /thịt|cá|trứng|hải sản|rau|củ|quả|nấm|trái cây|gạo|bột|đồ khô|mì|miến|cháo|phở|nui|bún|dầu ăn|nước chấm|nuoc cham|gia vị|gia vi|mắm|tương|sốt|đồ hộp|đóng hộp|thực phẩm|bánh|kẹo|snack|kem|ngũ cốc|lạp xưởng|xúc xích|hạt|sấy|mứt|thạch|rong biển|thức ăn|đồ ăn|nếp|đậu|bách hóa|cơm|teppan|hầm|nướng|chiên|đường|hạt nêm|bột ngọt|hủ tiếu|hủ tíu|xào|lẩu|canh|súp|gỏi|chè|bò|gà|heo|tôm|mực|salad|pizza|burger|sandwich|nem|chả|giò/,
-  },
-];
 
-/**
- * Gom sản phẩm về 1 nhóm danh mục. Dữ liệu nhiều khi để TRỐNG cột category, nên
- * suy luận thêm từ TÊN + THƯƠNG HIỆU (vd "Gel gội"→Chăm sóc, "Bông tai PNJ"→Trang sức).
- * Vẫn nhận chuỗi category thuần để tương thích chỗ gọi cũ.
- */
-function categoryGroup(
-  input: { name?: string; brand?: string; category?: string; group?: string } | string
-): string {
-  // 1) Ưu tiên cột "tệp" (danh_muc) nhập sẵn trong sheet — đây là NGUỒN CHÍNH.
-  //    Trùng nhóm chuẩn → chuẩn hoá về nhãn chuẩn; còn lại → dùng NGUYÊN tên user đặt
-  //    (cho phép tự thêm tệp mới ngay trên Google Sheet mà không cần sửa code).
-  if (typeof input !== "string" && input.group && input.group.trim()) {
-    const raw = input.group.normalize("NFC").trim();
-    const g = raw.toLowerCase();
-    const exact = CATEGORY_GROUPS.find((x) => x.label.normalize("NFC").toLowerCase() === g);
-    if (exact) return exact.label;
-    if (g === "khác" || g === "khac") return "Khác";
-    return raw;
-  }
-  // 2) Không có cột tệp → suy luận từ category + tên + thương hiệu.
-  const c =
-    typeof input === "string"
-      ? input
-      : `${input.category || ""} ${input.name || ""} ${input.brand || ""}`;
-  // Chuẩn hoá NFC: dữ liệu có chỗ dùng dấu tách rời (NFD) sẽ không khớp regex viết NFC.
-  const s = c.normalize("NFC").toLowerCase();
-  for (const g of CATEGORY_GROUPS) if (g.test.test(s)) return g.label;
-  return "Khác";
-}
 
 // Chuẩn hoá nhãn ngành hàng: ô VIẾT HOA TOÀN BỘ (vd "NƯỚC LAU SÀN", "GEL GỘI") → dạng câu
 // ("Nước lau sàn", "Gel gội") cho đồng đều; nhãn đã viết thường/hỗn hợp giữ nguyên.
@@ -222,20 +187,6 @@ function prettyCat(raw: string): string {
   return t;
 }
 
-// Lưới dịch vụ kiểu "siêu ứng dụng" (như Grab) ở màn chính.
-//  - filter: lọc danh mục sản phẩm ngay trong Affree
-//  - all   : xem toàn bộ sản phẩm (bỏ lọc)
-//  - link  : mở trang dịch vụ bên ngoài (định giá / xây dựng / BĐS)
-//  - soon  : tệp dự kiến, chưa mở
-type ServiceTile = {
-  key: string;
-  label: string;
-  emoji: string;
-  tint: string;
-  kind: "filter" | "all" | "link" | "soon";
-  cat?: string;
-  url?: string;
-};
 
 // Bộ lọc nhanh ở màn chính — đề xuất "deal hời / giá hời / bán chạy" từ dữ liệu thật.
 type QuickFilter = "deal" | "cheap" | "hot";
@@ -261,58 +212,6 @@ const SERVICE_TAIL: ServiceTile[] = [
 // Số sản phẩm chuỗi THXL tối đa được ghim lên đầu danh sách (~2 hàng × lưới 4 cột).
 const PIN_THXL_TOP = 8;
 
-// Hình thức hiển thị (emoji + màu + tên ngắn) cho từng nhóm danh mục. Nhóm nào không
-// có ở đây vẫn hiện được bằng emoji mặc định 🛒 và lấy luôn tên nhóm làm nhãn.
-const GROUP_TILE: Record<string, { emoji: string; tint: string; label?: string }> = {
-  "Thực phẩm": { emoji: "🍜", tint: "bg-amber-100 text-amber-700", label: "Đồ ăn" },
-  "Sữa": { emoji: "🥛", tint: "bg-sky-100 text-sky-700" },
-  "Đồ uống": { emoji: "🥤", tint: "bg-cyan-100 text-cyan-700" },
-  "Chăm sóc cá nhân": { emoji: "💄", tint: "bg-pink-100 text-pink-600", label: "Mỹ phẩm" },
-  "Nhà cửa & vệ sinh": { emoji: "🧴", tint: "bg-lime-100 text-lime-700", label: "Nhà cửa" },
-  "Trang sức": { emoji: "💍", tint: "bg-violet-100 text-violet-700" },
-  "Mẹ & bé": { emoji: "🍼", tint: "bg-rose-100 text-rose-600" },
-  "Khác": { emoji: "🛒", tint: "bg-slate-100 text-slate-600" },
-};
-
-// Emoji + màu mặc định cho TỆP TỰ ĐẶT trong sheet (chưa khai báo trong GROUP_TILE).
-const DEFAULT_TILE_EMOJIS = ["🛍️", "🏷️", "📦", "🧺", "🛒", "✨", "🎁", "🔖"];
-const DEFAULT_TILE_TINTS = [
-  "bg-indigo-100 text-indigo-700",
-  "bg-teal-100 text-teal-700",
-  "bg-orange-100 text-orange-700",
-  "bg-fuchsia-100 text-fuchsia-700",
-  "bg-emerald-100 text-emerald-700",
-  "bg-blue-100 text-blue-700",
-];
-
-/**
- * Tạo ô TỆP ĐỘNG từ dữ liệu Google Sheet (cột danh_muc, hoặc suy luận nếu để trống).
- * - Tệp chuẩn (GROUP_TILE) hiện trước, theo thứ tự CATEGORY_GROUPS.
- * - Tệp TỰ ĐẶT trong sheet hiện tiếp (xếp theo bảng chữ cái), tự gán emoji/màu mặc định.
- * - "Khác" luôn ở cuối. Thêm tệp mới trong sheet là TỰ MỌC ô, không cần sửa code.
- */
-function buildCategoryTiles(products: { name?: string; brand?: string; category?: string; group?: string }[]): ServiceTile[] {
-  const present = new Set(products.map((p) => categoryGroup(p)));
-  const canonical = CATEGORY_GROUPS.map((g) => g.label);
-  const ordered = canonical.filter((label) => present.has(label));
-  const custom = [...present]
-    .filter((label) => !canonical.includes(label) && label !== "Khác")
-    .sort((a, b) => a.localeCompare(b, "vi"));
-  ordered.push(...custom);
-  if (present.has("Khác")) ordered.push("Khác");
-
-  return ordered.map((label, i) => {
-    const t = GROUP_TILE[label];
-    return {
-      key: `cat-${label}`,
-      label: t?.label ?? label,
-      emoji: t?.emoji ?? DEFAULT_TILE_EMOJIS[i % DEFAULT_TILE_EMOJIS.length],
-      tint: t?.tint ?? DEFAULT_TILE_TINTS[i % DEFAULT_TILE_TINTS.length],
-      kind: "filter" as const,
-      cat: label,
-    };
-  });
-}
 
 /**
  * Dựng ô dịch vụ TỪ TAB "tệp" của Google Sheet (catalog.groups). Thứ tự = thứ tự dòng.
@@ -337,7 +236,12 @@ function buildTilesFromGroups(
     const tint = known?.tint ?? DEFAULT_TILE_TINTS[i % DEFAULT_TILE_TINTS.length];
     // Hiển thị ĐÚNG tên người dùng gõ trong tab "tệp" (không ép theo nhãn nội bộ GROUP_TILE).
     const display = label;
-    if (isUrl) {
+    // Tile "Liên hệ dịch vụ - Affree" — bất kể link trong sheet, luôn coi là "link" để
+    // openService nhận diện và mở popup form liên hệ trong app (không mở URL ngoài).
+    const isContactAffree = /liên hệ.*affree/i.test(label);
+    if (isContactAffree) {
+      tiles.push({ key: `contact-${label}`, label: display, emoji, tint, kind: "link", url: link || "#contact" });
+    } else if (isUrl) {
       tiles.push({ key: `lnk-${label}`, label: display, emoji, tint, kind: "link", url: link });
     } else if (isSoon) {
       tiles.push({ key: `soon-${label}`, label: display, emoji, tint, kind: "soon" });
@@ -687,6 +591,17 @@ export default function Home() {
   const [toast, setToast] = useState<string>("");
   const [alertOpen, setAlertOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+  // Form "Liên hệ dịch vụ - Affree": có 4 loại nhu cầu để route đúng team.
+  type ContactKind = "tu-van" | "hop-tac" | "b2b" | "khac";
+  const [contactKind, setContactKind] = useState<ContactKind>("tu-van");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactArea, setContactArea] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactMsg, setContactMsg] = useState("");
+  const [contactConsent, setContactConsent] = useState(true);
+  const [contactSubmitting, setContactSubmitting] = useState(false);
+  const [contactError, setContactError] = useState("");
   const [alertPhone, setAlertPhone] = useState("");
   const [myAlert, setMyAlert] = useState<PriceAlert | null>(null);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
@@ -712,6 +627,19 @@ export default function Home() {
   // Increment mỗi khi addToCart → re-key icon/badge để restart animation.
   const [cartBumpKey, setCartBumpKey] = useState(0);
   const [infoProduct, setInfoProduct] = useState<Product | null>(null);
+  // Túi đang xem chi tiết — mở qua nút ⓘ trên thẻ túi để xem danh sách SP bên trong.
+  const [tuiInfo, setTuiInfo] = useState<Tui | null>(null);
+  // Map tên nhãn → màu nền chủ đạo (tự detect từ logo qua TrimmedLogo). Logo có nền màu
+  // đặc (vd Mencode vàng, Vinamilk xanh) sẽ paint card cùng màu → fill 100% khung.
+  const [sponsorFill, setSponsorFill] = useState<Record<string, string>>({});
+  // Override màu nền cho logo nền trắng/đa-màu mà TrimmedLogo không bắt đúng:
+  // sample dominant non-white pixel trong source và hardcode theo brand identity.
+  // Beauty Republic: gold tones (#B78932); Alo Clean: tan (#DAB787).
+  const SPONSOR_FILL_OVERRIDES: Record<string, string> = {
+    "Beauty Republic": "#B78932",
+  };
+  // Aspect ratio (w/h) sau trim — card width co theo để logo fill 100% chiều cao + ngang.
+  const [sponsorAspect, setSponsorAspect] = useState<Record<string, number>>({});
 
   function addToCart(p: Product, offer?: RankedOffer) {
     let ranked = offer ?? (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])?.[0];
@@ -982,6 +910,21 @@ export default function Home() {
     setUrlSynced(true);
   }, [catalog, pathname, urlSynced]);
 
+  // state → document.title. Khi user mở trang chuỗi / nhãn / danh mục / sản phẩm,
+  // tab trình duyệt hiển thị TÊN tương ứng (vd "Astrabean · Affree") thay vì title chung.
+  useEffect(() => {
+    const BASE = "Affree — Kết nối mua bán, không thu phí · Tìm gì cũng có, giá hời quanh đây";
+    let name = "";
+    if (selected) name = selected.name;
+    else if (activeChain) name = `${chainLabel(activeChain)} · Cửa hàng`;
+    else if (activeBrand && activeCat) name = `${activeBrand} · ${prettyCat(activeCat)}`;
+    else if (activeBrand) name = `${activeBrand} · Nhãn hàng`;
+    else if (activeCat) name = prettyCat(activeCat);
+    else if (activeTep) name = prettyCat(activeTep);
+    else if (query.trim()) name = `${t("Tìm kiếm")}: ${query.trim()}`;
+    document.title = name ? `${name} · Affree` : BASE;
+  }, [selected, activeChain, activeBrand, activeCat, activeTep, query, t]);
+
   // state → URL. Sau khi đã sync ban đầu, mỗi khi selected/activeTep/activeBrand/activeCat đổi → URL mới.
   // Hỗ trợ cả URL ngắn `/<slug>`: nếu pathname hiện tại đã là dạng ngắn HOẶC canonical
   // tương ứng với state, KHÔNG rewrite — giữ nguyên cho user copy URL ngắn đẹp.
@@ -1041,13 +984,13 @@ export default function Home() {
       setAddrSearching(false);
       return;
     }
-    setAddrSearching(true);
     const t = setTimeout(async () => {
+      setAddrSearching(true);
       const results = await forwardGeocode(q);
       setAddrResults(results);
       setAddrSearching(false);
       setAddrSearched(true);
-    }, 400);
+    }, 500);
     return () => clearTimeout(t);
   }, [addrQuery]);
 
@@ -1493,6 +1436,27 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matches, deferredQuery, activeTep, activeCat, quickFilter, viewCounts, purchaseCounts, priceStats, groupAvgMin, productChains, priorityByGroup, areaHot]);
 
+  // Chuỗi cửa hàng "đang chiếm sóng" trong list đang xem: đếm sp theo chain (qua offer →
+  // store → chain), trả về chain nào có ≥60% sp. Dùng để hiển thị "Bán tại: X" dưới tiêu đề
+  // (vd vào "Đồ uống" mà toàn sp từ Circle K → ghi rõ Circle K). Trả null khi đa chuỗi/ít sp.
+  const dominantChain = useMemo<string | null>(() => {
+    if (!catalog || orderedMatches.length < 2 || activeChain) return null;
+    const count: Record<string, number> = {};
+    for (const p of orderedMatches) {
+      const chainsForP = new Set<string>();
+      for (const o of catalog.offers) {
+        if (o.productId !== p.id) continue;
+        const st = getStore(o.storeId);
+        if (st?.chain) chainsForP.add(st.chain);
+      }
+      chainsForP.forEach((c) => { count[c] = (count[c] ?? 0) + 1; });
+    }
+    let best: string | null = null;
+    let bestN = 0;
+    for (const [c, n] of Object.entries(count)) if (n > bestN) { best = c; bestN = n; }
+    return best && bestN / orderedMatches.length >= 0.6 ? best : null;
+  }, [catalog, orderedMatches, activeChain]);
+
   // Hash chuỗi → [0,1): tạo "mức bán chạy" giả định ổn định theo (khu vực + sản phẩm).
   function seedRand(str: string): number {
     let h = 2166136261;
@@ -1593,14 +1557,41 @@ export default function Home() {
         byGroup.get(g)!.push(p);
       }
     }
-    // Bottom sections lấy tệp từ tab DanhMuc (1sZTv) — KHÔNG dùng `catalog.groups`
-    // (vốn là cấu hình top tiles từ sheet 1AJ2). Tách 2 nguồn cho 2 mục đích riêng.
-    const productGroups = (catalog.danhMucGroups ?? catalog.groups ?? []).filter((g) => !g.link);
+    // Bottom sections lấy tệp từ tab DanhMuc — KHÔNG dùng `catalog.groups`
+    // (vốn là cấu hình top tiles, sheet khác). Tách 2 nguồn cho 2 mục đích riêng.
+    //
+    // CẤU HÌNH HIỂN THỊ TỪ SHEET DanhMuc:
+    //  - Cột "Thứ tự ưu tiên" (C): số NHỎ hiện TRƯỚC; trống/0/NaN → đứng cuối,
+    //    giữ thứ tự nhập trong sheet.
+    //  - Cột "Hiện" (D): ô là "Ẩn" → KHÔNG render trên homepage (sản phẩm vẫn tìm
+    //    được qua search, chỉ ẩn khỏi danh sách tệp).
+    //  - Sự kiện (vd World Cup) đặt số 1 ở cột C để nhảy lên đầu.
+    const allGroups = (catalog.danhMucGroups ?? catalog.groups ?? []).filter((g) => !g.link);
+    const visibleGroups = allGroups.filter((g) => !g.hidden);
+    const sortedGroups = visibleGroups
+      .map((g, i) => ({ g, i }))
+      .sort((a, b) => {
+        // order undefined → đẩy về cuối; trong cùng nhóm có/không order, giữ thứ tự gốc.
+        const ao = a.g.order;
+        const bo = b.g.order;
+        if (ao != null && bo != null) return ao - bo;
+        if (ao != null) return -1;
+        if (bo != null) return 1;
+        return a.i - b.i;
+      })
+      .map((x) => x.g);
+    // So khớp CASE-INSENSITIVE giữa label sheet và bucket sản phẩm: sheet ghi "khác"
+    // (k thường), bucket nội bộ rơi vào "Khác" (K hoa) do fallback. Nếu strict-match,
+    // tệp sheet sẽ không render dù có sản phẩm. Build map lower-case 1 lần để lookup nhanh.
+    const byGroupCI = new Map<string, Product[]>();
+    byGroup.forEach((v, k) => byGroupCI.set(k.toLowerCase(), v));
+    // User mong đợi: thêm dòng mới vào sheet → thấy NGAY trên web kể cả chưa có sản phẩm.
+    // Vì vậy KHÔNG lọc bỏ tệp rỗng; thay vào đó trả về `products: []` để layer render
+    // hiển thị placeholder "Chưa có sản phẩm" thay vì ẩn section.
     const ordered: { name: string; emoji?: string; products: Product[] }[] = [];
-    for (const g of productGroups) {
-      if (byGroup.has(g.label)) {
-        ordered.push({ name: g.label, emoji: g.emoji, products: byGroup.get(g.label)! });
-      }
+    for (const g of sortedGroups) {
+      const products = byGroupCI.get(g.label.toLowerCase()) ?? [];
+      ordered.push({ name: g.label, emoji: g.emoji, products });
     }
     return ordered;
   }, [catalog, orderedMatches]);
@@ -1946,6 +1937,15 @@ export default function Home() {
       setTimeout(() => setToast(""), 2500);
     } else if (s.kind === "link" && /liên hệ.*affree/i.test(s.label)) {
       // Tile "Liên hệ dịch vụ - Affree" → mở popup form liên hệ trong app, không mở link ngoài.
+      // Prefill từ profile đã lưu (tên/SĐT) + userAddr (khu vực) để khách đỡ phải gõ lại.
+      const saved = getProfile();
+      setContactName(saved.name);
+      setContactPhone(saved.phone);
+      setContactArea(userAddr || saved.address || "");
+      setContactKind("tu-van");
+      setContactEmail("");
+      setContactMsg("");
+      setContactError("");
       setContactOpen(true);
     } else if (s.kind === "link" && s.url) {
       window.open(s.url, "_blank", "noopener,noreferrer");
@@ -1957,12 +1957,64 @@ export default function Home() {
     }
   }
 
+  if (!catalog) {
+    return (
+      <div className="fixed inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50">
+        <svg className="mb-3 h-10 w-10 animate-spin text-emerald-500" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+          <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        <p className="text-sm font-medium text-slate-500">Đang tải dữ liệu…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50 text-slate-900">
-      <header ref={headerRef} className="sticky top-0 z-[1000] border-b border-white/40 bg-white/70 backdrop-blur-2xl" style={{ WebkitBackdropFilter: "blur(32px)" }}>
+      <header ref={headerRef} className="sticky top-0 z-[2100] border-b border-white/40 bg-white/70 backdrop-blur-2xl" style={{ WebkitBackdropFilter: "blur(32px)" }}>
         <div className="mx-auto max-w-6xl px-3 py-3 sm:px-4">
           <div className="flex items-center gap-2 sm:gap-3">
-          <Link href="/" className="flex shrink-0 items-center gap-2">
+          {/* Nút Quay lại: hiện khi đang xem trang con (filter/route khác `/`).
+              Click → reset filter + về `/` để user luôn có lối thoát rõ ràng. */}
+          {(query.trim() || quickFilter || activeTep || activeCat || activeBrand || activeChain || selected) && (
+            <button
+              onClick={() => {
+                setSelected(null);
+                setActiveTep(null);
+                setActiveCat(null);
+                setActiveBrand(null);
+                setActiveChain(null);
+                setQuickFilter(null);
+                setQuery("");
+                setPage(1);
+                router.push("/");
+              }}
+              title={t("Quay lại trang chính")}
+              aria-label={t("Quay lại trang chính")}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 active:scale-95"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 18l-6-6 6-6"/>
+              </svg>
+            </button>
+          )}
+          <Link
+            href="/"
+            onClick={() => {
+              // Reset hoàn toàn về trang chủ: bỏ mọi filter/chọn để URL "/" không bị
+              // state→URL effect đẩy ngược lại /nganh/... hoặc /nhan/...
+              setSelected(null);
+              setActiveTep(null);
+              setActiveCat(null);
+              setActiveBrand(null);
+              setActiveChain(null);
+              setActiveService(null);
+              setQuickFilter(null);
+              setQuery("");
+              setPage(1);
+            }}
+            className="flex shrink-0 items-center gap-2"
+          >
             <Logo size={34} />
             <span className="flex flex-col leading-tight">
               <span className="flex items-center gap-1.5 whitespace-nowrap text-lg font-bold tracking-tight">
@@ -1986,8 +2038,10 @@ export default function Home() {
               </span>
             </span>
           </Link>
-          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:flex-initial sm:gap-2">
-            <div className="relative min-w-0 flex-1 sm:flex-initial">
+          <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5 sm:flex-initial sm:gap-2">
+            {/* Vị trí: trên desktop nằm cùng hàng với Logo + Giỏ hàng; trên mobile chuyển
+                xuống hàng riêng bên dưới (full-width) để hàng trên còn chỗ cho Giỏ hàng + Lịch sử. */}
+            <div className="relative hidden min-w-0 sm:block sm:flex-initial">
               <button
                 onClick={() => setLocOpen((v) => !v)}
                 title={t("Vị trí của bạn")}
@@ -2007,10 +2061,10 @@ export default function Home() {
                 }</MarqueeText>
               </button>
             </div>
-            {/* Giỏ hàng + Lịch sử — desktop only; mobile hiển thị ở dòng dưới */}
+            {/* Giỏ hàng + Lịch sử — hiện ở mọi viewport (mobile + desktop) cùng hàng với Logo. */}
             <button
               onClick={() => setCartOpen(true)}
-              className="relative hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 active:scale-95 sm:flex"
+              className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 active:scale-95"
               aria-label={t("Giỏ hàng")}
               title={t("Giỏ hàng")}
             >
@@ -2036,7 +2090,7 @@ export default function Home() {
               href="/history"
               title={t("Lịch sử mua")}
               aria-label={t("Lịch sử mua")}
-              className="relative hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 active:scale-95 sm:flex"
+              className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 active:scale-95"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
                 <circle cx="12" cy="12" r="10" />
@@ -2045,45 +2099,26 @@ export default function Home() {
             </Link>
           </div>
           </div>
-          {/* Mobile-only: giỏ hàng + lịch sử icon-only, gọn cuối hàng */}
-          <div className="mt-2 flex justify-end gap-2 sm:hidden">
+          {/* Mobile-only: thanh vị trí (full-width) ở dòng dưới — để dòng trên gọn cho Logo + Giỏ hàng + Lịch sử. */}
+          <div className="mt-2 sm:hidden">
             <button
-              onClick={() => setCartOpen(true)}
-              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm transition hover:bg-emerald-100 active:scale-95"
-              aria-label={t("Giỏ hàng")}
-              title={t("Giỏ hàng")}
+              onClick={() => setLocOpen((v) => !v)}
+              title={t("Vị trí của bạn")}
+              className={`flex w-full min-w-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-sm font-medium transition ${
+                geoState === "ok"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-slate-300 hover:bg-slate-100"
+              }`}
             >
-              <span className="relative flex">
-                <span key={`bump-m-${cartBumpKey}`} className={cartBumpKey > 0 ? "flex animate-cart-bump" : "flex text-emerald-600"}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
-                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                  </svg>
-                </span>
-                {cartBumpKey > 0 && (
-                  <span key={`plus-m-${cartBumpKey}`} className="animate-cart-plus-one">+1</span>
-                )}
-              </span>
-              {cartItems.length > 0 && (
-                <span
-                  key={`badge-m-${cartBumpKey}`}
-                  className={`absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white shadow-sm ${cartBumpKey > 0 ? "animate-cart-ring" : ""}`}
-                >
-                  {cartItems.reduce((s, i) => s + i.qty, 0)}
-                </span>
-              )}
+              <span className="shrink-0">📍</span>
+              <MarqueeText className="min-w-0 flex-1 text-left">{
+                geoState === "locating"
+                  ? t("Đang định vị…")
+                  : userLoc
+                    ? userAddr || t("Đã có vị trí")
+                    : t("Chọn vị trí")
+              }</MarqueeText>
             </button>
-            <Link
-              href="/history"
-              title={t("Lịch sử mua")}
-              aria-label={t("Lịch sử mua")}
-              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:bg-slate-100 active:scale-95"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-            </Link>
           </div>
         </div>
       </header>
@@ -2110,7 +2145,7 @@ export default function Home() {
           onClick={() => setVerOpen(false)}
         >
           <div
-            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl ring-1 ring-white/60 bg-white/80 backdrop-blur-2xl p-5 shadow-2xl"
+            className="liquid-glass max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl p-5"
             onClick={(e) => e.stopPropagation()}
             style={{ WebkitBackdropFilter: "blur(32px)" }}
           >
@@ -2147,16 +2182,26 @@ export default function Home() {
                     <span className="text-xs font-normal text-slate-400">· {VERSION_HISTORY[0].date}</span>
                   )}
                 </p>
-                <ul className="mb-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  {VERSION_HISTORY[0].highlights.map((it, i) => (
-                    <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
-                      <svg className="mt-0.5 shrink-0 text-emerald-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M20 6 9 17l-5-5" />
-                      </svg>
-                      <span>{it}</span>
-                    </li>
+                <div className="mb-1 flex flex-col gap-3">
+                  {VERSION_HISTORY[0].children.map((sub) => (
+                    <div key={sub.subVersion} className="flex flex-col gap-1.5">
+                      <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                          v{sub.subVersion}
+                        </span>
+                        {sub.date && <span className="font-normal text-slate-400">· {sub.date}</span>}
+                      </p>
+                      <ol className="flex flex-col gap-1 pl-1">
+                        {sub.highlights.map((it, i) => (
+                          <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                            <span className="shrink-0 font-mono text-[11px] font-semibold text-emerald-600">{i + 1}.</span>
+                            <span>{it}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </>
             )}
 
@@ -2191,16 +2236,26 @@ export default function Home() {
                           </span>
                         </button>
                         {isOpen && (
-                          <ul className="flex flex-col gap-1.5 border-t border-slate-100 px-3 py-2.5">
-                            {v.highlights.map((it, i) => (
-                              <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
-                                <svg className="mt-0.5 shrink-0 text-slate-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                  <path d="M20 6 9 17l-5-5" />
-                                </svg>
-                                <span>{it}</span>
-                              </li>
+                          <div className="flex flex-col gap-3 border-t border-slate-100 px-3 py-2.5">
+                            {v.children.map((sub) => (
+                              <div key={sub.subVersion} className="flex flex-col gap-1.5">
+                                <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                                    v{sub.subVersion}
+                                  </span>
+                                  {sub.date && <span className="font-normal text-slate-400">· {sub.date}</span>}
+                                </p>
+                                <ol className="flex flex-col gap-1 pl-1">
+                                  {sub.highlights.map((it, i) => (
+                                    <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                                      <span className="shrink-0 font-mono text-[11px] font-semibold text-slate-500">{i + 1}.</span>
+                                      <span>{it}</span>
+                                    </li>
+                                  ))}
+                                </ol>
+                              </div>
                             ))}
-                          </ul>
+                          </div>
                         )}
                       </div>
                     );
@@ -2504,61 +2559,119 @@ export default function Home() {
                 <h2 className="text-sm font-semibold text-slate-700">{t("Nhãn tài trợ - Nhãn phổ biến")}</h2>
                 <span className="text-[11px] text-slate-400">{t("Nhãn của nhà mình & nhãn phổ biến")}</span>
               </div>
-              <div className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="flex gap-2 overflow-x-auto scroll-smooth px-2 pb-2 pt-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {catalog.sponsors.map((sp) => {
                   const isSponsor = sp.kind === "sponsor";
                   const cls =
-                    "group flex shrink-0 flex-col items-center justify-start gap-1.5 px-1 py-1 transition hover:-translate-y-0.5 active:scale-95";
+                    "group flex shrink-0 flex-col items-center justify-start gap-1.5 transition hover:-translate-y-0.5 active:scale-95";
                   const inner = (
                     <>
-                      {/* Logo + tag "Tài trợ/Phổ biến" đặt ở góc dưới-phải logo (overlap) */}
-                      <span className="relative flex h-20 w-20 items-center justify-center transition group-hover:scale-105">
-                        {sp.logo ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={sp.logo}
-                            alt={sp.name}
-                            className="max-h-full max-w-full rounded-2xl object-contain"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).style.display = "none";
-                            }}
-                          />
-                        ) : (
-                          <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-3xl font-bold text-slate-500">
-                            {sp.name.slice(0, 1)}
-                          </span>
-                        )}
+                      {/* THẺ TRẮNG bo rounded-2xl + viền + shadow nhẹ — đồng phong cách
+                          tuoixanhnhanhngon.mualoibanloi.com. Logo nằm trong thẻ, GÓC VUÔNG (không
+                          tự bo) để giữ nguyên hình dáng gốc; bo góc thuộc THẺ chứ không thuộc ảnh. */}
+                      {/* THẺ TRẮNG vuông, đồng kích thước — phong cách reference (ảnh user gửi):
+                          logo tự dò + trim lề rỗng (TrimmedLogo) để hiển thị "nguyên hình"
+                          ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
+                      <span className="relative">
                         <span
-                          className={`pointer-events-none absolute -top-1 -right-1 rounded-full px-1 py-px text-[8px] font-bold uppercase tracking-wide shadow-sm ring-1 ${
+                          className={`flex h-20 w-24 items-center justify-center rounded-2xl shadow-sm transition group-hover:shadow-md ${
+                            SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] ? "" : "border border-slate-200"
+                          }`}
+                          style={{ backgroundColor: SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] || "#ffffff" }}
+                        >
+                          {sp.logo ? (
+                            <TrimmedLogo
+                              src={sp.logo}
+                              alt={sp.name}
+                              className="h-full w-full object-contain"
+                              keyOutWhite={!!SPONSOR_FILL_OVERRIDES[sp.name]}
+                              onResult={({ fillColor, aspect }) => {
+                                if (fillColor) setSponsorFill((m) => (m[sp.name] === fillColor ? m : { ...m, [sp.name]: fillColor }));
+                                if (aspect && Number.isFinite(aspect)) setSponsorAspect((m) => (m[sp.name] === aspect ? m : { ...m, [sp.name]: aspect }));
+                              }}
+                            />
+                          ) : (
+                            <span className="text-3xl font-bold text-slate-500">
+                              {sp.name.slice(0, 1)}
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          className={`pointer-events-none absolute -right-2 -top-2 rounded-sm px-1 py-px text-[9px] font-medium leading-tight shadow-sm ${
                             isSponsor
-                              ? "bg-amber-100 text-amber-700 ring-amber-200"
-                              : "bg-emerald-100 text-emerald-700 ring-emerald-200"
+                              ? "bg-amber-100 text-amber-600"
+                              : "bg-emerald-100 text-emerald-600"
                           }`}
                         >
                           {isSponsor ? t("Tài trợ") : t("Phổ biến")}
                         </span>
                       </span>
-                      <span className="block min-h-[2.25rem] w-20 line-clamp-2 text-center text-[13px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700">
+                      <span className="block min-h-[2rem] w-24 line-clamp-2 text-center text-[12px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700">
                         {sp.name}
                       </span>
                     </>
                   );
-                  // Nếu sp.link là URL ngoài (subdomain hoặc bất kỳ http(s)://...) → mở tab mới.
-                  // Còn lại (trống / nội bộ) → điều hướng nội bộ tới trang nhãn `/<slug>`.
-                  // Click sponsor → mở trang nhãn TRONG app (giống "Xem tất cả" category):
-                  // ẩn search/map, title = tên nhãn + nút Quay lại, list sản phẩm filter theo brand.
+                  // Click sponsor:
+                  //  - sp.link là URL ngoài (khác host) → mở tab mới.
+                  //  - sp.link là URL nội bộ `/<slug>` mà <slug> = chain key (vd /astrabean) →
+                  //    mở TRANG CHUỖI (activeChain), bỏ qua lọc country để hiện cả SP nước ngoài.
+                  //  - Trống / nội bộ không phải chain → fallback lọc theo brand (như cũ).
                   return (
                     <button
                       key={sp.name}
                       type="button"
                       onClick={() => {
-                        setActiveBrand(sp.name);
                         setActiveTep(null);
                         setActiveCat(null);
                         setQuickFilter(null);
                         setQuery("");
                         setSelected(null);
                         setPage(1);
+                        const link = (sp.link || "").trim();
+                        if (link) {
+                          // Parse URL để lấy pathname. URL có thể là tuyệt đối (vd
+                          // "https://gia-quanh-day.vercel.app/astrabean") hoặc tương đối
+                          // ("/astrabean") — cả 2 đều cần coi là NỘI BỘ nếu slug đầu là chain.
+                          // Trước đây: cross-origin → window.open(_blank) → mất sản phẩm.
+                          let urlPath: string | null = null;
+                          let crossOrigin = false;
+                          try {
+                            const u = new URL(link, window.location.origin);
+                            urlPath = u.pathname;
+                            crossOrigin = u.origin !== window.location.origin;
+                          } catch {
+                            if (link.startsWith("/")) urlPath = link;
+                          }
+                          const slug = urlPath?.split("/").filter(Boolean)[0];
+                          // Ưu tiên match CHAIN bất kể origin: nhãn tài trợ trỏ tới
+                          // /<chain-slug> luôn mở trang chuỗi trong app (kể cả link
+                          // tuyệt đối tới domain prod khi đang chạy local).
+                          if (slug) {
+                            const chain = findChainBySlug(slug);
+                            if (chain) {
+                              setActiveBrand(null);
+                              setActiveChain(chain);
+                              return;
+                            }
+                          }
+                          // Không phải chain mà cross-origin → mở tab mới (giữ hành vi cũ).
+                          if (crossOrigin) {
+                            window.open(link, "_blank", "noopener,noreferrer");
+                            return;
+                          }
+                        }
+                        // Fallback cuối: nếu TÊN nhãn tài trợ trùng tên một CHUỖI đã khai báo
+                        // (vd "Astra Bean" → chain key "astrabean") → ưu tiên mở trang CHUỖI
+                        // để hiện đầy đủ sản phẩm bất kể country. Tránh tình trạng "khi thì
+                        // ra brand 0 sp / khi thì ra chuỗi 40 sp" do `sp.link` rỗng/khác slug.
+                        const chainByName = findChainBySlug(sp.name);
+                        if (chainByName) {
+                          setActiveBrand(null);
+                          setActiveChain(chainByName);
+                          return;
+                        }
+                        setActiveChain(null);
+                        setActiveBrand(sp.name);
                       }}
                       title={sp.name}
                       className={cls}
@@ -2577,7 +2690,7 @@ export default function Home() {
             <div className="mt-3 rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-white p-3 shadow-sm sm:p-4">
               <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <h2 className="text-sm font-semibold text-slate-800">
-                  {query.trim() ? t("🔥 Giá hời liên quan") : t("🔥 Giá hời quanh đây")}
+                  <span className="animate-fire mr-0.5">🔥</span>{query.trim() ? t("Giá hời liên quan") : t("Giá hời quanh đây")}
                 </h2>
                 <span className="text-[11px] text-slate-400">
                   {t("so giá nhiều nơi · bật vị trí để ưu tiên gần bạn")}
@@ -2646,9 +2759,6 @@ export default function Home() {
                       key={d.product.id}
                       className="group relative flex w-36 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-2.5 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-40"
                     >
-                      <span className="absolute left-2 top-2 z-10 rounded-md bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white shadow-sm transition duration-150">
-                        -{Math.round(d.disc * 100)}%
-                      </span>
                       <span
                         role="button"
                         tabIndex={0}
@@ -2660,6 +2770,11 @@ export default function Home() {
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                       </span>
+                      <div className="mb-1.5 flex min-h-[20px] flex-wrap items-start gap-1">
+                        <span className="rounded-md bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white shadow-sm">
+                          -{Math.round(d.disc * 100)}%
+                        </span>
+                      </div>
                       <div className="mb-1.5 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                         <ProductThumb product={d.product} fill />
                       </div>
@@ -2735,7 +2850,9 @@ export default function Home() {
               {/* ── Flat mode: search / quickFilter / activeTep / activeCat / activeBrand / activeChain (URL-driven) ── */}
               {(query.trim() || quickFilter || activeTep || activeCat || activeBrand || activeChain) && (
                 <>
-                  <div className="mt-4 mb-5 flex items-center justify-between gap-2">
+                  <div
+                    className="sticky top-[64px] z-[1900] -mx-4 mb-5 flex items-center justify-between gap-2 border-b border-slate-200/70 bg-slate-50/95 px-4 py-3 backdrop-blur sm:top-[68px]"
+                  >
                     <div className="flex min-w-0 items-center gap-2">
                       <button
                         onClick={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
@@ -2747,6 +2864,7 @@ export default function Home() {
                         </svg>
                         {t("Quay lại")}
                       </button>
+                      <span className="flex min-w-0 flex-col">
                       <h2 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-800">
                         {activeBrand && activeCat
                           ? `${activeBrand} · ${prettyCat(activeCat)}`
@@ -2782,6 +2900,21 @@ export default function Home() {
                           </span>
                         )}
                       </h2>
+                      {/* Sub-title: "Bán tại: <Chuỗi>" khi sp đang xem chủ yếu từ 1 chuỗi
+                          (Mục đích: vào /nganh/do-uong toàn sp Circle K → user thấy ngay
+                          nguồn bán). Ẩn khi đã filter theo chuỗi (header chính đã hiện tên). */}
+                      {dominantChain && !activeChain && (
+                        <span className="mt-0.5 truncate text-[11px] font-medium text-slate-500">
+                          {t("Bán tại")}:{" "}
+                          <span
+                            className="font-semibold"
+                            style={{ color: chainColor(dominantChain) }}
+                          >
+                            {chainLabel(dominantChain)}
+                          </span>
+                        </span>
+                      )}
+                      </span>
                     </div>
                     {catalog && (
                       <span className="shrink-0 text-xs text-slate-400">
@@ -2793,6 +2926,20 @@ export default function Home() {
                   <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                     {catalog!.tui!.map((tu) => (
                       <li key={tu.chuyenTrang + tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => { e.stopPropagation(); setTuiInfo(tu); }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setTuiInfo(tu); } }}
+                          aria-label={t("Xem chi tiết sản phẩm trong túi")}
+                          title={t("Xem chi tiết sản phẩm trong túi")}
+                          className="absolute right-2 top-2 z-10 flex cursor-pointer items-center justify-center text-slate-400 transition hover:text-emerald-600"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                        </span>
+                        <div className="mb-1.5 flex min-h-[20px] flex-wrap items-start gap-1">
+                          <span className="rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
+                        </div>
                         <div className="relative mb-1.5 aspect-square w-full overflow-hidden rounded-lg bg-slate-50">
                           <div className={`grid h-full w-full gap-0.5 ${tu.items.length <= 1 ? "grid-cols-1" : "grid-cols-2"}`}>
                             {tu.items.slice(0, 4).map((it) => {
@@ -2804,7 +2951,6 @@ export default function Home() {
                               );
                             })}
                           </div>
-                          <span className="absolute left-1 top-1 rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
                           {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
                         </div>
                         <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
@@ -2830,15 +2976,13 @@ export default function Home() {
                           <div
                             className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                           >
-                            <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                            <div className="mb-3 flex flex-wrap items-start gap-1 empty:mb-0">
+                              {tags.map((tag) => (
+                                <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                              ))}
+                            </div>
+                            <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                               <ProductThumb product={p} fill />
-                              {tags.length > 0 && (
-                                <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
-                                  {tags.map((tag) => (
-                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
-                                  ))}
-                                </span>
-                              )}
                             </div>
                             <span
                               role="button"
@@ -2965,6 +3109,21 @@ export default function Home() {
                             key={tu.chuyenTrang + tu.maTui + tu.tenTui}
                             className="group relative flex w-44 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-48"
                           >
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => { e.stopPropagation(); setTuiInfo(tu); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setTuiInfo(tu); } }}
+                              aria-label={t("Xem chi tiết sản phẩm trong túi")}
+                              title={t("Xem chi tiết sản phẩm trong túi")}
+                              className="absolute right-2 top-2 z-10 flex cursor-pointer items-center justify-center text-slate-400 transition hover:text-emerald-600"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                            </span>
+                            {/* Tag loại túi — dòng riêng phía trên ảnh, không che lưới SP */}
+                            <div className="mb-1.5 flex min-h-[20px] flex-wrap items-start gap-1">
+                              <span className="rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
+                            </div>
                             {/* Ảnh TẤT CẢ sản phẩm trong túi (lưới 2 cột) */}
                             <div className="relative mb-1.5 aspect-square w-full overflow-hidden rounded-lg bg-slate-50">
                               <div className={`grid h-full w-full gap-0.5 ${tu.items.length <= 1 ? "grid-cols-1" : "grid-cols-2"}`}>
@@ -2977,7 +3136,6 @@ export default function Home() {
                                   );
                                 })}
                               </div>
-                              <span className="absolute left-1 top-1 rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
                               {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
                             </div>
                             <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
@@ -3002,23 +3160,29 @@ export default function Home() {
                         {emoji && <span className="mr-1">{emoji}</span>}{name}
                         <span className="ml-1.5 text-xs font-normal text-slate-400">({products.length})</span>
                       </h2>
-                      <button
-                        onClick={() => {
-                          // Mở "trang" danh mục: lọc toàn bộ sản phẩm của tệp này (tái dùng lưới + phân trang),
-                          // thay vì xổ inline. Đặt lại các bộ lọc khác + cuộn lên đầu.
-                          setActiveTep(name);
-                          setActiveCat(null);
-                          setQuickFilter(null);
-                          setQuery("");
-                          setSelected(null);
-                          // cuộn lên đầu do useEffect [activeTep] lo (sau khi layout đổi)
-                        }}
-                        className="text-xs font-medium text-emerald-600 hover:underline"
-                      >
-                        {t("Xem tất cả →")}
-                      </button>
+                      {products.length > 0 && (
+                        <button
+                          onClick={() => {
+                            // Mở "trang" danh mục: lọc toàn bộ sản phẩm của tệp này (tái dùng lưới + phân trang),
+                            // thay vì xổ inline. Đặt lại các bộ lọc khác + cuộn lên đầu.
+                            setActiveTep(name);
+                            setActiveCat(null);
+                            setQuickFilter(null);
+                            setQuery("");
+                            setSelected(null);
+                            // cuộn lên đầu do useEffect [activeTep] lo (sau khi layout đổi)
+                          }}
+                          className="text-xs font-medium text-emerald-600 hover:underline"
+                        >
+                          {t("Xem tất cả →")}
+                        </button>
+                      )}
                     </div>
-                    {isExpanded ? (
+                    {products.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center text-xs text-slate-400">
+                        {t("Khu vực mới — chưa có sản phẩm. Thêm sản phẩm vào danh mục này từ sheet là sẽ tự xuất hiện.")}
+                      </div>
+                    ) : isExpanded ? (
                       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                         {products.map((p) => {
                           const st = priceStats.get(p.id);
@@ -3029,15 +3193,13 @@ export default function Home() {
                               <div
                                 className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                               >
-                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                <div className="mb-3 flex flex-wrap items-start gap-1 empty:mb-0">
+                                  {tags.map((tag) => (
+                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                  ))}
+                                </div>
+                                <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                                   <ProductThumb product={p} fill />
-                                  {tags.length > 0 && (
-                                    <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
-                                      {tags.map((tag) => (
-                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
-                                      ))}
-                                    </span>
-                                  )}
                                 </div>
                                 <span
                                   role="button"
@@ -3110,15 +3272,13 @@ export default function Home() {
                               <div
                                 className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                               >
-                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                <div className="mb-3 flex flex-wrap items-start gap-1 empty:mb-0">
+                                  {tags.map((tag) => (
+                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                  ))}
+                                </div>
+                                <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                                   <ProductThumb product={p} fill />
-                                  {tags.length > 0 && (
-                                    <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
-                                      {tags.map((tag) => (
-                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
-                                      ))}
-                                    </span>
-                                  )}
                                 </div>
                                 <span
                                   role="button"
@@ -3312,7 +3472,7 @@ export default function Home() {
                   onClick={() => setAlertOpen(false)}
                 >
                   <div
-                    className="w-full max-w-sm rounded-3xl ring-1 ring-amber-200/70 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
+                    className="liquid-glass w-full max-w-sm rounded-3xl p-5 ring-1 ring-amber-200/70"
                     onClick={(e) => e.stopPropagation()}
                     style={{ WebkitBackdropFilter: "blur(32px)" }}
                   >
@@ -3931,175 +4091,302 @@ export default function Home() {
         />
       )}
 
-      {/* Modal "Liên hệ dịch vụ - Affree" — form + link tới dịch vụ làm hồ sơ hộ. */}
-      {contactOpen && (
-        <div
-          className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
-          onClick={() => setContactOpen(false)}
-        >
-          <div
-            className="w-full max-w-md max-h-[88vh] overflow-y-auto rounded-3xl ring-1 ring-white/60 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-            style={{ WebkitBackdropFilter: "blur(32px)" }}
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <p className="text-base font-semibold text-slate-900">{t("Liên hệ dịch vụ - Affree")}</p>
-                <p className="mt-0.5 text-xs text-slate-500">{t("Để lại liên hệ — đội Affree sẽ phản hồi trong vòng 24h.")}</p>
-              </div>
-              <button
-                onClick={() => setContactOpen(false)}
-                aria-label={t("Đóng")}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-
-            <a
-              href="https://kpi-recruitment-v2.vercel.app/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mb-4 flex items-center gap-3 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-3.5 shadow-sm transition hover:border-emerald-300 hover:shadow active:scale-[0.98]"
-            >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-2xl">📝</span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-emerald-800">{t("Dịch vụ làm hồ sơ hộ")}</span>
-                <span className="mt-0.5 block text-[11px] text-emerald-700/80">{t("Affree soạn hồ sơ ứng tuyển / xét tuyển KPI giúp bạn — mở ngay")}</span>
-              </span>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-emerald-600"><path d="M7 17 17 7M9 7h8v8"/></svg>
-            </a>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const fd = new FormData(e.currentTarget);
-                const name = (fd.get("name") || "").toString().trim();
-                const phone = (fd.get("phone") || "").toString().trim();
-                if (name.length < 2) { setToast(t("Vui lòng nhập họ tên")); setTimeout(() => setToast(""), 2500); return; }
-                if (phone.length < 8) { setToast(t("Vui lòng nhập số điện thoại")); setTimeout(() => setToast(""), 2500); return; }
-                setContactOpen(false);
-                setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
-                setTimeout(() => setToast(""), 3500);
-              }}
-              className="space-y-2.5"
-            >
-              <label className="block">
-                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Họ tên")}</span>
-                <input name="name" type="text" required className="w-full rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: Nguyễn Văn A")} />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Số điện thoại")}</span>
-                <input name="phone" type="tel" required className="w-full rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: 09xxxxxxxx")} />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Nội dung cần hỗ trợ")}</span>
-                <textarea name="msg" rows={3} className="w-full resize-none rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: tư vấn so giá sỉ, làm hồ sơ ứng tuyển, hợp tác phân phối…")} />
-              </label>
-              <button type="submit" className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
-                {t("Gửi liên hệ")}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ */}
-      {storeProducts && catalog && (() => {
-        const offersAtStore = catalog.offers.filter((o) => o.storeId === storeProducts.id);
-        const productMap = new Map(catalog.products.map((p) => [p.id, p]));
-        const items = offersAtStore
-          .map((o) => ({ offer: o, product: productMap.get(o.productId) }))
-          .filter((x): x is { offer: typeof offersAtStore[number]; product: Product } => !!x.product);
+      {/* Modal "Liên hệ dịch vụ - Affree" — form intake có phân loại nhu cầu (Phương án 1+). */}
+      {contactOpen && (() => {
+        // Validate SĐT VN ngay khi gõ.
+        const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
+        const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
+        const phoneError = contactPhone.trim().length > 0 && !phoneValid;
+        const emailValid = !contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim());
+        const canSubmit = contactName.trim().length >= 2 && phoneValid && emailValid && contactConsent && !contactSubmitting;
+        // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
+        const msgPlaceholder = {
+          "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
+          "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
+          "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
+          "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
+        }[contactKind];
+        const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
+          { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
+          { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
+          { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
+          { key: "khac", emoji: "💼", label: t("Khác") },
+        ];
         return (
           <div
-            className="fixed inset-0 z-[2050] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
-            onClick={() => setStoreProducts(null)}
+            className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+            onClick={() => setContactOpen(false)}
           >
             <div
-              className="flex w-full max-w-lg max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+              className="liquid-glass flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
               onClick={(e) => e.stopPropagation()}
+              style={{ WebkitBackdropFilter: "blur(32px)", backdropFilter: "blur(32px)" }}
             >
-              <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-4 pt-5">
+              <div className="relative bg-gradient-to-br from-emerald-50/80 via-white/40 to-sky-50/80 px-5 pb-3 pt-5">
                 <button
-                  onClick={() => setStoreProducts(null)}
+                  onClick={() => setContactOpen(false)}
                   aria-label={t("Đóng")}
                   className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
-                <div className="flex items-start gap-3 pr-8">
-                  <ChainBadge chain={storeProducts.chain} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                      {t("Cửa hàng")}
-                    </p>
-                    <h3 className="mt-0.5 truncate text-base font-bold text-slate-900">
-                      {storeProducts.name}
-                    </h3>
-                    {storeProducts.address && (
-                      <p className="mt-0.5 truncate text-xs text-slate-500">{storeProducts.address}</p>
-                    )}
-                    <p className="mt-1 text-[11px] font-medium text-slate-500">
-                      {t("{n} sản phẩm", { n: items.length })}
-                    </p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+                  {t("Liên hệ Affree")}
+                </p>
+                <h3 className="mt-0.5 text-base font-bold text-slate-900 pr-8">
+                  {t("Để lại liên hệ — phản hồi trong 24h")}
+                </h3>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setContactError("");
+                  if (contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
+                  if (!phoneValid) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
+                  if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
+                  if (!contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
+                  setContactSubmitting(true);
+                  // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
+                  saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
+                  try {
+                    await fetch("/api/contact", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        kind: contactKind,
+                        name: contactName.trim(),
+                        phone: phoneDigits,
+                        area: contactArea.trim(),
+                        email: contactEmail.trim(),
+                        msg: contactMsg.trim(),
+                      }),
+                    });
+                  } catch {
+                    // im lặng — vẫn báo thành công vì đã lưu localStorage
+                  }
+                  setContactSubmitting(false);
+                  setContactOpen(false);
+                  setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
+                  setTimeout(() => setToast(""), 3500);
+                }}
+                className="flex-1 overflow-y-auto px-5 py-4"
+              >
+                <div className="mb-3">
+                  <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
+                    {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {KINDS.map((k) => {
+                      const active = contactKind === k.key;
+                      return (
+                        <button
+                          key={k.key}
+                          type="button"
+                          onClick={() => setContactKind(k.key)}
+                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${
+                            active
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                          }`}
+                        >
+                          <span className="text-base">{k.emoji}</span>
+                          <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
-              <div className="flex-1 overflow-y-auto px-3 py-3">
-                {items.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
-                    {t("Cửa hàng chưa có sản phẩm trong catalog.")}
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {items.map(({ offer: o, product: p }) => (
-                      <li key={p.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
-                          <ProductThumb product={p} size={48} contain />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p.name}</p>
-                          <p className="truncate text-[11px] text-slate-400">{p.brand} · {p.unit}</p>
-                          <div className="mt-1 flex items-center gap-2">
-                            <span className={`text-sm font-bold ${o.inStock ? "text-rose-600" : "text-slate-400"}`}>
-                              {o.inStock ? formatMoney(o.price, storeCurrency(o.storeId)) : t("Hết hàng")}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const store = storeProducts;
-                            setStoreProducts(null);
-                            // Dựng trực tiếp RankedOffer từ offer + store đang xem (không qua rankOffersForProduct
-                            // vì hàm đó skip offer nếu getStore() không match — id giữa sheet-stores và offers có
-                            // thể khác nhau, dẫn tới empty → rơi xuống form đơn giản thay vì popup trợ lý).
-                            setBuyOffer({
-                              ...o,
-                              store,
-                              product: p,
-                              distanceKm:
-                                userLoc && store.lat != null && store.lng != null
-                                  ? distanceKm(userLoc, { lat: store.lat, lng: store.lng })
-                                  : null,
-                            });
-                          }}
-                          disabled={!o.inStock}
-                          className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-                        >
-                          {t("Mua hàng")}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                    {t("Họ tên")} <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="text"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={t("Vd: Nguyễn Văn A")}
+                  />
+                </label>
+
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                    {t("SĐT / Zalo")} <span className="text-rose-500">*</span>
+                  </span>
+                  <input
+                    type="tel"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    required
+                    className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${
+                      phoneError
+                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                        : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
+                    }`}
+                    placeholder={t("Vd: 09xxxxxxxx")}
+                  />
+                  {phoneError && (
+                    <span className="mt-1 block text-[11px] text-rose-600">
+                      {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
+                    </span>
+                  )}
+                </label>
+
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
+                  <input
+                    type="text"
+                    value={contactArea}
+                    onChange={(e) => setContactArea(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
+                  />
+                </label>
+
+                {(contactKind === "hop-tac" || contactKind === "b2b") && (
+                  <label className="mb-2.5 block">
+                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                    <input
+                      type="email"
+                      value={contactEmail}
+                      onChange={(e) => setContactEmail(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      placeholder={t("Vd: ten@congty.com")}
+                    />
+                  </label>
                 )}
-              </div>
+
+                <label className="mb-3 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Nội dung cụ thể")}</span>
+                  <textarea
+                    value={contactMsg}
+                    onChange={(e) => setContactMsg(e.target.value)}
+                    rows={3}
+                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={msgPlaceholder}
+                  />
+                </label>
+
+                <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={contactConsent}
+                    onChange={(e) => setContactConsent(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+                  />
+                  <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
+                </label>
+
+                {contactError && (
+                  <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
+                    {contactError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
+                  {contactSubmitting ? t("Đang gửi…") : t("Gửi liên hệ")}
+                </button>
+              </form>
             </div>
           </div>
         );
       })()}
+
+      {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ */}
+      {storeProducts && catalog && (
+        <StoreProductsPage
+          store={storeProducts}
+          offers={catalog.offers.filter((o) => o.storeId === storeProducts.id)}
+          productMap={new Map(catalog.products.map((p) => [p.id, p]))}
+          userLoc={userLoc}
+          lang={lang}
+          headerH={headerH}
+          onClose={() => setStoreProducts(null)}
+          onBuy={(ranked) => {
+            setStoreProducts(null);
+            setBuyOffer(ranked);
+          }}
+        />
+      )}
+
+      {/* Modal "Sản phẩm trong túi" — mở từ nút ⓘ trên thẻ túi. Bấm ⓘ trên từng SP → mở [[infoProduct]]. */}
+      {tuiInfo && catalog && (
+        <div
+          className="fixed inset-0 z-[2050] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
+          onClick={() => setTuiInfo(null)}
+        >
+          <div
+            className="flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative bg-gradient-to-br from-violet-50 via-white to-emerald-50 px-5 pb-4 pt-5">
+              <button
+                onClick={() => setTuiInfo(null)}
+                aria-label={t("Đóng")}
+                className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600">
+                🛍️ {loaiLabel(tuiInfo.loai)}
+              </p>
+              <h3 className="mt-0.5 pr-8 text-base font-bold leading-snug text-slate-900">
+                {tuiInfo.tenTui}
+              </h3>
+              <p className="mt-1 truncate text-xs text-slate-500">
+                {tuiInfo.chuyenTrang} · {t("{n} món", { n: tuiInfo.items.length })} · {formatMoney(tuiCombo(tuiInfo))}
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 py-3">
+              <ul className="space-y-2">
+                {tuiInfo.items.map((it) => {
+                  const p = catalog.products.find((x) => x.id === it.productId);
+                  return (
+                    <li key={it.productId} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
+                        {p ? <ProductThumb product={p} size={48} contain /> : <span className="text-xs font-bold text-slate-400">{it.name.slice(0, 2)}</span>}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
+                        {p && <p className="truncate text-[11px] text-slate-400">{p.brand} · {p.unit}</p>}
+                        <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(it.gia)}</p>
+                      </div>
+                      {p && (
+                        <button
+                          type="button"
+                          onClick={() => { setTuiInfo(null); setInfoProduct(p); }}
+                          aria-label={t("Xem thông tin sản phẩm")}
+                          title={t("Xem thông tin sản phẩm")}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+                        >
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <div className="border-t border-slate-100 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => { addTuiToCart(tuiInfo); setTuiInfo(null); }}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
+              >
+                🛍️ {t("Mua cả túi")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal thông tin sản phẩm (nút ⓘ) */}
       {infoProduct && (
@@ -4108,7 +4395,7 @@ export default function Home() {
           onClick={() => setInfoProduct(null)}
         >
           <div
-            className="flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white/85 ring-1 ring-white/60 shadow-2xl"
+            className="liquid-glass flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
             onClick={(e) => e.stopPropagation()}
             style={{ WebkitBackdropFilter: "blur(32px)", backdropFilter: "blur(32px)" }}
           >
@@ -4222,7 +4509,7 @@ export default function Home() {
           onClick={() => !buySubmitting && setBuyProduct(null)}
         >
           <div
-            className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl ring-1 ring-amber-200/70 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
+            className="liquid-glass w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl p-5 ring-1 ring-amber-200/70"
             onClick={(e) => e.stopPropagation()}
             style={{ WebkitBackdropFilter: "blur(32px)" }}
           >

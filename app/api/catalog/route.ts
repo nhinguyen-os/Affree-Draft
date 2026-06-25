@@ -9,7 +9,11 @@ import { fetchSheetStores } from "@/lib/sheet-stores";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
-export const revalidate = 60; // cache 1 phút — sửa sheet (tệp/emoji/ngành hàng) hiện nhanh hơn
+// REALTIME: tắt cache hoàn toàn — sửa sheet (thứ tự danh mục, Ẩn/Hiện, emoji, giá…) hiện
+// NGAY ở web sau lần reload kế tiếp. Trade-off: mỗi request đập trực tiếp Google Sheets;
+// chấp nhận được vì traffic nhỏ và Google CDN còn cache phía họ ~vài giây.
+export const revalidate = 0;
+export const dynamic = "force-dynamic";
 
 // Nguồn catalog CHÍNH: Google Sheet "Danh sách sản phẩm" (định dạng product_id) trong
 // folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.

@@ -163,7 +163,7 @@ export default function CartModal({
       <div className="absolute inset-0 bg-black/30 backdrop-blur-md" onClick={onClose} />
 
       {/* Panel — liquid glass */}
-      <div className="relative flex w-full max-w-lg flex-col rounded-3xl bg-white/85 backdrop-blur-2xl ring-1 ring-white/60 shadow-2xl max-h-[85vh] sm:max-h-[90vh]" style={{ WebkitBackdropFilter: "blur(32px)" }}>
+      <div className="liquid-glass relative flex w-full max-w-lg flex-col rounded-3xl max-h-[85vh] sm:max-h-[90vh]">
         {/* Header */}
         <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3">
           <svg

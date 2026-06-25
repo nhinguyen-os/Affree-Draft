@@ -103,12 +103,20 @@ export function parseTepCsv(csv: string): ProductGroup[] {
     }
     return -1;
   };
+  // Phát hiện cột "Thứ tự ưu tiên" TRƯỚC để loại khỏi priority (vì cùng chứa "ưu tiên").
+  const orderIdx = col("thứ tự", "thu tu", "stt");
+  const hiddenIdx = col("ẩn ", "hiện", "hien", "show", "hide", "ẩn/", "/ẩn");
+  // priority KHÔNG nên trùng orderIdx — nếu trùng thì coi như không có priority.
+  let priorityIdx = col("ưu tiên", "uu tien", "priority");
+  if (priorityIdx === orderIdx) priorityIdx = -1;
   const ci = {
-    label: col("tệp", "tep", "nhãn", "nhan", "label", "danh_muc", "danh mục"),
+    label: col("tệp", "tep", "nhãn", "nhan", "label", "danh_muc", "danh mục", "ten"),
     emoji: col("emoji", "icon"),
     link: col("link", "url"),
     note: col("ghi_chu", "ghi chú", "ghi chu", "note"),
-    priority: col("ưu tiên", "uu tien", "priority"),
+    priority: priorityIdx,
+    order: orderIdx,
+    hidden: hiddenIdx,
   };
   // Cột tên tệp bắt buộc; nếu không dò được, lấy cột đầu.
   const labelIdx = ci.label >= 0 ? ci.label : 0;
@@ -124,12 +132,21 @@ export function parseTepCsv(csv: string): ProductGroup[] {
     const link = ci.link >= 0 ? (r[ci.link] || "").trim() : "";
     const note = ci.note >= 0 ? (r[ci.note] || "").trim() : "";
     const priority = ci.priority >= 0 ? (r[ci.priority] || "").trim() : "";
+    // Cột "Thứ tự ưu tiên" — số nhỏ hiện trước. Trống/0/NaN → undefined (đứng cuối).
+    const orderRaw = ci.order >= 0 ? (r[ci.order] || "").trim() : "";
+    const orderNum = Number(orderRaw);
+    const order = orderRaw && Number.isFinite(orderNum) ? orderNum : undefined;
+    // Cột "Hiện"/"Ẩn": "ẩn"/"an"/"hide"/"false"/"0" → hidden=true; mặc định = false (hiện).
+    const hidRaw = ci.hidden >= 0 ? (r[ci.hidden] || "").trim().toLowerCase() : "";
+    const hidden = /^(ẩn|an|hide|hidden|no|false|0)$/.test(hidRaw);
     out.push({
       label,
       emoji: emoji || undefined,
       link: link || undefined,
       note: note || undefined,
       priority: priority || undefined,
+      order,
+      hidden: hidden || undefined,
     });
   }
   return out;
@@ -269,7 +286,14 @@ export async function fetchSheetGroups(
 ): Promise<{ groups?: ProductGroup[]; danhMucGroups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[]; sanPhamGroupOverrides?: Map<string, string[]> }> {
   const fetchCsv = async (url: string): Promise<string | null> => {
     try {
-      const res = await fetch(url, { next: { revalidate } });
+      // revalidate=0 → tắt cache Next.js (force-dynamic ở route). Thêm cache-buster `_=<ms>`
+      // để bypass cả cache CDN của Google Sheets, đảm bảo lần fetch nào cũng là dữ liệu mới
+      // nhất → user sửa sheet là reload web thấy NGAY (không phải đợi).
+      const bust = revalidate === 0 ? `${url.includes("?") ? "&" : "?"}_=${Date.now()}` : "";
+      const res = await fetch(url + bust, {
+        next: { revalidate },
+        cache: revalidate === 0 ? "no-store" : "default",
+      });
       if (!res.ok) return null;
       return await res.text();
     } catch {

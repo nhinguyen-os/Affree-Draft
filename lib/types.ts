@@ -67,6 +67,10 @@ export interface ProductGroup {
   note?: string;
   /** Tên hồ sơ "ưu tiên hiển thị" áp cho tệp này (cột "ưu tiên" trong tab "tệp"). Trống → không ưu tiên. */
   priority?: string;
+  /** Thứ tự hiển thị trên homepage (cột C tab DanhMuc): số nhỏ hiện trước. Trống → đứng cuối, giữ thứ tự nhập. */
+  order?: number;
+  /** Cờ Ẩn/Hiện (cột D tab DanhMuc): "Ẩn"/false → ẩn khỏi homepage; mặc định = hiện. */
+  hidden?: boolean;
 }
 
 /**
