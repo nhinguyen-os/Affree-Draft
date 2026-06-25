@@ -2511,17 +2511,8 @@ export default function Home() {
                     "group flex shrink-0 flex-col items-center justify-start gap-1.5 px-1 py-1 transition hover:-translate-y-0.5 active:scale-95";
                   const inner = (
                     <>
-                      {/* Tag "Tài trợ/Phổ biến" ở dòng RIÊNG phía trên logo — không đè lên logo */}
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider shadow-sm ${
-                          isSponsor
-                            ? "bg-amber-100 text-amber-700"
-                            : "bg-emerald-100 text-emerald-700"
-                        }`}
-                      >
-                        {isSponsor ? t("Tài trợ") : t("Phổ biến")}
-                      </span>
-                      <span className="flex h-20 w-20 items-center justify-center transition group-hover:scale-105">
+                      {/* Logo + tag "Tài trợ/Phổ biến" đặt ở góc dưới-phải logo (overlap) */}
+                      <span className="relative flex h-20 w-20 items-center justify-center transition group-hover:scale-105">
                         {sp.logo ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -2537,6 +2528,15 @@ export default function Home() {
                             {sp.name.slice(0, 1)}
                           </span>
                         )}
+                        <span
+                          className={`pointer-events-none absolute -top-1 -right-1 rounded-full px-1 py-px text-[8px] font-bold uppercase tracking-wide shadow-sm ring-1 ${
+                            isSponsor
+                              ? "bg-amber-100 text-amber-700 ring-amber-200"
+                              : "bg-emerald-100 text-emerald-700 ring-emerald-200"
+                          }`}
+                        >
+                          {isSponsor ? t("Tài trợ") : t("Phổ biến")}
+                        </span>
                       </span>
                       <span className="block min-h-[2.25rem] w-20 line-clamp-2 text-center text-[13px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700">
                         {sp.name}
@@ -2658,7 +2658,7 @@ export default function Home() {
                         title={t("Xem thông tin & chứng nhận")}
                         className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
                       >
-                        i
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                       </span>
                       <div className="mb-1.5 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                         <ProductThumb product={d.product} fill />
@@ -2849,7 +2849,7 @@ export default function Home() {
                               title={t("Xem thông tin & chứng nhận")}
                               className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
                             >
-                              i
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                             </span>
                             <span className="mb-1.5 block h-[10px]" />
                             <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
@@ -3048,7 +3048,7 @@ export default function Home() {
                                   title={t("Xem thông tin & chứng nhận")}
                                   className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
                                 >
-                                  i
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                                 </span>
                                 <span className="mb-1.5 block h-[10px]" />
                                 <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
@@ -3129,7 +3129,7 @@ export default function Home() {
                                   title={t("Xem thông tin & chứng nhận")}
                                   className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
                                 >
-                                  i
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
                                 </span>
                                 <span className="mb-1.5 block h-[10px]" />
                                 <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
