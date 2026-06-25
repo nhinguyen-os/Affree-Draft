@@ -23,3 +23,94 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .loc-marquee-run { animation: none !important; transform: none !important; }
 }
+
+/* Hiệu ứng "nẩy mạnh" kiểu Shopee — scale lớn + lắc + đổi màu rose tạm thời. */
+@keyframes cart-bump {
+  0%   { transform: scale(1) rotate(0deg); color: rgb(71, 85, 105); }
+  15%  { transform: scale(1.65) rotate(-14deg); color: rgb(244, 63, 94); }
+  30%  { transform: scale(1.45) rotate(12deg); color: rgb(244, 63, 94); }
+  45%  { transform: scale(1.55) rotate(-8deg); color: rgb(244, 63, 94); }
+  60%  { transform: scale(1.35) rotate(5deg); color: rgb(244, 63, 94); }
+  80%  { transform: scale(1.15) rotate(-2deg); color: rgb(244, 63, 94); }
+  100% { transform: scale(1) rotate(0deg); color: rgb(71, 85, 105); }
+}
+.animate-cart-bump { animation: cart-bump 0.9s cubic-bezier(.36,.07,.19,.97); transform-origin: center; }
+.animate-cart-bump svg { color: inherit; }
+
+/* Ring nhấp nháy quanh badge số lượng để hút mắt. */
+@keyframes cart-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.7); transform: scale(1); }
+  50%  { transform: scale(1.4); }
+  70%  { box-shadow: 0 0 0 14px rgba(244, 63, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); transform: scale(1); }
+}
+.animate-cart-ring { animation: cart-ring 0.8s ease-out; }
+
+/* "+1" bay lên từ giỏ hàng — visual feedback rõ như Shopee. */
+@keyframes cart-plus-one {
+  0%   { opacity: 0; transform: translate(-50%, 0) scale(0.5); }
+  15%  { opacity: 1; transform: translate(-50%, -8px) scale(1.1); }
+  100% { opacity: 0; transform: translate(-50%, -36px) scale(1); }
+}
+.animate-cart-plus-one {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  color: rgb(244, 63, 94);
+  font-weight: 800;
+  font-size: 13px;
+  pointer-events: none;
+  animation: cart-plus-one 0.9s ease-out forwards;
+  text-shadow: 0 1px 2px rgba(0,0,0,.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-cart-bump, .animate-cart-ring, .animate-cart-plus-one { animation: none !important; }
+}
+
+/* Style cho MapLibre popups (bản đồ) — nền trắng đục hoàn toàn để che map layer phía sau. */
+.maplibregl-popup-content {
+  background: #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-radius: 14px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.06) !important;
+  padding: 12px 14px !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: #ffffff !important;
+  border-bottom-color: #ffffff !important;
+}
+/* Nút X đóng popup pin — to rõ hơn để user thấy & bấm dễ trên mobile. */
+.maplibregl-popup-close-button {
+  position: absolute !important;
+  top: 6px !important;
+  right: 6px !important;
+  width: 26px !important;
+  height: 26px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  color: #475569 !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  cursor: pointer !important;
+}
+.maplibregl-popup-close-button:hover {
+  background: #fff !important;
+  color: #0f172a !important;
+}
+/* Chừa chỗ cho nút X ở góc phải — content không bị đè lên */
+/* max-width nhỏ + max-height giới hạn theo map container để popup luôn nằm trong khung */
+.maplibregl-popup-content {
+  padding-right: 40px !important;
+  max-width: min(220px, 80vw) !important;
+  max-height: min(240px, 50vh) !important;
+  overflow-y: auto !important;
+  box-sizing: border-box;
+}

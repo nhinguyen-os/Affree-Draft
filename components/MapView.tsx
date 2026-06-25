@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Map, {
   Marker,
   Popup,
@@ -21,6 +22,7 @@ type MapMarker = {
   price?: number;
   inStock?: boolean;
   cheapest?: boolean;
+  nearest?: boolean;
 };
 
 type PoiPopup = {
@@ -31,27 +33,32 @@ type PoiPopup = {
 };
 
 
-function storeIconHtml(color: string, cheapest: boolean, highlight: boolean, cheapestLabel: string) {
-  const size = cheapest ? 40 : highlight ? 36 : 30;
+function storeIconHtml(color: string, cheapest: boolean, nearest: boolean, highlight: boolean, cheapestLabel: string, nearestLabel: string) {
+  const size = cheapest || nearest ? 40 : highlight ? 36 : 30;
   const ring = highlight
     ? "filter:drop-shadow(0 0 0 2px #fff) drop-shadow(0 2px 6px rgba(0,0,0,.5));"
     : "filter:drop-shadow(0 1px 2px rgba(0,0,0,.4));";
+  const tags: string[] = [];
+  if (cheapest) tags.push(`<div style="background:#facc15;color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">${cheapestLabel}</div>`);
+  if (nearest) tags.push(`<div style="background:#3b82f6;color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">${nearestLabel}</div>`);
+  const tagHtml = tags.length ? `<div style="position:absolute;top:${tags.length > 1 ? "-22px" : "-6px"};left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:2px">${tags.join("")}</div>` : "";
   return `<div style="width:${size}px;height:${size}px;transform:translate(-50%,-100%);position:relative">
     <svg viewBox="0 0 24 24" width="${size}" height="${size}" style="${ring}transition:width .15s,height .15s">
       <path fill="${color}" stroke="#fff" stroke-width="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/>
       <circle cx="12" cy="9" r="2.6" fill="#fff"/>
     </svg>
-    ${cheapest ? `<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);background:#facc15;color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">${cheapestLabel}</div>` : ""}
+    ${tagHtml}
   </div>`;
 }
 
 function zoomForRadius(km?: number | null): number | undefined {
   if (!km) return undefined;
-  if (km <= 1) return 14;
-  if (km <= 3) return 13;
-  if (km <= 5) return 12;
-  if (km <= 10) return 10;
-  return 9;
+  // Chọn zoom sao cho đường kính circle ≈ 30% chiều ngắn của map (chừa lề rộng,
+  // thấy được khu vực xung quanh để định vị). z ≈ log2(156543 / (km*20)).
+  // 50m→17, 100m→16, 150m→16, 300m→15, 500m→14, 700m→13, 1km→13,
+  // 3km→11, 5km→11, 10km→10.
+  const z = Math.log2(156543 / (km * 20));
+  return Math.max(10, Math.min(18, Math.round(z)));
 }
 
 function radiusGeoJson(lat: number, lng: number, radiusKm: number) {
@@ -75,6 +82,17 @@ function radiusGeoJson(lat: number, lng: number, radiusKm: number) {
   };
 }
 
+// Khoảng cách Haversine (km) giữa 2 toạ độ — để ẩn pin nằm ngoài bán kính lọc.
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 export default function MapView({
   center,
   userLoc,
@@ -83,6 +101,7 @@ export default function MapView({
   highlightId,
   radiusKm,
   onBuy,
+  onStorePick,
   lang = "vi",
 }: {
   center: [number, number];
@@ -92,14 +111,20 @@ export default function MapView({
   highlightId?: string | null;
   radiusKm?: number | null;
   onBuy?: (store: Store) => void;
+  /** Bấm "Xem sản phẩm cửa hàng" trong popup pin → mở danh sách sản phẩm của cửa hàng đó. */
+  onStorePick?: (store: Store) => void;
   lang?: Lang;
 }) {
   const t = (vi: string) => tr(lang, vi);
   const mapRef = useRef<MapRef>(null);
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
+  const [portalPos, setPortalPos] = useState<{ x: number; y: number; anchor: "bottom" | "top" } | null>(null);
   const [poiPopup, setPoiPopup] = useState<PoiPopup | null>(null);
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [legendOpen, setLegendOpen] = useState(true);
+  // Chain bị ẨN khỏi map (user bấm vào dòng chain trong legend để toggle).
+  // Khi legendOpen=false → coi như tất cả chain bị ẩn (pin biến mất theo).
+  const [hiddenChains, setHiddenChains] = useState<Set<Chain>>(new Set());
   // Lưu filter gốc của từng POI layer để combine sau
   const origPoiFilters = useRef<Record<string, unknown>>({});
 
@@ -112,13 +137,14 @@ export default function MapView({
 
   // initialViewState CHỈ áp 1 lần lúc mount → khi đổi vị trí (vd search địa chỉ mới, kể cả
   // nước ngoài như Paris), prop center đổi nhưng map không tự nhảy. Effect này bay map tới
-  // center mới mỗi khi nó đổi.
+  // center mới mỗi khi nó đổi. Khi BỎ filter (radiusKm=null) → quay về zoom default 13 để
+  // sync với chip "Bỏ giới hạn", không kẹt lại ở zoom cao của bán kính nhỏ trước đó.
   const [centerLat, centerLng] = center;
   useEffect(() => {
     if (!styleLoaded || !mapRef.current) return;
     mapRef.current.flyTo({
       center: [centerLng, centerLat],
-      zoom: zoomForRadius(radiusKm) ?? mapRef.current.getZoom(),
+      zoom: zoomForRadius(radiusKm) ?? 13,
       duration: 600,
     });
   }, [centerLat, centerLng, radiusKm, styleLoaded]);
@@ -147,10 +173,31 @@ export default function MapView({
     });
   }, [radiusKm, userLoc, styleLoaded]);
 
+  // Đếm số cửa hàng theo từng chain (để hiển thị "BHX (12)" trong chú thích).
+  // Dùng object thay Map vì identifier `Map` trùng với react-map-gl/maplibre's Map.
+  // Đang lọc theo bán kính → chỉ giữ pin nằm TRONG vòng tròn (ngoài bán kính ẩn hẳn).
+  const radiusMarkers =
+    radiusKm && userLoc
+      ? markers.filter(
+          (m) =>
+            m.store.lat != null &&
+            m.store.lng != null &&
+            haversineKm(userLoc.lat, userLoc.lng, m.store.lat, m.store.lng) <= radiusKm,
+        )
+      : markers;
+
   const chainKeys: Chain[] = [];
-  for (const m of markers) {
+  const chainCounts: Record<string, number> = {};
+  for (const m of radiusMarkers) {
+    if (m.store.lat == null || m.store.lng == null) continue;
     if (!chainKeys.includes(m.store.chain)) chainKeys.push(m.store.chain);
+    chainCounts[m.store.chain] = (chainCounts[m.store.chain] ?? 0) + 1;
   }
+  // Khi legend đóng → ẩn TẤT CẢ pin (user "tắt danh sách trên bản đồ").
+  // Khi legend mở → chỉ ẩn các chain có trong hiddenChains.
+  const visibleMarkers = legendOpen
+    ? radiusMarkers.filter((m) => !hiddenChains.has(m.store.chain))
+    : [];
 
   const handleMapClick = useCallback((e: MapLayerMouseEvent) => {
     if (!mapRef.current) return;
@@ -261,7 +308,7 @@ export default function MapView({
           </Marker>
         )}
 
-        {markers
+        {visibleMarkers
           .filter((m) => m.store.lat != null && m.store.lng != null)
           .map((m) => (
             <Marker
@@ -271,6 +318,12 @@ export default function MapView({
               anchor="bottom"
               onClick={(e) => {
                 e.originalEvent.stopPropagation();
+                if (mapRef.current) {
+                  const pt = mapRef.current.project([m.store.lng as number, m.store.lat as number]);
+                  const rect = mapRef.current.getContainer().getBoundingClientRect();
+                  const anchor = pt.y < rect.height * 0.45 ? "top" : "bottom";
+                  setPortalPos({ x: rect.left + pt.x, y: rect.top + pt.y, anchor });
+                }
                 setSelectedStore(m);
                 setPoiPopup(null);
               }}
@@ -280,8 +333,10 @@ export default function MapView({
                   __html: storeIconHtml(
                     chainColor(m.store.chain),
                     !!m.cheapest,
+                    !!m.nearest,
                     m.store.id === highlightId,
-                    t("RẺ NHẤT")
+                    t("RẺ NHẤT"),
+                    t("GẦN NHẤT")
                   ),
                 }}
                 style={{ cursor: "pointer" }}
@@ -289,86 +344,45 @@ export default function MapView({
             </Marker>
           ))}
 
-        {selectedStore && selectedStore.store.lat != null && selectedStore.store.lng != null && (
-          <Popup
-            longitude={selectedStore.store.lng as number}
-            latitude={selectedStore.store.lat as number}
-            anchor="bottom"
-            offset={[0, -32] as [number, number]}
-            onClose={() => setSelectedStore(null)}
-            closeButton
-            closeOnClick={false}
-          >
-            <div style={{ minWidth: 160, fontFamily: "system-ui,sans-serif" }}>
-              <div style={{ fontWeight: 700 }}>{chainLabel(selectedStore.store.chain)}</div>
-              <div>{selectedStore.store.name}</div>
-              <div style={{ color: "#666", fontSize: 12 }}>{selectedStore.store.address}</div>
+        {selectedStore && portalPos && typeof document !== "undefined" && createPortal(
+          <div style={{ position: "fixed", left: portalPos.x, top: portalPos.anchor === "bottom" ? portalPos.y - 46 : portalPos.y + 20, transform: "translateX(-50%)" + (portalPos.anchor === "bottom" ? " translateY(-100%)" : ""), zIndex: 9999, pointerEvents: "auto" }}>
+            {/* Arrow tip */}
+            {portalPos.anchor === "bottom" && (
+              <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #fff", filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.1))" }} />
+            )}
+            {portalPos.anchor === "top" && (
+              <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderBottom: "8px solid #fff", filter: "drop-shadow(0 -2px 2px rgba(0,0,0,0.1))" }} />
+            )}
+            <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)", padding: "10px 32px 10px 10px", width: 190, fontFamily: "system-ui,sans-serif", position: "relative", fontSize: 12 }}>
+              <button onClick={() => { setSelectedStore(null); setPortalPos(null); }} style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 999, background: "#f1f5f9", border: "none", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", padding: 0 }}>×</button>
+              <div style={{ fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{chainLabel(selectedStore.store.chain)}</div>
+              <div style={{ fontSize: 11, color: "#444", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 1 }}>{selectedStore.store.name}</div>
               {selectedStore.price != null && (
-                <div style={{ marginTop: 4, fontWeight: 700, color: selectedStore.cheapest ? "#16a34a" : "#111" }}>
-                  {selectedStore.inStock
-                    ? formatMoney(selectedStore.price, storeCurrency(selectedStore.store.id))
-                    : t("Hết hàng")}
-                  {selectedStore.cheapest && selectedStore.inStock ? ` · ${t("Rẻ nhất")}` : ""}
+                <div style={{ marginTop: 3, fontWeight: 700, fontSize: 12, color: selectedStore.cheapest ? "#16a34a" : "#111" }}>
+                  {selectedStore.inStock ? formatMoney(selectedStore.price, storeCurrency(selectedStore.store.id)) : t("Hết hàng")}
                 </div>
               )}
-              <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1${userLoc ? `&origin=${userLoc.lat},${userLoc.lng}` : ""}&destination=${selectedStore.store.lat},${selectedStore.store.lng}&travelmode=driving`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 5,
-                    background: "#2563eb",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "7px 10px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    textDecoration: "none",
-                  }}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="3 11 22 2 13 21 11 13 3 11" />
-                  </svg>
+              <div style={{ marginTop: 6, display: "flex", gap: 5 }}>
+                {onStorePick && (
+                  <button type="button" onClick={() => { onStorePick(selectedStore.store); setSelectedStore(null); setPortalPos(null); }} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#0f172a", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" /><path d="M3 6h18" /><path d="M16 10a4 4 0 0 1-8 0" /></svg>
+                    {t("Sản phẩm")}
+                  </button>
+                )}
+                <a href={`https://www.google.com/maps/dir/?api=1${userLoc ? `&origin=${userLoc.lat},${userLoc.lng}` : ""}&destination=${selectedStore.store.lat},${selectedStore.store.lng}&travelmode=driving`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11" /></svg>
                   {t("Chỉ đường")}
                 </a>
                 {onBuy && (
-                  <button
-                    type="button"
-                    onClick={() => onBuy(selectedStore.store)}
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: 5,
-                      background: "#059669",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 8,
-                      padding: "7px 10px",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="9" cy="21" r="1" />
-                      <circle cx="20" cy="21" r="1" />
-                      <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                    </svg>
-                    {t("Vào mua")}
+                  <button type="button" onClick={() => onBuy(selectedStore.store)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#059669", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
+                    {t("Mua")}
                   </button>
                 )}
               </div>
             </div>
-          </Popup>
+          </div>,
+          document.body
         )}
 
 
@@ -376,10 +390,11 @@ export default function MapView({
           <Popup
             longitude={poiPopup.lng}
             latitude={poiPopup.lat}
-            anchor="bottom"
+            offset={20}
             onClose={() => setPoiPopup(null)}
             closeButton
             closeOnClick={false}
+            maxWidth="280px"
           >
             <div style={{ minWidth: 150, fontFamily: "system-ui,sans-serif" }}>
               <div style={{ fontWeight: 700, fontSize: 13 }}>{poiPopup.name}</div>
@@ -492,16 +507,46 @@ export default function MapView({
         </div>
         {chainKeys.length > 0 && (
           <div style={{ marginTop: 2, marginBottom: 2 }}>
-            <div style={{ color: "#64748b", fontSize: 10 }}>{t("Cửa hàng (theo màu):")}</div>
-            {chainKeys.map((c) => (
-              <div key={c} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width="11" height="13" viewBox="0 0 24 24" style={{ display: "block" }}>
-                  <path fill={chainColor(c)} stroke="#fff" strokeWidth="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" />
-                  <circle cx="12" cy="9" r="2.6" fill="#fff" />
-                </svg>
-                {chainLabel(c)}
-              </div>
-            ))}
+            <div style={{ color: "#64748b", fontSize: 10 }}>{t("Cửa hàng (bấm để bật/tắt):")}</div>
+            {chainKeys.map((c) => {
+              const hidden = hiddenChains.has(c);
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() =>
+                    setHiddenChains((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(c)) next.delete(c);
+                      else next.add(c);
+                      return next;
+                    })
+                  }
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    width: "100%",
+                    border: "none",
+                    background: "transparent",
+                    padding: "1px 0",
+                    cursor: "pointer",
+                    opacity: hidden ? 0.4 : 1,
+                    color: hidden ? "#94a3b8" : "#334155",
+                    textDecoration: hidden ? "line-through" : "none",
+                    fontSize: 11,
+                  }}
+                  title={hidden ? t("Bật hiển thị {label}").replace("{label}", chainLabel(c)) : t("Ẩn {label}").replace("{label}", chainLabel(c))}
+                >
+                  <svg width="11" height="13" viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
+                    <path fill={chainColor(c)} stroke="#fff" strokeWidth="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" />
+                    <circle cx="12" cy="9" r="2.6" fill="#fff" />
+                  </svg>
+                  <span style={{ flex: 1, textAlign: "left" }}>{chainLabel(c)}</span>
+                  <span style={{ color: "#94a3b8", fontSize: 10 }}>({chainCounts[c] ?? 0})</span>
+                </button>
+              );
+            })}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -509,6 +554,12 @@ export default function MapView({
             {t("RẺ NHẤT")}
           </span>
           {t("Nơi bán giá thấp nhất")}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ background: "#3b82f6", color: "#fff", fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 5 }}>
+            {t("GẦN NHẤT")}
+          </span>
+          {t("Cửa hàng gần bạn nhất")}
         </div>
       </div>
       ) : (

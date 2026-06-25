@@ -251,12 +251,13 @@ export default function OrderAgentModal({
 
   return (
     <div
-      className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
+        className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl ring-1 ring-white/60 bg-white/85 backdrop-blur-2xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        style={{ WebkitBackdropFilter: "blur(32px)" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">

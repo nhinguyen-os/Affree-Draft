@@ -37,6 +37,26 @@ export function chainLabel(chain: Chain): string {
   return SOURCE_META[chain]?.label ?? chain;
 }
 
+/** Slugify đơn giản (không dấu, [a-z0-9]) — dùng cục bộ ở đây để tránh phụ thuộc lib/slug. */
+function chainSlugify(s: string): string {
+  return (s ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/** Tìm chain (vd "astrabean") từ slug URL — match cả KEY và label trong SOURCE_META. */
+export function findChainBySlug(slug: string): Chain | null {
+  const s = chainSlugify(slug);
+  if (!s) return null;
+  for (const [key, meta] of Object.entries(SOURCE_META)) {
+    if (chainSlugify(key) === s || chainSlugify(meta.label) === s) return key as Chain;
+  }
+  return null;
+}
+
 /** Màu nhận diện của nguồn, có fallback xám. */
 export function chainColor(chain: Chain): string {
   return SOURCE_META[chain]?.color ?? DEFAULT_COLOR;

@@ -15,19 +15,38 @@ import type { ProductGroup, PriorityProfile, Sponsor } from "./types";
 // Mặc định đọc từ folder Affree mới:
 //  - tệp            → sheet "Tệp" tách riêng (export CSV).
 //  - ưu tiên hiển thị → tab cùng tên trong bản copy tổng "Lịch sử mua hàng" (gviz theo tên).
+// "Tệp" (sheet 1AJ2, gid=0) — cấu hình TOP TILES "Dịch vụ quanh đây", bao gồm các tile có
+// link ngoài (B2B, Đàn ông đích thực, Định giá, Xây dựng…). KHÔNG dùng cho bottom sections.
 export const TEP_SHEET_CSV_URL =
   process.env.TEP_SHEET_CSV_URL ||
   "https://docs.google.com/spreadsheets/d/1AJ2AyYnQdUF1-5UzrpK5Eo68S3x833l74r6l0sKdahY/export?format=csv&gid=0";
+
+// "DanhMuc" (sheet 1sZTv, gid=1750024373) — cấu hình BOTTOM SECTIONS (Đồ ăn / Worldcup / Tươi
+// xanh nhanh ngon / Hàng thiết yếu / Hè-Đẹp-Khỏe…). Cột tối thiểu: ten · emoji. Tách riêng
+// khỏi top tiles để bottom sections do anh kiểm soát từ sheet 1sZTv mà không lẫn link ngoài.
+export const DANHMUC_SHEET_CSV_URL =
+  process.env.DANHMUC_SHEET_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=1750024373";
 export const PRIORITY_SHEET_CSV_URL =
   process.env.PRIORITY_SHEET_CSV_URL ||
   `https://docs.google.com/spreadsheets/d/1D5vs9DnJnpWd6b2tivGuA8JPfMjPC3TlRbDFN-LDXLc/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
     "ưu tiên hiển thị",
   )}`;
-// Nhãn tài trợ → tab "Nhãn tài trợ" (gid=1306119583) trong sheet cấu hình 1sZTv. Cột: tên · link · logo.
+// Nhãn tài trợ → tab "Nhãn tài trợ" (gid=1306119583) trong sheet cấu hình 1sZTv.
+// Cột: tên · link · logo · loại · hiển thị
+//   - loại: "tài trợ" → badge vàng "Tài trợ" (nhãn của nhà mình); "phổ biến" hoặc trống → badge xám "Phổ biến".
+//   - hiển thị: "0"/"false"/"ẩn"/"không" → ẩn dòng đó khỏi UI.
 // Đọc qua export CSV trực tiếp (không qua gviz). Sheet phải để chia sẻ "Bất kỳ ai có link → Người xem".
 export const SPONSOR_SHEET_CSV_URL =
   process.env.SPONSOR_SHEET_CSV_URL ||
   "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=1306119583";
+
+// Tab "SanPham" (gid=0) trong sheet 1sZTv — OVERRIDE LAYER chỉ cho cột danh_muc theo product_id.
+// Catalog chính (giá/store/brand) vẫn đọc từ sheet cũ; tab này chỉ dùng để gán/đổi tệp cho từng SKU
+// mà không phải sửa sheet catalog gốc. Cột tối thiểu: danh_muc · product_id.
+export const SANPHAM_OVERRIDE_CSV_URL =
+  process.env.SANPHAM_OVERRIDE_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=0";
 
 /** Tách CSV → mảng hàng × cột (hỗ trợ field có dấu " và xuống dòng bên trong). */
 function splitCsv(csv: string): string[][] {
@@ -171,9 +190,18 @@ export function parseSponsorCsv(csv: string): Sponsor[] {
     link: col("link", "url"),
     logo: col("logo", "ảnh", "anh", "image", "icon"),
     show: col("hiển thị", "hien thi", "hien_thi", "hienthi", "show"),
+    kind: col("loại", "loai", "kind", "type"),
   };
   const nameIdx = ci.name >= 0 ? ci.name : 0;
   const HIDE = new Set(["0", "false", "no", "off", "ẩn", "an", "không", "khong"]);
+
+  const parseKind = (raw: string): "sponsor" | "popular" | undefined => {
+    const v = raw.trim().toLowerCase();
+    if (!v) return undefined;
+    if (/(tài trợ|tai tro|sponsor|own|nhà mình|nha minh)/i.test(v)) return "sponsor";
+    if (/(phổ biến|pho bien|popular)/i.test(v)) return "popular";
+    return undefined;
+  };
 
   const out: Sponsor[] = [];
   const seen = new Set<string>();
@@ -187,18 +215,58 @@ export function parseSponsorCsv(csv: string): Sponsor[] {
       name,
       link: ci.link >= 0 ? (r[ci.link] || "").trim() || undefined : undefined,
       logo: ci.logo >= 0 ? (r[ci.logo] || "").trim() || undefined : undefined,
+      kind: ci.kind >= 0 ? parseKind(r[ci.kind] || "") : undefined,
     });
   }
   return out;
 }
 
 /**
+ * Parse CSV tab "SanPham" override → Map<product_id, danh_muc[]>.
+ * Cột tối thiểu: danh_muc (hoặc "tệp"/"tep"/"nhóm") + product_id.
+ * Mỗi product_id có thể xuất hiện NHIỀU dòng với các danh_muc khác nhau → gom thành mảng.
+ * Dùng để OVERRIDE field `group`/`groups` của Product mà không phải sửa sheet catalog gốc.
+ */
+export function parseSanPhamOverrideCsv(csv: string): Map<string, string[]> {
+  const rows = splitCsv(csv).filter((r) => r.some((c) => c.trim() !== ""));
+  const out = new Map<string, string[]>();
+  if (rows.length < 2) return out;
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...keys: string[]) => {
+    for (let i = 0; i < header.length; i++) {
+      if (keys.some((k) => header[i].includes(k))) return i;
+    }
+    return -1;
+  };
+  const ci = {
+    pid: col("product_id", "productid", "product id", "mã", "ma_sp", "id"),
+    group: col("danh_muc", "danh mục", "tệp", "tep", "nhóm", "nhom", "group"),
+  };
+  if (ci.pid < 0 || ci.group < 0) return out;
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const pid = (r[ci.pid] || "").trim();
+    const g = (r[ci.group] || "").trim();
+    if (!pid || !g) continue;
+    if (!out.has(pid)) out.set(pid, []);
+    const arr = out.get(pid)!;
+    if (!arr.includes(g)) arr.push(g);
+  }
+  return out;
+}
+
+/**
  * Tải + parse các tab cấu hình hiển thị. Trả về object có thể rỗng cho từng phần
- * (groups/priorities/sponsors = undefined nếu lỗi/rỗng) để caller fallback an toàn.
+ * (groups/priorities/sponsors/sanPhamGroupOverrides/danhMucGroups = undefined nếu lỗi/rỗng).
+ *
+ * - `groups` = cấu hình TOP TILES "Dịch vụ quanh đây" (sheet 1AJ2/gid=0) — gồm các tile có link ngoài.
+ * - `danhMucGroups` = cấu hình BOTTOM SECTIONS (sheet 1sZTv/DanhMuc) — chỉ ten + emoji, đơn giản.
  */
 export async function fetchSheetGroups(
   revalidate = 300,
-): Promise<{ groups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[] }> {
+): Promise<{ groups?: ProductGroup[]; danhMucGroups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[]; sanPhamGroupOverrides?: Map<string, string[]> }> {
   const fetchCsv = async (url: string): Promise<string | null> => {
     try {
       const res = await fetch(url, { next: { revalidate } });
@@ -209,19 +277,25 @@ export async function fetchSheetGroups(
     }
   };
 
-  const [tepCsv, prioCsv, sponsorCsv] = await Promise.all([
+  const [tepCsv, danhMucCsv, prioCsv, sponsorCsv, sanphamCsv] = await Promise.all([
     fetchCsv(TEP_SHEET_CSV_URL),
+    fetchCsv(DANHMUC_SHEET_CSV_URL),
     fetchCsv(PRIORITY_SHEET_CSV_URL),
     fetchCsv(SPONSOR_SHEET_CSV_URL),
+    fetchCsv(SANPHAM_OVERRIDE_CSV_URL),
   ]);
 
   const groups = tepCsv ? parseTepCsv(tepCsv) : [];
+  const danhMucGroups = danhMucCsv ? parseTepCsv(danhMucCsv) : [];
   const priorities = prioCsv ? parsePriorityCsv(prioCsv) : [];
   const sponsors = sponsorCsv ? parseSponsorCsv(sponsorCsv) : [];
+  const sanPhamGroupOverrides = sanphamCsv ? parseSanPhamOverrideCsv(sanphamCsv) : new Map();
 
   return {
     groups: groups.length ? groups : undefined,
+    danhMucGroups: danhMucGroups.length ? danhMucGroups : undefined,
     priorities: priorities.length ? priorities : undefined,
     sponsors: sponsors.length ? sponsors : undefined,
+    sanPhamGroupOverrides: sanPhamGroupOverrides.size ? sanPhamGroupOverrides : undefined,
   };
 }

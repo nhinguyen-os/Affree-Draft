@@ -2,9 +2,10 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store } from "@/lib/types";
-import { chainColor, chainLabel, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
+import { chainColor, chainLabel, findChainBySlug, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
 import {
   cheapestInStock,
   directionsUrl,
@@ -17,8 +18,9 @@ import { addPurchase, getPurchases } from "@/lib/purchases";
 import { addAlert, getAlertForProduct, removeAlert } from "@/lib/alerts";
 import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
-import { APP_VERSION, DONE, ROADMAP } from "@/lib/version";
+import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
 import { type Lang, langForCountry, tr } from "@/lib/i18n";
+import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
 import { ChainBadge } from "@/components/ChainBadge";
 import { Logo } from "@/components/Logo";
 import { QtyInput } from "@/components/QtyInput";
@@ -372,6 +374,23 @@ function formatCheckedAt(raw: string): string {
   return `${timeStr} ngày ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 }
 
+/**
+ * Suy quốc gia của 1 cửa hàng vật lý từ lat/lng (bbox xấp xỉ). Online store → undefined
+ * (hiển thị ở mọi quốc gia). Trả về country code lowercase ("vn"/"us"/"ca"…) hoặc undefined.
+ */
+function storeCountryCode(store: { lat?: number; lng?: number; online?: boolean } | undefined): string | undefined {
+  if (!store || store.online) return undefined;
+  const { lat, lng } = store;
+  if (lat == null || lng == null) return undefined;
+  // VN: ~8–24°N, 102–110°E
+  if (lat >= 8 && lat <= 24 && lng >= 102 && lng <= 110) return "vn";
+  // US continental: ~24–50°N, -125 đến -66°W
+  if (lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66) return "us";
+  // Canada: ~41–84°N, -141 đến -52°W
+  if (lat >= 41 && lat <= 84 && lng >= -141 && lng <= -52) return "ca";
+  return undefined;
+}
+
 function imageSource(url?: string): string | null {
   if (!url) return null;
   try {
@@ -415,7 +434,7 @@ function ProductThumb({
         style={fill ? undefined : { width: size, height: size }}
         className={
           fill
-            ? "h-full w-full rounded-lg object-contain transition duration-300 group-hover:scale-110 group-hover:drop-shadow-xl"
+            ? "h-full w-full rounded-lg object-contain"
             : `shrink-0 rounded-lg ${contain ? "object-contain" : "border border-slate-100 object-cover"}`
         }
       />
@@ -504,36 +523,37 @@ function LocationPanel({
   t: (vi: string, vars?: Record<string, string | number>) => string;
 }) {
   return (
-    <>
+    <div
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={onClose}
+    >
       <div
-        className="fixed inset-0 z-30 bg-slate-900/30 sm:bg-transparent"
-        onClick={onClose}
-      />
-      <div className="fixed inset-x-0 bottom-0 z-40 max-h-[85vh] overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-2 sm:max-h-none sm:w-[min(20rem,calc(100vw-2rem))] sm:rounded-2xl sm:p-3 sm:pb-3 sm:shadow-xl">
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 sm:hidden" />
-        <div className="mb-2 flex items-center justify-between sm:hidden">
-          <span className="text-sm font-semibold text-slate-800">{t("Chọn vị trí")}</span>
+        className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-base font-bold text-slate-800">{t("Chọn vị trí")}</span>
           <button
             onClick={onClose}
             aria-label={t("Đóng")}
-            className="rounded-lg px-2 py-1 text-lg leading-none text-slate-400 transition hover:bg-slate-100"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
           >
-            ✕
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
         <button
           onClick={locate}
           disabled={geoState === "locating"}
-          className="flex w-full items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-left transition hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-60"
+          className="flex w-full items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-left transition hover:border-emerald-400 hover:bg-emerald-100 disabled:opacity-60"
         >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-emerald-100 text-emerald-700">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-600 text-white text-lg">
             📍
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold text-slate-800">
+            <span className="block text-sm font-semibold text-emerald-800">
               {geoState === "locating" ? t("Đang định vị…") : t("Dùng vị trí hiện tại")}
             </span>
-            <span className="block text-xs text-slate-500">{t("Định vị GPS trên thiết bị của bạn")}</span>
+            <span className="block text-xs text-emerald-700/80">{t("Định vị GPS trên thiết bị của bạn")}</span>
           </span>
         </button>
 
@@ -610,7 +630,7 @@ function LocationPanel({
           </p>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -629,6 +649,7 @@ export default function Home() {
   const [geoDismissed, setGeoDismissed] = useState(false);
   const [locOpen, setLocOpen] = useState(false);
   const [verOpen, setVerOpen] = useState(false);
+  const [expandedVer, setExpandedVer] = useState<string | null>(null);
   const [addrQuery, setAddrQuery] = useState("");
   const [addrResults, setAddrResults] = useState<GeoResult[]>([]);
   const [addrSearching, setAddrSearching] = useState(false);
@@ -639,6 +660,13 @@ export default function Home() {
   // (category, từ dãy chip). Chip ngành hàng chỉ hiện những ngành thuộc tệp đang chọn.
   const [activeTep, setActiveTep] = useState<string | null>(null);
   const [activeCat, setActiveCat] = useState<string | null>(null);
+  // Filter theo nhãn hàng (brand). Set khi URL = /nhan/<brand> hoặc click logo nhãn tài trợ.
+  const [activeBrand, setActiveBrand] = useState<string | null>(null);
+  // Filter theo CHUỖI cửa hàng (chain, vd "astrabean"). Set khi URL = /<chain-slug>.
+  // Chỉ hiện sản phẩm có offer ở chuỗi này — như "trang cửa hàng" của 1 chuỗi.
+  const [activeChain, setActiveChain] = useState<string | null>(null);
+  // Cửa hàng đang xem sản phẩm (mở từ pin trên bản đồ).
+  const [storeProducts, setStoreProducts] = useState<Store | null>(null);
   // Ô dịch vụ vừa bấm — để làm nổi bật (highlight) khối được chọn.
   const [activeService, setActiveService] = useState<string | null>(null);
   // Lưới dịch vụ: cuộn ngang + nút mũi tên khi nhiều ô.
@@ -651,12 +679,14 @@ export default function Home() {
   const [selected, setSelected] = useState<Product | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("price");
   const [radiusKm, setRadiusKm] = useState<number | null>(null);
+  const [dealsRadiusKm, setDealsRadiusKm] = useState<number | null>(null);
   const [mobileView, setMobileView] = useState<MobileView>("list");
   // Bản đồ dưới thanh search: mặc định ẩn, tự mở khi đã có vị trí (định vị / nhập địa chỉ).
   const [mapOpen, setMapOpen] = useState(false);
   const [hoverStore, setHoverStore] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
   const [alertOpen, setAlertOpen] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
   const [alertPhone, setAlertPhone] = useState("");
   const [myAlert, setMyAlert] = useState<PriceAlert | null>(null);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
@@ -679,6 +709,8 @@ export default function Home() {
   // Giỏ hàng — mua nhiều sản phẩm từ nhiều cửa hàng cùng lúc.
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  // Increment mỗi khi addToCart → re-key icon/badge để restart animation.
+  const [cartBumpKey, setCartBumpKey] = useState(0);
   const [infoProduct, setInfoProduct] = useState<Product | null>(null);
 
   function addToCart(p: Product, offer?: RankedOffer) {
@@ -708,6 +740,22 @@ export default function Home() {
       }
       return [...prev, { product: p, offer: ranked, qty: 1 }];
     });
+    setCartBumpKey((k) => k + 1);
+  }
+
+  // "Mua cả túi": thêm mọi SP thành viên của túi vào giỏ (SP nào chưa có trong catalog thì bỏ qua).
+  function addTuiToCart(tui: import("@/lib/types").Tui) {
+    if (!catalog) return;
+    let added = 0;
+    for (const it of tui.items) {
+      const p = catalog.products.find((x) => x.id === it.productId);
+      if (p) { addToCart(p); added++; }
+    }
+    setCartOpen(true);
+    if (added < tui.items.length) {
+      setToast(t("Đã thêm {n}/{m} món của túi (vài món chưa có trong kho)", { n: added, m: tui.items.length }));
+      setTimeout(() => setToast(""), 3500);
+    }
   }
 
   function updateCartQty(productId: string, storeId: string, qty: number) {
@@ -843,11 +891,133 @@ export default function Home() {
     fetch("/api/catalog")
       .then((r) => r.json())
       .then((d) => {
-        setCatalog({ products: d.products, offers: d.offers, groups: d.groups, priorities: d.priorities, sponsors: d.sponsors });
+        setCatalog({ products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui });
         setSource(d.source);
       })
       .catch(() => setCatalog({ products: [], offers: [] }));
   }, []);
+
+  // URL → state (chạy 1 lần sau khi catalog nạp). Slug helpers ánh xạ tên-không-dấu về brand/cat/sản phẩm gốc.
+  const pathname = usePathname();
+  const router = useRouter();
+  const [urlSynced, setUrlSynced] = useState(false);
+  useEffect(() => {
+    if (!catalog || urlSynced) return;
+    const segs = (pathname || "/").split("/").filter(Boolean);
+    if (segs.length === 0) { setUrlSynced(true); return; }
+    if (segs[0] === "p" && segs[1]) {
+      const p = findProductBySlug(catalog, decodeURIComponent(segs[1]));
+      if (p) setSelected(p);
+    } else if (segs[0] === "nhan" && segs[1]) {
+      const raw = decodeURIComponent(segs[1]);
+      let brand = findBrandBySlug(catalog, raw);
+      // Sponsor (vd "Xmen") có thể không phải brand của bất kỳ sản phẩm nào — fallback theo
+      // catalog.sponsors để filter view vẫn mở được dù không có sản phẩm match.
+      if (!brand && catalog.sponsors) {
+        const sp = catalog.sponsors.find((s) => slugify(s.name) === slugify(raw));
+        if (sp) brand = sp.name;
+      }
+      if (brand) setActiveBrand(brand);
+      if (segs[2]) {
+        const cat = findCategoryBySlug(catalog, decodeURIComponent(segs[2]));
+        if (cat) setActiveCat(cat);
+      }
+    } else if (segs[0] === "nganh" && segs[1]) {
+      // /nganh/<slug> — slug có thể là TỆP (group, từ tab "tệp") hoặc CATEGORY (product.category).
+      // Ưu tiên tệp vì đó là cấp nhóm cha (Đồ ăn, Đồ uống, Trang sức…) thường được click từ tile.
+      const slug = decodeURIComponent(segs[1]);
+      const tep = findGroupBySlug(catalog, slug);
+      if (tep) {
+        setActiveTep(tep);
+      } else {
+        const cat = findCategoryBySlug(catalog, slug);
+        if (cat) setActiveCat(cat);
+      }
+    } else {
+      // Fallback URL ngắn (không prefix). Hỗ trợ 1–3 segment:
+      //   /<slug>                         → thử brand → tệp → category → product
+      //   /<tep>/<brand>                  → tệp + brand
+      //   /<tep>/<brand>/<cat>            → tệp + brand + category
+      // Mỗi segment tự slugify ở find helper nên URL có chữ hoa / có dấu vẫn match.
+      const decoded = segs.map((s) => decodeURIComponent(s));
+      if (decoded.length === 1) {
+        const slug = decoded[0];
+        // Thứ tự: CHAIN trước (vd /astrabean = trang chuỗi) → brand → tệp → category → product.
+        // Chain ưu tiên vì key chuỗi (astrabean/shopee/bhx…) là định danh cố định, ít trùng;
+        // nếu để brand match trước, một brand cùng tên (vd "Astra Bean") sẽ ăn trước và
+        // hiện 0 sản phẩm thay vì mở đúng trang chuỗi.
+        const chain = findChainBySlug(slug);
+        if (chain) {
+          setActiveChain(chain);
+        } else {
+          const brand = findBrandBySlug(catalog, slug);
+          if (brand) {
+            setActiveBrand(brand);
+          } else {
+            const tep = findGroupBySlug(catalog, slug);
+            if (tep) {
+              setActiveTep(tep);
+            } else {
+              const cat = findCategoryBySlug(catalog, slug);
+              if (cat) {
+                setActiveCat(cat);
+              } else {
+                const p = findProductBySlug(catalog, slug);
+                if (p) setSelected(p);
+              }
+            }
+          }
+        }
+      } else if (decoded.length >= 2) {
+        const tep = findGroupBySlug(catalog, decoded[0]);
+        const brand = findBrandBySlug(catalog, decoded[1]);
+        if (tep) setActiveTep(tep);
+        if (brand) setActiveBrand(brand);
+        if (decoded[2]) {
+          const cat = findCategoryBySlug(catalog, decoded[2]);
+          if (cat) setActiveCat(cat);
+        }
+      }
+    }
+    setUrlSynced(true);
+  }, [catalog, pathname, urlSynced]);
+
+  // state → URL. Sau khi đã sync ban đầu, mỗi khi selected/activeTep/activeBrand/activeCat đổi → URL mới.
+  // Hỗ trợ cả URL ngắn `/<slug>`: nếu pathname hiện tại đã là dạng ngắn HOẶC canonical
+  // tương ứng với state, KHÔNG rewrite — giữ nguyên cho user copy URL ngắn đẹp.
+  useEffect(() => {
+    if (!urlSynced) return;
+    let url = "/";
+    let shortUrl: string | null = null;
+    if (selected) {
+      const s = slugify(selected.id || selected.name);
+      url = `/p/${s}`;
+      shortUrl = `/${s}`;
+    } else if (activeTep && activeBrand && activeCat) {
+      // Combo 3 cấp chỉ có dạng ngắn /tep/brand/cat (không có canonical).
+      url = `/${slugify(activeTep)}/${slugify(activeBrand)}/${slugify(activeCat)}`;
+    } else if (activeTep && activeBrand) {
+      url = `/${slugify(activeTep)}/${slugify(activeBrand)}`;
+    } else if (activeBrand && activeCat) {
+      url = `/nhan/${slugify(activeBrand)}/${slugify(activeCat)}`;
+    } else if (activeBrand) {
+      const s = slugify(activeBrand);
+      url = `/nhan/${s}`;
+      shortUrl = `/${s}`;
+    } else if (activeTep) {
+      const s = slugify(activeTep);
+      url = `/nganh/${s}`;
+      shortUrl = `/${s}`;
+    } else if (activeCat) {
+      const s = slugify(activeCat);
+      url = `/nganh/${s}`;
+      shortUrl = `/${s}`;
+    } else if (activeChain) {
+      // Trang chuỗi: chỉ có dạng ngắn /<chain-slug>.
+      url = `/${slugify(activeChain)}`;
+    }
+    if (pathname !== url && pathname !== shortUrl) router.replace(url, { scroll: false });
+  }, [urlSynced, selected, activeTep, activeBrand, activeCat, activeChain, pathname, router]);
 
   // Nạp cửa hàng vật lý + toạ độ từ tab "stores" (Google Sheet). Lỗi → giữ STORES tĩnh.
   useEffect(() => {
@@ -893,6 +1063,39 @@ export default function Home() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [page]);
+
+  // Khoá cuộn nền khi có popup mở: giữ nguyên vị trí cuộn bằng position:fixed
+  // (chạy cả iOS Safari lẫn desktop) → lướt trong popup thì nền KHÔNG di chuyển.
+  const anyModalOpen =
+    locOpen || verOpen || alertOpen || contactOpen || cartOpen || !!infoProduct || !!buyProduct || !!buyOffer;
+  useEffect(() => {
+    if (!anyModalOpen) return;
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prev = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [anyModalOpen]);
 
   // Nút "lên đầu trang": chỉ hiện khi đã kéo xuống đủ xa.
   const [showTop, setShowTop] = useState(false);
@@ -1004,6 +1207,30 @@ export default function Home() {
     return m;
   }, [catalog]);
 
+  // Lọc sản phẩm theo QUỐC GIA của user:
+  //  - Sản phẩm có offer ở cửa hàng vật lý trong cùng country → hiện.
+  //  - Sản phẩm có offer ở nguồn online (store.online=true) → hiện ở MỌI country.
+  //  - User chưa có country (chưa định vị) → hiện tất cả (không lọc).
+  const visibleProductIds = useMemo(() => {
+    if (!catalog) return null as Set<string> | null;
+    const cc = (country || "").toLowerCase();
+    if (!cc) return null; // chưa biết country → không lọc
+    const ok = new Set<string>();
+    for (const o of catalog.offers) {
+      const st = getStore(o.storeId);
+      // Store không tra được → coi như cross-country (online), hiện ở mọi quốc gia.
+      if (!st) { ok.add(o.productId); continue; }
+      const sc = storeCountryCode(st);
+      // Hiện nếu: nguồn online, không xác định được country (bbox), hoặc trùng country user.
+      if (st.online || sc === undefined || sc === cc) ok.add(o.productId);
+      // Chỉ FILTER nếu store có country xác định KHÁC user — nhưng product vẫn hiện nếu
+      // 1 offer khác của nó qua được điều kiện trên.
+    }
+    return ok;
+  }, [catalog, country]);
+
+  const passCountry = useCallback((id: string) => !visibleProductIds || visibleProductIds.has(id), [visibleProductIds]);
+
   // Giá trung bình (min/sản phẩm) theo từng nhóm danh mục → để xác định "giá hời" = rẻ hơn mặt bằng.
   const groupAvgMin = useMemo(() => {
     const sum = new Map<string, { total: number; n: number }>();
@@ -1025,11 +1252,25 @@ export default function Home() {
   const matches = useMemo(() => {
     if (!catalog) return [];
     let list = searchProductsRanked(catalog, deferredQuery);
+    // Lọc theo COUNTRY (cửa hàng cùng quốc gia hoặc nguồn online).
+    // Khi đang mở "trang cửa hàng" của 1 CHUỖI (vd /astrabean) → KHÔNG lọc country: user
+    // muốn xem chuỗi đó dù chuỗi nằm ở quốc gia khác mình.
+    if (!activeChain) list = list.filter((p) => passCountry(p.id));
     // Lọc 2 cấp lồng nhau: trước theo TỆP (group), rồi theo NGÀNH HÀNG (category) bên trong.
-    if (activeTep) list = list.filter((p) => categoryGroup(p) === activeTep);
+    if (activeTep) list = list.filter((p) => (p.groups && p.groups.includes(activeTep)) || categoryGroup(p) === activeTep);
     if (activeCat) list = list.filter((p) => (p.category || "").trim() === activeCat);
+    if (activeBrand) list = list.filter((p) => (p.brand || "").trim() === activeBrand);
+    if (activeChain) {
+      // Sản phẩm thuộc CHUỖI nếu có offer ở 1 cửa hàng có .chain === activeChain.
+      const idsAtChain = new Set<string>();
+      for (const o of catalog.offers) {
+        const st = getStore(o.storeId);
+        if (st?.chain === activeChain) idsAtChain.add(o.productId);
+      }
+      list = list.filter((p) => idsAtChain.has(p.id));
+    }
     return list;
-  }, [catalog, deferredQuery, activeTep, activeCat]);
+  }, [catalog, deferredQuery, activeTep, activeCat, activeBrand, activeChain, passCountry]);
 
   // % tiết kiệm nếu mua đúng chỗ rẻ nhất (chênh lệch giữa các điểm bán).
   const dealScore = (id: string) => {
@@ -1050,9 +1291,17 @@ export default function Home() {
     // không tìm → quét toàn bộ catalog như cũ.
     const base = deferredQuery.trim() ? matches : catalog.products;
     for (const p of base) {
+      if (!passCountry(p.id)) continue;
       const s = priceStats.get(p.id);
-      if (!s || s.outOfStock || s.stores < 2 || s.max <= s.min) continue;
-      const disc = (s.max - s.min) / s.max;
+      if (!s || s.outOfStock) continue;
+      // Ưu tiên % khuyến mãi từ SHEET (p.discountPct + p.listedPrice) — áp dụng cho cả
+      // sản phẩm 1 nơi bán. Fallback so giá max/min giữa nhiều nơi nếu sheet không khai báo.
+      // CHỈ nhận sp có discountPct khai báo tường minh trong sheet "giam_gia" (1sZTv) —
+      // không tự suy từ max/min giữa nơi bán. Sheet là single source of truth cho mục này.
+      if (!p.discountPct || p.discountPct <= 0) continue;
+      const disc = p.discountPct;
+      const now = s.min;
+      const was = p.listedPrice && p.listedPrice > now ? p.listedPrice : Math.round(now / (1 - disc));
       if (disc < 0.05) continue;
       // Điểm bán còn hàng ở GIÁ THẤP NHẤT (min). Nếu đã định vị → chọn nơi giá thấp nhất
       // GẦN nhất; ghi lại khoảng cách để vừa "ưu tiên giá thấp nhất" vừa "ưu tiên gần nhất".
@@ -1070,11 +1319,12 @@ export default function Home() {
           bestKm = km;
         }
       }
+      if (userLoc && dealsRadiusKm != null && bestKm != null && bestKm > dealsRadiusKm) continue;
       rows.push({
         product: p,
-        now: s.min,
-        was: s.max,
-        save: s.max - s.min,
+        now,
+        was,
+        save: was - now,
         disc,
         currency: s.currency,
         storeName: bestStore?.name ?? "",
@@ -1090,9 +1340,36 @@ export default function Home() {
     } else {
       rows.sort((a, b) => b.disc - a.disc);
     }
-    return rows.slice(0, 16);
+    // Phân bổ đều cho các TỆP (group): mỗi vòng nhặt 1 sản phẩm có % khuyến mãi cao nhất
+    // từ mỗi tệp → lặp tới khi đủ 20 hoặc hết. Nhờ vậy mỗi tệp (Đồ ăn, Đồ uống, Nhà cửa,
+    // Chăm sóc cá nhân, Trang sức…) đều có ít nhất 1 đại diện thay vì 1 tệp lấn át hết.
+    const byCategory = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const tep = categoryGroup(r.product) || "Khác";
+      if (!byCategory.has(tep)) byCategory.set(tep, []);
+      byCategory.get(tep)!.push(r);
+    }
+    const cats = [...byCategory.keys()];
+    const balanced: typeof rows = [];
+    let round = 0;
+    while (balanced.length < 20) {
+      let added = false;
+      for (const cat of cats) {
+        const list = byCategory.get(cat)!;
+        if (round < list.length) {
+          balanced.push(list[round]);
+          added = true;
+          if (balanced.length >= 20) break;
+        }
+      }
+      if (!added) break;
+      round++;
+    }
+    // Sau khi đã đảm bảo phân bổ đều, sắp lại theo % giảm giá LỚN NHẤT trước.
+    balanced.sort((a, b) => b.disc - a.disc);
+    return balanced;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog, priceStats, userLoc, storesReady, matches, deferredQuery]);
+  }, [catalog, priceStats, userLoc, storesReady, matches, deferredQuery, dealsRadiusKm]);
 
   // Dãy chip lọc theo NGÀNH HÀNG (cột "category" trong sheet, vd "Gia vị", "Nước lau sàn"…).
   // Nếu đã chọn TỆP ở trên → chỉ hiện ngành hàng THUỘC tệp đó; chưa chọn tệp → hiện tất cả.
@@ -1100,8 +1377,8 @@ export default function Home() {
   const catChips = useMemo(() => {
     if (!catalog) return [] as string[];
     const base = activeTep
-      ? catalog.products.filter((p) => categoryGroup(p) === activeTep)
-      : catalog.products;
+      ? catalog.products.filter((p) => categoryGroup(p) === activeTep && passCountry(p.id))
+      : catalog.products.filter((p) => passCountry(p.id));
     const count = new Map<string, number>();
     for (const p of base) {
       const c = (p.category || "").trim();
@@ -1109,7 +1386,7 @@ export default function Home() {
       count.set(c, (count.get(c) ?? 0) + 1);
     }
     return [...count.keys()].sort((a, b) => (count.get(b) ?? 0) - (count.get(a) ?? 0));
-  }, [catalog, activeTep]);
+  }, [catalog, activeTep, passCountry]);
 
   // % rẻ hơn mặt bằng cùng nhóm danh mục (giá hời).
   const cheapScore = (p: Product) => {
@@ -1131,6 +1408,7 @@ export default function Home() {
       : `${userLoc.lat.toFixed(2)},${userLoc.lng.toFixed(2)}`;
     const scored: { p: Product; score: number }[] = [];
     for (const p of catalog.products) {
+      if (!passCountry(p.id)) continue;
       const st = priceStats.get(p.id);
       if (!st || st.stores <= 0) continue;
       const realPop = (purchaseCounts[p.id] ?? 0) * 5 + (viewCounts[p.id] ?? 0);
@@ -1139,7 +1417,7 @@ export default function Home() {
     }
     scored.sort((a, b) => b.score - a.score);
     return scored.map((x) => x.p);
-  }, [catalog, userLoc, areaName, priceStats, purchaseCounts, viewCounts]);
+  }, [catalog, userLoc, areaName, priceStats, purchaseCounts, viewCounts, passCountry]);
 
   // Top sản phẩm "bán chạy" để gắn tag: theo khu vực nếu đã định vị, không thì theo phổ biến chung.
   const areaHotTopIds = useMemo(() => {
@@ -1147,13 +1425,13 @@ export default function Home() {
     if (!catalog) return new Set<string>();
     return new Set(
       [...catalog.products]
-        .filter((p) => (priceStats.get(p.id)?.stores ?? 0) > 0)
+        .filter((p) => passCountry(p.id) && (priceStats.get(p.id)?.stores ?? 0) > 0)
         .sort((a, b) => hotScore(b) - hotScore(a))
         .slice(0, 12)
         .map((p) => p.id)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userLoc, areaHot, catalog, priceStats, purchaseCounts, viewCounts]);
+  }, [userLoc, areaHot, catalog, priceStats, purchaseCounts, viewCounts, passCountry]);
 
   // Mỗi sản phẩm có những nguồn (chain) nào — dựa trên storeId của offer (mã nguồn, vd "THXL").
   // Dùng để xếp ưu tiên hiển thị theo chuỗi.
@@ -1283,7 +1561,7 @@ export default function Home() {
       const tags: { key: string; label: string; cls: string }[] = [];
       const d = dealScore(p.id);
       if (d >= 0.15)
-        tags.push({ key: "deal", label: t("Deal -{x}%", { x: Math.round(d * 100) }), cls: "bg-rose-600 text-white" });
+        tags.push({ key: "deal", label: t("-{x}%", { x: Math.round(d * 100) }), cls: "bg-rose-600 text-white" });
       const c = cheapScore(p);
       if (c >= 0.1) tags.push({ key: "cheap", label: t("Giá hời"), cls: "bg-emerald-600 text-white" });
       if (areaHotTopIds.has(p.id)) tags.push({ key: "hot", label: t("Bán chạy"), cls: "bg-amber-500 text-white" });
@@ -1300,25 +1578,40 @@ export default function Home() {
   );
 
   // Nhóm sản phẩm theo tệp — dùng cho layout section ở trang chủ (không search/filter).
+  // CHỈ hiển thị section khai báo trong tab DanhMuc của Google Sheet. Sản phẩm rơi vào
+  // tệp không có trong DanhMuc (vd "Khác" tự sinh do group trống/không match) → bị ẨN
+  // khỏi homepage để config là source of truth. Vẫn tìm/lọc được qua search.
   const groupSections = useMemo(() => {
     if (!catalog) return [] as { name: string; emoji?: string; products: Product[] }[];
     const byGroup = new Map<string, Product[]>();
     for (const p of orderedMatches) {
-      const g = categoryGroup(p) || "Khác";
-      if (!byGroup.has(g)) byGroup.set(g, []);
-      byGroup.get(g)!.push(p);
+      // Hỗ trợ multi-group: 1 sản phẩm có thể nằm trong nhiều tệp (vd vừa "Giỏ tạp hóa"
+      // vừa "Worldcup"). Nếu `groups` có nhiều phần tử → thêm vào TỪNG tệp.
+      const gs = p.groups && p.groups.length ? p.groups : [categoryGroup(p) || "Khác"];
+      for (const g of gs) {
+        if (!byGroup.has(g)) byGroup.set(g, []);
+        byGroup.get(g)!.push(p);
+      }
     }
-    const productGroups = (catalog.groups ?? []).filter((g) => !g.link);
+    // Bottom sections lấy tệp từ tab DanhMuc (1sZTv) — KHÔNG dùng `catalog.groups`
+    // (vốn là cấu hình top tiles từ sheet 1AJ2). Tách 2 nguồn cho 2 mục đích riêng.
+    const productGroups = (catalog.danhMucGroups ?? catalog.groups ?? []).filter((g) => !g.link);
     const ordered: { name: string; emoji?: string; products: Product[] }[] = [];
     for (const g of productGroups) {
       if (byGroup.has(g.label)) {
         ordered.push({ name: g.label, emoji: g.emoji, products: byGroup.get(g.label)! });
-        byGroup.delete(g.label);
       }
     }
-    for (const [name, products] of byGroup) ordered.push({ name, products });
     return ordered;
   }, [catalog, orderedMatches]);
+
+  // Danh mục túi ghép/đôi/đa dạng — nhận diện để render TÚI thay vì sản phẩm lẻ.
+  const TUI_CAT_RE = /túi ghép|túi đôi|túi.*đa dạng/i;
+  const isTuiActive = !!activeTep && TUI_CAT_RE.test(activeTep) && !!catalog?.tui?.length;
+  const loaiLabel = (l: string) => (l === "T2" ? t("Túi đôi") : l === "TĐD" ? t("Túi đa dạng") : t("Túi ghép"));
+  // Giá combo: dùng giaCombo nếu sheet có; nếu trống (vd nguồn SanPham) → cộng giá thành viên từ catalog.
+  const tuiCombo = (tu: import("@/lib/types").Tui) =>
+    tu.giaCombo || tu.items.reduce((s, it) => s + (it.gia || priceStats.get(it.productId)?.min || 0), 0);
 
   // Đổi tìm kiếm / danh mục / lọc nhanh → quay về trang 1.
   useEffect(() => {
@@ -1372,12 +1665,12 @@ export default function Home() {
 
   // Cửa hàng gần nhất (còn hàng, có khoảng cách) — để gắn tag "Gần nhất" khi sắp theo "Gần".
   const nearestStoreId = useMemo(() => {
-    if (sortBy !== "distance" || !userLoc) return null;
+    if (!userLoc) return null;
     const near = offers
       .filter((o) => o.inStock && o.distanceKm != null)
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity))[0];
     return near?.storeId ?? null;
-  }, [offers, sortBy, userLoc]);
+  }, [offers, userLoc]);
 
   // Sản phẩm tương tự: ưu tiên dùng cấu hình từ tab "tương tự" trong sheet;
   // fallback → cùng nhóm danh mục, ưu tiên loại đang có giá.
@@ -1437,6 +1730,7 @@ export default function Home() {
         price: o.price,
         inStock: o.inStock,
         cheapest: cheapest?.storeId === o.storeId,
+        nearest: nearestStoreId === o.storeId,
       }));
     }
     let stores = getStores();
@@ -1449,7 +1743,7 @@ export default function Home() {
     }
     return stores.map((s) => ({ store: s }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, offers, cheapest, radiusKm, userLoc, storesReady]);
+  }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, storesReady]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
   async function recordBuy(o: RankedOffer) {
@@ -1638,14 +1932,21 @@ export default function Home() {
     if (s.kind === "all") {
       setActiveTep(null);
       setActiveCat(null);
+      setActiveBrand(null);
+      setActiveChain(null);
       setPage(1);
     } else if (s.kind === "filter" && s.cat) {
       // Chọn TỆP mới → đặt lại ngành hàng (chip) về "Tất cả" cho khớp tệp vừa chọn.
       setActiveTep(s.cat);
       setActiveCat(null);
+      setActiveBrand(null);
+      setActiveChain(null);
       setPage(1);
       setToast(t("Đang xem: {label}", { label: t(s.label) }));
       setTimeout(() => setToast(""), 2500);
+    } else if (s.kind === "link" && /liên hệ.*affree/i.test(s.label)) {
+      // Tile "Liên hệ dịch vụ - Affree" → mở popup form liên hệ trong app, không mở link ngoài.
+      setContactOpen(true);
     } else if (s.kind === "link" && s.url) {
       window.open(s.url, "_blank", "noopener,noreferrer");
       setToast(t("Mở {label} (trang dịch vụ bên ngoài)", { label: t(s.label) }));
@@ -1657,9 +1958,10 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header ref={headerRef} className="sticky top-0 z-[1000] border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center gap-2 px-3 py-3 sm:gap-3 sm:px-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50 text-slate-900">
+      <header ref={headerRef} className="sticky top-0 z-[1000] border-b border-white/40 bg-white/70 backdrop-blur-2xl" style={{ WebkitBackdropFilter: "blur(32px)" }}>
+        <div className="mx-auto max-w-6xl px-3 py-3 sm:px-4">
+          <div className="flex items-center gap-2 sm:gap-3">
           <Link href="/" className="flex shrink-0 items-center gap-2">
             <Logo size={34} />
             <span className="flex flex-col leading-tight">
@@ -1668,7 +1970,7 @@ export default function Home() {
                 <button
                   onClick={(e) => { e.preventDefault(); setVerOpen(true); }}
                   title={t("Phiên bản & tính năng sắp tới")}
-                  className="hidden md:inline-flex items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
                 >
                   v{APP_VERSION}
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1684,12 +1986,12 @@ export default function Home() {
               </span>
             </span>
           </Link>
-          <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-2">
-            <div className="relative min-w-0">
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:flex-initial sm:gap-2">
+            <div className="relative min-w-0 flex-1 sm:flex-initial">
               <button
                 onClick={() => setLocOpen((v) => !v)}
                 title={t("Vị trí của bạn")}
-                className={`flex w-full min-w-0 max-w-[116px] items-center gap-1 rounded-full border px-2.5 py-1.5 text-sm font-medium transition sm:max-w-[230px] sm:gap-1.5 sm:px-3 ${
+                className={`flex w-full min-w-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-sm font-medium transition sm:max-w-[230px] sm:gap-1.5 sm:px-3 ${
                   geoState === "ok"
                     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                     : "border-slate-300 hover:bg-slate-100"
@@ -1703,48 +2005,29 @@ export default function Home() {
                       ? userAddr || t("Đã có vị trí")
                       : t("Chọn vị trí")
                 }</MarqueeText>
-                <svg
-                  className={`shrink-0 transition ${locOpen ? "rotate-180" : ""}`}
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="m6 9 6 6 6-6" />
-                </svg>
               </button>
-              {locOpen && (
-                <LocationPanel
-                  geoState={geoState}
-                  locate={locate}
-                  addrQuery={addrQuery}
-                  setAddrQuery={setAddrQuery}
-                  addrResults={addrResults}
-                  addrSearching={addrSearching}
-                  addrSearched={addrSearched}
-                  searchAddress={searchAddress}
-                  pickAddress={pickAddress}
-                  onClose={() => setLocOpen(false)}
-                  t={t}
-                />
-              )}
             </div>
-            {/* Giỏ hàng */}
+            {/* Giỏ hàng + Lịch sử — desktop only; mobile hiển thị ở dòng dưới */}
             <button
               onClick={() => setCartOpen(true)}
-              className="relative shrink-0 flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 hover:bg-slate-100"
+              className="relative hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 active:scale-95 sm:flex"
               aria-label={t("Giỏ hàng")}
+              title={t("Giỏ hàng")}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
-                <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
-                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-              </svg>
+              <span key={`bump-d-${cartBumpKey}`} className={cartBumpKey > 0 ? "flex animate-cart-bump" : "flex text-emerald-600"}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                  <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                </svg>
+              </span>
+              {cartBumpKey > 0 && (
+                <span key={`plus-d-${cartBumpKey}`} className="animate-cart-plus-one">+1</span>
+              )}
               {cartItems.length > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-4.5 min-w-[1.1rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                <span
+                  key={`badge-d-${cartBumpKey}`}
+                  className={`absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white shadow-sm ${cartBumpKey > 0 ? "animate-cart-ring" : ""}`}
+                >
                   {cartItems.reduce((s, i) => s + i.qty, 0)}
                 </span>
               )}
@@ -1752,26 +2035,84 @@ export default function Home() {
             <Link
               href="/history"
               title={t("Lịch sử mua")}
-              className="relative shrink-0 flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 hover:bg-slate-100 sm:w-auto sm:gap-1.5 sm:px-3"
+              aria-label={t("Lịch sử mua")}
+              className="relative hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 active:scale-95 sm:flex"
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
-              <span className="hidden whitespace-nowrap text-sm font-medium sm:inline">{t("Lịch sử mua")}</span>
+            </Link>
+          </div>
+          </div>
+          {/* Mobile-only: giỏ hàng + lịch sử icon-only, gọn cuối hàng */}
+          <div className="mt-2 flex justify-end gap-2 sm:hidden">
+            <button
+              onClick={() => setCartOpen(true)}
+              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm transition hover:bg-emerald-100 active:scale-95"
+              aria-label={t("Giỏ hàng")}
+              title={t("Giỏ hàng")}
+            >
+              <span className="relative flex">
+                <span key={`bump-m-${cartBumpKey}`} className={cartBumpKey > 0 ? "flex animate-cart-bump" : "flex text-emerald-600"}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
+                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                  </svg>
+                </span>
+                {cartBumpKey > 0 && (
+                  <span key={`plus-m-${cartBumpKey}`} className="animate-cart-plus-one">+1</span>
+                )}
+              </span>
+              {cartItems.length > 0 && (
+                <span
+                  key={`badge-m-${cartBumpKey}`}
+                  className={`absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white shadow-sm ${cartBumpKey > 0 ? "animate-cart-ring" : ""}`}
+                >
+                  {cartItems.reduce((s, i) => s + i.qty, 0)}
+                </span>
+              )}
+            </button>
+            <Link
+              href="/history"
+              title={t("Lịch sử mua")}
+              aria-label={t("Lịch sử mua")}
+              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:bg-slate-100 active:scale-95"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
             </Link>
           </div>
         </div>
       </header>
 
+      {locOpen && (
+        <LocationPanel
+          geoState={geoState}
+          locate={locate}
+          addrQuery={addrQuery}
+          setAddrQuery={setAddrQuery}
+          addrResults={addrResults}
+          addrSearching={addrSearching}
+          addrSearched={addrSearched}
+          searchAddress={searchAddress}
+          pickAddress={pickAddress}
+          onClose={() => setLocOpen(false)}
+          t={t}
+        />
+      )}
+
       {verOpen && (
         <div
-          className="fixed inset-0 z-[1200] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
+          className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
           onClick={() => setVerOpen(false)}
         >
           <div
-            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
+            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl ring-1 ring-white/60 bg-white/80 backdrop-blur-2xl p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            style={{ WebkitBackdropFilter: "blur(32px)" }}
           >
             <div className="mb-1 flex items-start justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -1795,22 +2136,78 @@ export default function Home() {
               </button>
             </div>
 
-            <p className="mt-3 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
-                {t("Đã có")}
-              </span>
-              {t("Tính năng trong bản {v}", { v: APP_VERSION })}
-            </p>
-            <ul className="mb-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {DONE.map((it, i) => (
-                <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
-                  <svg className="mt-0.5 shrink-0 text-emerald-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                  <span>{it}</span>
-                </li>
-              ))}
-            </ul>
+            {VERSION_HISTORY[0] && (
+              <>
+                <p className="mt-3 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
+                    {t("Mới")}
+                  </span>
+                  {t("Có gì trong bản {v}", { v: VERSION_HISTORY[0].version })}
+                  {VERSION_HISTORY[0].date && (
+                    <span className="text-xs font-normal text-slate-400">· {VERSION_HISTORY[0].date}</span>
+                  )}
+                </p>
+                <ul className="mb-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {VERSION_HISTORY[0].highlights.map((it, i) => (
+                    <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                      <svg className="mt-0.5 shrink-0 text-emerald-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                      <span>{it}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {VERSION_HISTORY.length > 1 && (
+              <>
+                <p className="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-600">
+                    {t("Cũ")}
+                  </span>
+                  {t("Phiên bản trước")}
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {VERSION_HISTORY.slice(1).map((v) => {
+                    const isOpen = expandedVer === v.version;
+                    return (
+                      <div key={v.version} className="rounded-xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedVer(isOpen ? null : v.version)}
+                          aria-expanded={isOpen}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="font-semibold">v{v.version}</span>
+                            {v.date && <span className="text-xs font-normal text-slate-400">{v.date}</span>}
+                          </span>
+                          <span className="flex items-center gap-1 text-xs font-normal text-slate-500">
+                            {isOpen ? t("Thu gọn") : t("Xem chi tiết")}
+                            <svg className={`transition ${isOpen ? "rotate-180" : ""}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="m6 9 6 6 6-6" />
+                            </svg>
+                          </span>
+                        </button>
+                        {isOpen && (
+                          <ul className="flex flex-col gap-1.5 border-t border-slate-100 px-3 py-2.5">
+                            {v.highlights.map((it, i) => (
+                              <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                                <svg className="mt-0.5 shrink-0 text-slate-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M20 6 9 17l-5-5" />
+                                </svg>
+                                <span>{it}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
 
             <p className="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
               <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
@@ -1879,7 +2276,7 @@ export default function Home() {
           </div>
         )}
         <section className={`min-w-0 ${mobileView === "map" ? "hidden lg:block" : ""}`}>
-          {!selected && (
+          {!selected && !activeTep && !activeBrand && !activeCat && !activeChain && (
             <div
               className="sticky z-20 -mx-4 mb-1 bg-slate-50 px-4 py-2"
               style={{ top: headerH }}
@@ -1953,7 +2350,7 @@ export default function Home() {
           )}
 
           {/* Bản đồ inline dưới search bar — thu gọn/mở rộng, không full-screen */}
-          {!selected && userLoc && mapOpen && mobileView !== "map" && (
+          {!selected && !activeTep && !activeBrand && !activeCat && !activeChain && userLoc && mapOpen && mobileView !== "map" && (
             <div className="isolate mb-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               {/* Header: hàng 1 = địa chỉ (chạy) + nút thu gọn · hàng 2 = chip bán kính */}
               <div className="border-b border-slate-100 px-3 py-2">
@@ -1970,7 +2367,7 @@ export default function Home() {
                   aria-label={t("Thu gọn bản đồ")}
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6"/></svg>
                 </button>
                 </div>
                 <div className="mt-1.5 flex items-center gap-1 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -1998,12 +2395,13 @@ export default function Home() {
                   userAddr={userAddr}
                   markers={markers}
                   radiusKm={radiusKm}
+                  onStorePick={setStoreProducts}
                   lang={lang}
                 />
               </div>
             </div>
           )}
-          {!selected && userLoc && !mapOpen && mobileView !== "map" && (
+          {!selected && !activeTep && !activeBrand && !activeCat && !activeChain && userLoc && !mapOpen && mobileView !== "map" && (
             <button
               type="button"
               onClick={() => setMapOpen(true)}
@@ -2014,7 +2412,7 @@ export default function Home() {
           )}
 
           {/* #8: GIỮ khi đang gõ tìm; ẨN khi xem 1 danh mục (trang "Xem tất cả") cho gọn. */}
-          {!selected && !activeTep && !activeCat && !quickFilter && (
+          {!selected && !activeTep && !activeCat && !activeBrand && !activeChain && !quickFilter && (
             <div className="py-2">
               <div className="mb-2 flex items-baseline justify-between">
                 <h2 className="text-sm font-semibold text-slate-700">{t("Dịch vụ quanh đây")}</h2>
@@ -2043,7 +2441,7 @@ export default function Home() {
                       <button
                         key={s.key}
                         onClick={() => openService(s)}
-                        className={`group relative flex shrink-0 flex-col items-center gap-1.5 rounded-2xl px-1 py-1.5 transition ${
+                        className={`group relative flex shrink-0 flex-col items-center gap-1.5 rounded-2xl px-1.5 py-1.5 transition ${
                           active
                             ? "bg-emerald-50 ring-2 ring-emerald-300"
                             : "hover:-translate-y-0.5"
@@ -2100,64 +2498,84 @@ export default function Home() {
 
           {/* Nhãn tài trợ — KHUNG RIÊNG, tách khỏi "Dịch vụ quanh đây". Cấu hình ở tab "Nhãn tài trợ". */}
           {/* Ẩn khi đang xem 1 danh mục/lọc (trang "Xem tất cả") — chỉ hiện ở trang chủ. */}
-          {!selected && !activeTep && !activeCat && !quickFilter && catalog?.sponsors?.length ? (
-            <div className="mt-2 py-1">
-              <div className="mb-2.5 flex items-center gap-2">
-                <span className="h-px flex-1 bg-slate-200" />
-                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">{t("Nhãn tài trợ")}</span>
-                <span className="h-px flex-1 bg-slate-200" />
+          {!selected && !activeTep && !activeCat && !activeBrand && !activeChain && !quickFilter && catalog?.sponsors?.length ? (
+            <div className="py-2">
+              <div className="mb-2 flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold text-slate-700">{t("Nhãn tài trợ - Nhãn phổ biến")}</h2>
+                <span className="text-[11px] text-slate-400">{t("Nhãn của nhà mình & nhãn phổ biến")}</span>
               </div>
-              <div className="flex gap-3 overflow-x-auto scroll-smooth pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {catalog.sponsors.map((sp) => {
+                  const isSponsor = sp.kind === "sponsor";
                   const cls =
-                    "group flex shrink-0 flex-col items-center justify-center gap-1.5 px-3 py-1 transition active:scale-95";
+                    "group flex shrink-0 flex-col items-center justify-start gap-1.5 px-1 py-1 transition hover:-translate-y-0.5 active:scale-95";
                   const inner = (
                     <>
-                      {sp.logo ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={sp.logo}
-                          alt={sp.name}
-                          className="h-16 max-w-[130px] object-contain"
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        <span className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-2xl font-bold text-slate-500">
-                          {sp.name.slice(0, 1)}
-                        </span>
-                      )}
-                      <span className="whitespace-nowrap text-sm font-semibold text-slate-500 group-hover:text-emerald-700">
+                      {/* Tag "Tài trợ/Phổ biến" ở dòng RIÊNG phía trên logo — không đè lên logo */}
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider shadow-sm ${
+                          isSponsor
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-emerald-100 text-emerald-700"
+                        }`}
+                      >
+                        {isSponsor ? t("Tài trợ") : t("Phổ biến")}
+                      </span>
+                      <span className="flex h-20 w-20 items-center justify-center transition group-hover:scale-105">
+                        {sp.logo ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={sp.logo}
+                            alt={sp.name}
+                            className="max-h-full max-w-full rounded-2xl object-contain"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        ) : (
+                          <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-3xl font-bold text-slate-500">
+                            {sp.name.slice(0, 1)}
+                          </span>
+                        )}
+                      </span>
+                      <span className="block min-h-[2.25rem] w-20 line-clamp-2 text-center text-[13px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700">
                         {sp.name}
                       </span>
                     </>
                   );
-                  return sp.link ? (
-                    <a
+                  // Nếu sp.link là URL ngoài (subdomain hoặc bất kỳ http(s)://...) → mở tab mới.
+                  // Còn lại (trống / nội bộ) → điều hướng nội bộ tới trang nhãn `/<slug>`.
+                  // Click sponsor → mở trang nhãn TRONG app (giống "Xem tất cả" category):
+                  // ẩn search/map, title = tên nhãn + nút Quay lại, list sản phẩm filter theo brand.
+                  return (
+                    <button
                       key={sp.name}
-                      href={sp.link}
-                      target="_blank"
-                      rel="noopener noreferrer sponsored"
+                      type="button"
+                      onClick={() => {
+                        setActiveBrand(sp.name);
+                        setActiveTep(null);
+                        setActiveCat(null);
+                        setQuickFilter(null);
+                        setQuery("");
+                        setSelected(null);
+                        setPage(1);
+                      }}
                       title={sp.name}
                       className={cls}
                     >
                       {inner}
-                    </a>
-                  ) : (
-                    <span key={sp.name} title={sp.name} className={cls}>
-                      {inner}
-                    </span>
+                    </button>
                   );
                 })}
               </div>
             </div>
           ) : null}
 
+          {/* Mục TÚI GHÉP · TÚI ĐÔI — combo nhiều SP đơn, giá combo, có thể đa chain. Nguồn: tab "Tui" 1sZTv / seed. */}
           {/* #8/#9: GIỮ khi tìm (gợi ý "Giá hời liên quan"); ẨN khi xem 1 danh mục (trang "Xem tất cả"). */}
-          {!selected && !activeTep && !activeCat && !quickFilter && areaDeals.length > 0 && (
+          {!selected && !activeTep && !activeCat && !activeBrand && !activeChain && !quickFilter && (areaDeals.length > 0 || dealsRadiusKm != null) && (
             <div className="mt-3 rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-white p-3 shadow-sm sm:p-4">
-              <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <h2 className="text-sm font-semibold text-slate-800">
                   {query.trim() ? t("🔥 Giá hời liên quan") : t("🔥 Giá hời quanh đây")}
                 </h2>
@@ -2165,6 +2583,33 @@ export default function Home() {
                   {t("so giá nhiều nơi · bật vị trí để ưu tiên gần bạn")}
                 </span>
               </div>
+              {userLoc && (
+                <div className="mb-2 flex items-center gap-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {[0.5, 1, 2, 3, 5].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setDealsRadiusKm((cur) => (cur === r ? null : r))}
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] transition ${
+                        dealsRadiusKm === r
+                          ? "border-amber-500 bg-amber-500 text-white"
+                          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                      }`}
+                    >
+                      {r < 1 ? `${Math.round(r * 1000)}m` : `${r}km`}
+                    </button>
+                  ))}
+                  {dealsRadiusKm != null && (
+                    <button
+                      type="button"
+                      onClick={() => setDealsRadiusKm(null)}
+                      className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-400 hover:border-slate-300"
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="relative">
                 {dealArrows.left && (
                   <button
@@ -2176,32 +2621,49 @@ export default function Home() {
                     ‹
                   </button>
                 )}
+                {areaDeals.length === 0 && dealsRadiusKm != null && (
+                  <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-amber-200 bg-amber-50/40 px-4 py-6 text-center">
+                    <span className="text-2xl">🔎</span>
+                    <p className="text-sm font-medium text-amber-800">
+                      {t("Chưa có giá hời nào trong {r}", { r: dealsRadiusKm < 1 ? `${Math.round(dealsRadiusKm * 1000)}m` : `${dealsRadiusKm}km` })}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setDealsRadiusKm(null)}
+                      className="rounded-full bg-amber-500 px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-amber-600"
+                    >
+                      {t("Bỏ giới hạn bán kính")}
+                    </button>
+                  </div>
+                )}
                 <div
                   ref={dealScrollRef}
                   onScroll={updateDealArrows}
-                  className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  className={`flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${areaDeals.length === 0 ? "hidden" : ""}`}
                 >
                   {areaDeals.map((d) => (
                     <div
                       key={d.product.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => openBuyAgent(d.product)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          openBuyAgent(d.product);
-                        }
-                      }}
-                      className="group relative flex w-36 shrink-0 cursor-pointer flex-col rounded-xl border border-slate-200 bg-white p-2.5 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-emerald-500 hover:shadow-xl sm:w-40"
+                      className="group relative flex w-36 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-2.5 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-40"
                     >
-                      <span className="absolute left-2 top-2 z-10 rounded-md bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white shadow-sm transition duration-150 hover:scale-110 hover:shadow-md">
+                      <span className="absolute left-2 top-2 z-10 rounded-md bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white shadow-sm transition duration-150">
                         -{Math.round(d.disc * 100)}%
                       </span>
-                      <div className="mb-1.5 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white transition duration-300 group-hover:shadow-lg">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); setInfoProduct(d.product); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(d.product); } }}
+                        aria-label={t("Xem thông tin & chứng nhận")}
+                        title={t("Xem thông tin & chứng nhận")}
+                        className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
+                      >
+                        i
+                      </span>
+                      <div className="mb-1.5 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                         <ProductThumb product={d.product} fill />
                       </div>
-                      <div className="line-clamp-2 min-h-[2.25rem] text-xs font-medium leading-tight text-slate-700">
+                      <div className="min-h-[2.25rem] text-xs font-medium leading-tight text-slate-700">
                         {d.product.name}
                       </div>
                       <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5">
@@ -2211,17 +2673,13 @@ export default function Home() {
                       <div className="mt-0.5 text-[11px] font-medium text-emerald-600">
                         {t("Tiết kiệm {x}", { x: formatMoney(d.save, d.currency) })}
                       </div>
-                      {d.storeName && (
-                        <div className="mt-1 text-[11px] text-slate-500">
-                          <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>
-                        </div>
-                      )}
-                      {d.km != null && (
-                        <div className="mt-0.5 line-clamp-1 text-[11px] font-medium text-emerald-600">
-                          📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}
-                        </div>
-                      )}
-                      <div className="mt-2 flex gap-1.5">
+                      <div className="mt-1 min-h-[16px] text-[11px] text-slate-500">
+                        {d.storeName && <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>}
+                      </div>
+                      <div className="mt-0.5 min-h-[16px] line-clamp-1 text-[11px] font-medium text-emerald-600">
+                        {d.km != null && <>📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}</>}
+                      </div>
+                      <div className="mt-auto pt-2 flex gap-1.5">
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); addToCart(d.product); }}
@@ -2265,6 +2723,7 @@ export default function Home() {
 
           {/* Thanh bán kính đã chuyển vào header của map section bên dưới */}
 
+
           {source && source.startsWith("seed") && (
             <p className="mt-2 text-xs text-slate-400">
               {t("Nguồn dữ liệu:")} <b>{t("data mẫu")}</b> {t("· không đọc được sheet, đang dùng tạm dữ liệu mẫu.")}
@@ -2273,44 +2732,94 @@ export default function Home() {
 
           {!selected && (
             <>
-              {/* ── Flat mode: search / quickFilter / activeTep ── */}
-              {(query.trim() || quickFilter || activeTep) && (
+              {/* ── Flat mode: search / quickFilter / activeTep / activeCat / activeBrand / activeChain (URL-driven) ── */}
+              {(query.trim() || quickFilter || activeTep || activeCat || activeBrand || activeChain) && (
                 <>
-                  <div className="mt-4 mb-2 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                  <div className="mt-4 mb-5 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
                       <button
-                        onClick={() => { setActiveTep(null); setActiveCat(null); setQuickFilter(null); setQuery(""); setPage(1); }}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200"
-                        aria-label="Quay lại trang chủ"
-                      >←</button>
-                      <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                        {query
+                        onClick={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 active:scale-95"
+                        aria-label={t("Quay lại trang chủ")}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M15 18l-6-6 6-6"/>
+                        </svg>
+                        {t("Quay lại")}
+                      </button>
+                      <h2 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-800">
+                        {activeBrand && activeCat
+                          ? `${activeBrand} · ${prettyCat(activeCat)}`
+                          : activeBrand
+                          ? activeBrand
+                          : activeChain
+                          ? chainLabel(activeChain)
+                          : activeCat && !activeTep
+                          ? prettyCat(activeCat)
+                          : activeTep && !query
+                          ? prettyCat(activeTep)
+                          : query
                           ? t("Kết quả")
                           : quickFilter
                           ? t(QUICK_FILTERS.find((q) => q.key === quickFilter)!.label)
                           : t("Kết quả")}
+                        {activeBrand && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                            {t("Nhãn hàng")}
+                          </span>
+                        )}
+                        {activeChain && !activeBrand && (
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                            style={{ backgroundColor: `${chainColor(activeChain)}22`, color: chainColor(activeChain) }}
+                          >
+                            {t("Cửa hàng")}
+                          </span>
+                        )}
                         {quickFilter === "hot" && areaName && !query && (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                             📍 {areaName}
                           </span>
                         )}
-                        {activeTep && !query && (
-                          <button
-                            onClick={() => { setActiveTep(null); setActiveCat(null); setPage(1); }}
-                            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 transition hover:bg-slate-100"
-                          >
-                            {prettyCat(activeTep)}
-                            <span className="text-slate-400">✕</span>
-                          </button>
-                        )}
                       </h2>
                     </div>
                     {catalog && (
                       <span className="shrink-0 text-xs text-slate-400">
-                        {t("{n} sản phẩm", { n: orderedMatches.length })}
+                        {isTuiActive ? t("{n} túi", { n: catalog.tui!.length }) : t("{n} sản phẩm", { n: orderedMatches.length })}
                       </span>
                     )}
                   </div>
+                  {isTuiActive ? (
+                  <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                    {catalog!.tui!.map((tu) => (
+                      <li key={tu.chuyenTrang + tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500">
+                        <div className="relative mb-1.5 aspect-square w-full overflow-hidden rounded-lg bg-slate-50">
+                          <div className={`grid h-full w-full gap-0.5 ${tu.items.length <= 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                            {tu.items.slice(0, 4).map((it) => {
+                              const p = catalog!.products.find((x) => x.id === it.productId);
+                              return (
+                                <span key={it.productId} title={it.name} className="relative flex items-center justify-center overflow-hidden bg-white">
+                                  {p ? <ProductThumb product={p} fill /> : <span className="px-1 text-center text-[8px] font-bold leading-tight text-slate-400">{it.name.slice(0, 12)}</span>}
+                                </span>
+                              );
+                            })}
+                          </div>
+                          <span className="absolute left-1 top-1 rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
+                          {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
+                        </div>
+                        <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
+                        <span className="mt-0.5 truncate text-xs text-slate-400">{tu.chuyenTrang} · {tu.items.length} món</span>
+                        <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
+                          <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                          {formatMoney(tuiCombo(tu))}
+                        </span>
+                        <button type="button" onClick={() => addTuiToCart(tu)} className="mt-2 flex items-center justify-center gap-1 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition hover:bg-amber-600">
+                          🛍️ {t("Mua cả túi")}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  ) : (<>
                   <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                     {pageItems.map((p) => {
                       const st = priceStats.get(p.id);
@@ -2318,23 +2827,30 @@ export default function Home() {
                       const compare = canCompare(p);
                       return (
                         <li key={p.id}>
-                          <button
-                            onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
-                            className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-emerald-500 hover:shadow-xl"
+                          <div
+                            className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                           >
                             <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                               <ProductThumb product={p} fill />
                               {tags.length > 0 && (
                                 <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
                                   {tags.map((tag) => (
-                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 hover:scale-110 hover:shadow-md ${tag.cls}`}>{tag.label}</span>
+                                    <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
                                   ))}
                                 </span>
                               )}
-                              {p.info && (
-                                <span role="button" onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }} className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-blue-500/90 text-[10px] font-bold text-white shadow hover:bg-blue-600">i</span>
-                              )}
                             </div>
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(p); } }}
+                              aria-label={t("Xem thông tin & chứng nhận")}
+                              title={t("Xem thông tin & chứng nhận")}
+                              className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
+                            >
+                              i
+                            </span>
                             <span className="mb-1.5 block h-[10px]" />
                             <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
                             <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
@@ -2344,6 +2860,19 @@ export default function Home() {
                                   <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
                                   {formatMoney(st.min, st.currency)}
                                 </span>
+                                {(() => {
+                                  const listed = p.listedPrice;
+                                  const km = p.discountPct ?? (listed && listed > st.min ? (listed - st.min) / listed : 0);
+                                  if (!listed || listed <= st.min) return null;
+                                  return (
+                                    <span className="mt-0.5 inline-flex items-center gap-1.5">
+                                      <span className="text-[11px] text-slate-400 line-through">{formatMoney(listed, st.currency)}</span>
+                                      {km > 0 && (
+                                        <span className="rounded bg-rose-100 px-1 py-0.5 text-[10px] font-bold text-rose-700">-{Math.round(km * 100)}%</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                                 <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
                                   {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
@@ -2356,7 +2885,7 @@ export default function Home() {
                             )}
                             <span className="mt-auto block w-full pt-2.5">
                               {compare ? (
-                                <span className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
                                   {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                                 </span>
                               ) : (
@@ -2381,7 +2910,7 @@ export default function Home() {
                                 </span>
                               )}
                             </span>
-                          </button>
+                          </div>
                         </li>
                       );
                     })}
@@ -2405,12 +2934,67 @@ export default function Home() {
                       <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40">{t("Sau →")}</button>
                     </div>
                   )}
+                  </>)}
                 </>
               )}
 
               {/* ── Grouped sections: trang chủ, không search/filter ── */}
-              {!query.trim() && !quickFilter && !activeTep && groupSections.map(({ name, emoji, products }) => {
+              {!query.trim() && !quickFilter && !activeTep && !activeCat && !activeBrand && !activeChain && groupSections.map(({ name, emoji, products }) => {
                 const isExpanded = expandedGroups.has(name);
+                // Danh mục "Túi ghép - đôi - đa dạng" → render các TÚI combo dạng card giống sản phẩm.
+                const isTuiCat = !!catalog?.tui?.length && /túi ghép|túi đôi|túi.*đa dạng/i.test(name);
+                if (isTuiCat) {
+                  const tuis = catalog!.tui!;
+                  return (
+                    <section key={name} className="mt-5">
+                      <div className="mb-2.5 flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-slate-700">
+                          {emoji && <span className="mr-1">{emoji}</span>}{name}
+                          <span className="ml-1.5 text-xs font-normal text-slate-400">({tuis.length})</span>
+                        </h2>
+                        <button
+                          onClick={() => { setActiveTep(name); setActiveCat(null); setQuickFilter(null); setQuery(""); setSelected(null); }}
+                          className="text-xs font-medium text-emerald-600 hover:underline"
+                        >
+                          {t("Xem tất cả →")}
+                        </button>
+                      </div>
+                      <div className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        {tuis.map((tu) => (
+                          <div
+                            key={tu.chuyenTrang + tu.maTui + tu.tenTui}
+                            className="group relative flex w-44 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-48"
+                          >
+                            {/* Ảnh TẤT CẢ sản phẩm trong túi (lưới 2 cột) */}
+                            <div className="relative mb-1.5 aspect-square w-full overflow-hidden rounded-lg bg-slate-50">
+                              <div className={`grid h-full w-full gap-0.5 ${tu.items.length <= 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                                {tu.items.slice(0, 4).map((it) => {
+                                  const p = catalog!.products.find((x) => x.id === it.productId);
+                                  return (
+                                    <span key={it.productId} title={it.name} className="relative flex items-center justify-center overflow-hidden bg-white">
+                                      {p ? <ProductThumb product={p} fill /> : <span className="px-1 text-center text-[8px] font-bold leading-tight text-slate-400">{it.name.slice(0, 12)}</span>}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                              <span className="absolute left-1 top-1 rounded-md bg-violet-600 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm">{loaiLabel(tu.loai)}</span>
+                              {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
+                            </div>
+                            <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
+                            <span className="mt-0.5 truncate text-xs text-slate-400">{tu.chuyenTrang} · {tu.items.length} món</span>
+                            <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
+                              <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                              {formatMoney(tuiCombo(tu))}
+                            </span>
+                            <button type="button" onClick={() => addTuiToCart(tu)} className="mt-2 flex items-center justify-center gap-1 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition hover:bg-amber-600">
+                              🛍️ {t("Mua cả túi")}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  );
+                }
                 return (
                   <section key={name} className="mt-5">
                     <div className="mb-2.5 flex items-center justify-between">
@@ -2442,23 +3026,30 @@ export default function Home() {
                           const compare = canCompare(p);
                           return (
                             <li key={p.id}>
-                              <button
-                                onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
-                                className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-emerald-500 hover:shadow-xl"
+                              <div
+                                className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                               >
-                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white transition duration-300 group-hover:shadow-lg">
+                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                                   <ProductThumb product={p} fill />
                                   {tags.length > 0 && (
                                     <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
                                       {tags.map((tag) => (
-                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 hover:scale-110 hover:shadow-md ${tag.cls}`}>{tag.label}</span>
+                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
                                       ))}
                                     </span>
                                   )}
-                                  {p.info && (
-                                    <span role="button" onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }} className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-blue-500/90 text-[10px] font-bold text-white shadow hover:bg-blue-600">i</span>
-                                  )}
                                 </div>
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(p); } }}
+                                  aria-label={t("Xem thông tin & chứng nhận")}
+                                  title={t("Xem thông tin & chứng nhận")}
+                                  className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
+                                >
+                                  i
+                                </span>
                                 <span className="mb-1.5 block h-[10px]" />
                                 <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
                                 <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
@@ -2468,6 +3059,19 @@ export default function Home() {
                                       <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
                                       {formatMoney(st.min, st.currency)}
                                     </span>
+                                    {(() => {
+                                      const listed = p.listedPrice;
+                                      const km = p.discountPct ?? (listed && listed > st.min ? (listed - st.min) / listed : 0);
+                                      if (!listed || listed <= st.min) return null;
+                                      return (
+                                        <span className="mt-0.5 inline-flex items-center gap-1.5">
+                                          <span className="text-[11px] text-slate-400 line-through">{formatMoney(listed, st.currency)}</span>
+                                          {km > 0 && (
+                                            <span className="rounded bg-rose-100 px-1 py-0.5 text-[10px] font-bold text-rose-700">-{Math.round(km * 100)}%</span>
+                                          )}
+                                        </span>
+                                      );
+                                    })()}
                                     <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
                                       {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
@@ -2480,46 +3084,53 @@ export default function Home() {
                                 )}
                                 <span className="mt-auto block w-full pt-2.5">
                                   {compare ? (
-                                    <span className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                    <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
                                       {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                                     </span>
                                   ) : (
-                                    <span className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                    <span onClick={(e) => { e.stopPropagation(); openBuyForm(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
                                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
                                       {t("Vào mua")}
                                     </span>
                                   )}
                                 </span>
-                              </button>
+                              </div>
                             </li>
                           );
                         })}
                       </ul>
                     ) : (
-                      <div className="flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <div className="flex gap-3 overflow-x-auto pt-1 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         {products.slice(0, 12).map((p) => {
                           const st = priceStats.get(p.id);
                           const tags = recoTags.get(p.id) ?? [];
                           const compare = canCompare(p);
                           return (
                             <div key={p.id} className="w-36 shrink-0 sm:w-40">
-                              <button
-                                onClick={() => (compare ? openProduct(p) : openBuyForm(p))}
-                                className="group flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-emerald-500 hover:shadow-xl"
+                              <div
+                                className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
                               >
-                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white transition duration-300 group-hover:shadow-lg">
+                                <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
                                   <ProductThumb product={p} fill />
                                   {tags.length > 0 && (
                                     <span className="absolute left-1 top-1 flex flex-col items-start gap-1">
                                       {tags.map((tag) => (
-                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 hover:scale-110 hover:shadow-md ${tag.cls}`}>{tag.label}</span>
+                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm transition duration-150 ${tag.cls}`}>{tag.label}</span>
                                       ))}
                                     </span>
                                   )}
-                                  {p.info && (
-                                    <span role="button" onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }} className="absolute right-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-blue-500/90 text-[10px] font-bold text-white shadow hover:bg-blue-600">i</span>
-                                  )}
                                 </div>
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(p); } }}
+                                  aria-label={t("Xem thông tin & chứng nhận")}
+                                  title={t("Xem thông tin & chứng nhận")}
+                                  className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
+                                >
+                                  i
+                                </span>
                                 <span className="mb-1.5 block h-[10px]" />
                                 <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
                                 <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {p.unit}</span>
@@ -2529,6 +3140,19 @@ export default function Home() {
                                       <svg className="shrink-0 text-rose-500" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
                                       {formatMoney(st.min, st.currency)}
                                     </span>
+                                    {(() => {
+                                      const listed = p.listedPrice;
+                                      const km = p.discountPct ?? (listed && listed > st.min ? (listed - st.min) / listed : 0);
+                                      if (!listed || listed <= st.min) return null;
+                                      return (
+                                        <span className="mt-0.5 inline-flex items-center gap-1.5">
+                                          <span className="text-[10px] text-slate-400 line-through">{formatMoney(listed, st.currency)}</span>
+                                          {km > 0 && (
+                                            <span className="rounded bg-rose-100 px-1 py-0.5 text-[9px] font-bold text-rose-700">-{Math.round(km * 100)}%</span>
+                                          )}
+                                        </span>
+                                      );
+                                    })()}
                                     <span className="mt-0.5 truncate text-xs text-slate-500">
                                       {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
                                     </span>
@@ -2540,7 +3164,7 @@ export default function Home() {
                                 )}
                                 <span className="mt-auto block w-full pt-2">
                                   {compare ? (
-                                    <span className="flex w-full items-center justify-center gap-1 rounded-lg bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                    <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1 rounded-lg bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
                                       {t("So sánh")}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                                     </span>
                                   ) : (
@@ -2565,7 +3189,7 @@ export default function Home() {
                                     </span>
                                   )}
                                 </span>
-                              </button>
+                              </div>
                             </div>
                           );
                         })}
@@ -2591,7 +3215,22 @@ export default function Home() {
                 <div className="flex min-w-0 items-center gap-3">
                   <ProductThumb product={selected} size={52} />
                   <div className="min-w-0">
-                    <h2 className="truncate text-lg font-semibold">{selected.name}</h2>
+                    <h2 className="flex items-center gap-1.5 text-lg font-semibold">
+                      <span className="truncate">{selected.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setInfoProduct(selected)}
+                        title={t("Xem thông tin & chứng nhận")}
+                        aria-label={t("Xem thông tin & chứng nhận")}
+                        className="flex shrink-0 items-center justify-center text-slate-400 transition hover:text-emerald-600"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <path d="M12 16v-4" />
+                          <path d="M12 8h.01" />
+                        </svg>
+                      </button>
+                    </h2>
                     <p className="truncate text-sm text-slate-500">
                       {selected.brand} · {selected.unit} · {t("{n} cửa hàng", { n: offers.length })}
                     </p>
@@ -2669,12 +3308,13 @@ export default function Home() {
 
               {alertOpen && (
                 <div
-                  className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/50 p-4"
+                  className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
                   onClick={() => setAlertOpen(false)}
                 >
                   <div
-                    className="w-full max-w-sm rounded-2xl border border-amber-200 bg-white p-5 shadow-xl"
+                    className="w-full max-w-sm rounded-3xl ring-1 ring-amber-200/70 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
+                    style={{ WebkitBackdropFilter: "blur(32px)" }}
                   >
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <p className="text-sm font-medium text-amber-900">
@@ -2785,7 +3425,7 @@ export default function Home() {
                 </div>
               )}
 
-              <ul className="space-y-2.5">
+              <ul className="space-y-4">
                 {(() => {
                   // Gom nhóm theo chain
                   const chainMap = new Map<string, typeof displayOffers>();
@@ -2819,38 +3459,41 @@ export default function Home() {
                           key={o.storeId}
                           onMouseEnter={() => setHoverStore(o.storeId)}
                           onMouseLeave={() => setHoverStore(null)}
-                          className={`relative ${isNested ? "rounded-xl border p-2.5" : ""} ${
+                          className={`relative ${isNested ? "rounded-xl border bg-white p-2.5 shadow-sm" : ""} ${
                             isNested
                               ? isCheapest
-                                ? "border-emerald-200 bg-emerald-50/30"
-                                : "border-slate-100 bg-slate-50/50"
+                                ? "border-emerald-300"
+                                : isNearest
+                                  ? "border-blue-300"
+                                  : "border-slate-200"
                               : ""
                           } ${!o.inStock && isNested ? "opacity-60" : ""} transition`}
                         >
+                          {/* Tag nổi cho chi nhánh xổ ra — style outline để phân biệt với chi nhánh chính (nền đậm chữ trắng) */}
+                          {isNested && (isCheapest || isNearest) && o.inStock && (
+                            <span className="pointer-events-none absolute -top-2 right-2.5 z-10 flex gap-1">
+                              {isCheapest && (
+                                <span className="rounded-full border border-emerald-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600 shadow-sm">
+                                  {t("Rẻ nhất")}
+                                </span>
+                              )}
+                              {isNearest && (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-blue-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600 shadow-sm">
+                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                                  {t("Gần nhất")}
+                                </span>
+                              )}
+                            </span>
+                          )}
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
                             <div className="flex min-w-0 flex-1 items-start gap-3">
-                              {!isNested && <ChainBadge chain={o.store.chain} />}
+                              <ChainBadge chain={o.store.chain} />
                               <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                  <span className="min-w-0 truncate font-semibold text-slate-900">
-                                    {o.store.name}
-                                  </span>
-                                  {isNested && (isCheapest || isNearest) && o.inStock && (
-                                    <span className="flex shrink-0 gap-1">
-                                      {isCheapest && (
-                                        <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">{t("Rẻ nhất")}</span>
-                                      )}
-                                      {isNearest && (
-                                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
-                                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-                                          {t("Gần nhất")}
-                                        </span>
-                                      )}
-                                    </span>
-                                  )}
+                                <div className="min-w-0 truncate font-semibold text-slate-900">
+                                  {o.store.name}
                                 </div>
                                 <div className="truncate text-xs text-slate-500">{o.store.address}</div>
-                                <div className="mt-1.5 flex items-center gap-2 text-xs">
+                                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                                   <span
                                     className={`inline-flex items-center gap-1.5 font-medium ${
                                       o.inStock ? "text-emerald-600" : "text-red-500"
@@ -2862,11 +3505,6 @@ export default function Home() {
                                       }`}
                                     />
                                     {o.inStock ? t("Còn hàng") : t("Hết hàng")}
-                                    {o.lastChecked && (
-                                      <span className="text-[10px] font-normal text-slate-400">
-                                        {formatCheckedAt(o.lastChecked)}
-                                      </span>
-                                    )}
                                   </span>
                                   {o.distanceKm != null && (
                                     <>
@@ -2883,7 +3521,7 @@ export default function Home() {
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         onClick={(e) => e.stopPropagation()}
-                                        className="inline-flex items-center gap-0.5 text-slate-400 hover:text-blue-500"
+                                        className="inline-flex items-center gap-0.5 font-medium text-blue-600 underline-offset-2 hover:text-blue-700 hover:underline"
                                       >
                                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                                           <polyline points="9 18 15 12 9 6" />
@@ -2893,10 +3531,15 @@ export default function Home() {
                                     </>
                                   )}
                                 </div>
+                                {o.lastChecked && (
+                                  <div className="mt-0.5 text-[10px] font-normal text-slate-400">
+                                    ({formatCheckedAt(o.lastChecked)})
+                                  </div>
+                                )}
                               </div>
                             </div>
 
-                            <div className="flex items-center justify-between gap-3 sm:shrink-0 sm:justify-end sm:gap-4">
+                            <div className="flex items-center justify-between gap-3 pl-[3.25rem] sm:shrink-0 sm:justify-end sm:gap-4 sm:pl-0">
                               <div className="text-right">
                                 <div
                                   className={`inline-flex items-center gap-1 text-lg font-extrabold tracking-tight ${
@@ -2916,30 +3559,31 @@ export default function Home() {
                                 )}
                               </div>
 
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex items-center gap-2">
                                 <button
                                   onClick={() => setBuyOffer(o)}
-                                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                                  className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
                                 >
                                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <circle cx="9" cy="21" r="1" />
                                     <circle cx="20" cy="21" r="1" />
                                     <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
                                   </svg>
-                                  {t("Mua")}
+                                  {t("Mua ngay")}
                                 </button>
                                 <button
-                                  onClick={() => addToCart(o.product, o)}
-                                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-400 bg-amber-50 px-3.5 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
+                                  className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
+                                  title={t("Thêm vào giỏ")}
+                                  aria-label={t("Thêm vào giỏ")}
                                 >
-                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <circle cx="9" cy="21" r="1" />
-                                    <circle cx="20" cy="21" r="1" />
-                                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                                    <line x1="12" y1="5" x2="12" y2="11" />
-                                    <line x1="9" y1="8" x2="15" y2="8" />
-                                  </svg>
-                                  {t("Thêm vào giỏ")}
+                                  +
+                                  {cartQtyFor(o.product.id) > 0 && (
+                                    <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
+                                      {cartQtyFor(o.product.id)}
+                                    </span>
+                                  )}
                                 </button>
                               </div>
                             </div>
@@ -3004,10 +3648,12 @@ export default function Home() {
                           )}
                         </div>
 
-                        {/* Chi nhánh xổ ra */}
+                        {/* Chi nhánh xổ ra — cuộn dọc trong khung giới hạn để so sánh với chi nhánh mặc định ở trên */}
                         {isExpanded && rest.length > 0 && (
-                          <div className="border-t border-slate-100 px-3 pb-3 pt-2 space-y-2">
-                            {rest.map((o) => renderOffer(o, true))}
+                          <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+                            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                              {rest.map((o) => renderOffer(o, true))}
+                            </div>
                           </div>
                         )}
                       </li>
@@ -3065,6 +3711,7 @@ export default function Home() {
                       radiusKm={radiusKm}
                       lang={lang}
                       onBuy={(store) => openBuyForm(selected, store)}
+                      onStorePick={setStoreProducts}
                     />
                   </div>
                 </div>
@@ -3164,6 +3811,7 @@ export default function Home() {
                 highlightId={hoverStore}
                 radiusKm={radiusKm}
                 lang={lang}
+                onStorePick={setStoreProducts}
                 onBuy={
                   selected
                     ? (store) => openBuyForm(selected, store)
@@ -3283,26 +3931,286 @@ export default function Home() {
         />
       )}
 
+      {/* Modal "Liên hệ dịch vụ - Affree" — form + link tới dịch vụ làm hồ sơ hộ. */}
+      {contactOpen && (
+        <div
+          className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+          onClick={() => setContactOpen(false)}
+        >
+          <div
+            className="w-full max-w-md max-h-[88vh] overflow-y-auto rounded-3xl ring-1 ring-white/60 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            style={{ WebkitBackdropFilter: "blur(32px)" }}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-slate-900">{t("Liên hệ dịch vụ - Affree")}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{t("Để lại liên hệ — đội Affree sẽ phản hồi trong vòng 24h.")}</p>
+              </div>
+              <button
+                onClick={() => setContactOpen(false)}
+                aria-label={t("Đóng")}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            <a
+              href="https://kpi-recruitment-v2.vercel.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mb-4 flex items-center gap-3 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-3.5 shadow-sm transition hover:border-emerald-300 hover:shadow active:scale-[0.98]"
+            >
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-2xl">📝</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-emerald-800">{t("Dịch vụ làm hồ sơ hộ")}</span>
+                <span className="mt-0.5 block text-[11px] text-emerald-700/80">{t("Affree soạn hồ sơ ứng tuyển / xét tuyển KPI giúp bạn — mở ngay")}</span>
+              </span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-emerald-600"><path d="M7 17 17 7M9 7h8v8"/></svg>
+            </a>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const fd = new FormData(e.currentTarget);
+                const name = (fd.get("name") || "").toString().trim();
+                const phone = (fd.get("phone") || "").toString().trim();
+                if (name.length < 2) { setToast(t("Vui lòng nhập họ tên")); setTimeout(() => setToast(""), 2500); return; }
+                if (phone.length < 8) { setToast(t("Vui lòng nhập số điện thoại")); setTimeout(() => setToast(""), 2500); return; }
+                setContactOpen(false);
+                setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
+                setTimeout(() => setToast(""), 3500);
+              }}
+              className="space-y-2.5"
+            >
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Họ tên")}</span>
+                <input name="name" type="text" required className="w-full rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: Nguyễn Văn A")} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Số điện thoại")}</span>
+                <input name="phone" type="tel" required className="w-full rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: 09xxxxxxxx")} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Nội dung cần hỗ trợ")}</span>
+                <textarea name="msg" rows={3} className="w-full resize-none rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" placeholder={t("Vd: tư vấn so giá sỉ, làm hồ sơ ứng tuyển, hợp tác phân phối…")} />
+              </label>
+              <button type="submit" className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
+                {t("Gửi liên hệ")}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ */}
+      {storeProducts && catalog && (() => {
+        const offersAtStore = catalog.offers.filter((o) => o.storeId === storeProducts.id);
+        const productMap = new Map(catalog.products.map((p) => [p.id, p]));
+        const items = offersAtStore
+          .map((o) => ({ offer: o, product: productMap.get(o.productId) }))
+          .filter((x): x is { offer: typeof offersAtStore[number]; product: Product } => !!x.product);
+        return (
+          <div
+            className="fixed inset-0 z-[2050] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
+            onClick={() => setStoreProducts(null)}
+          >
+            <div
+              className="flex w-full max-w-lg max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-4 pt-5">
+                <button
+                  onClick={() => setStoreProducts(null)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+                <div className="flex items-start gap-3 pr-8">
+                  <ChainBadge chain={storeProducts.chain} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+                      {t("Cửa hàng")}
+                    </p>
+                    <h3 className="mt-0.5 truncate text-base font-bold text-slate-900">
+                      {storeProducts.name}
+                    </h3>
+                    {storeProducts.address && (
+                      <p className="mt-0.5 truncate text-xs text-slate-500">{storeProducts.address}</p>
+                    )}
+                    <p className="mt-1 text-[11px] font-medium text-slate-500">
+                      {t("{n} sản phẩm", { n: items.length })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-3 py-3">
+                {items.length === 0 ? (
+                  <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+                    {t("Cửa hàng chưa có sản phẩm trong catalog.")}
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {items.map(({ offer: o, product: p }) => (
+                      <li key={p.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
+                          <ProductThumb product={p} size={48} contain />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p.name}</p>
+                          <p className="truncate text-[11px] text-slate-400">{p.brand} · {p.unit}</p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className={`text-sm font-bold ${o.inStock ? "text-rose-600" : "text-slate-400"}`}>
+                              {o.inStock ? formatMoney(o.price, storeCurrency(o.storeId)) : t("Hết hàng")}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const store = storeProducts;
+                            setStoreProducts(null);
+                            // Dựng trực tiếp RankedOffer từ offer + store đang xem (không qua rankOffersForProduct
+                            // vì hàm đó skip offer nếu getStore() không match — id giữa sheet-stores và offers có
+                            // thể khác nhau, dẫn tới empty → rơi xuống form đơn giản thay vì popup trợ lý).
+                            setBuyOffer({
+                              ...o,
+                              store,
+                              product: p,
+                              distanceKm:
+                                userLoc && store.lat != null && store.lng != null
+                                  ? distanceKm(userLoc, { lat: store.lat, lng: store.lng })
+                                  : null,
+                            });
+                          }}
+                          disabled={!o.inStock}
+                          className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                        >
+                          {t("Mua hàng")}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Modal thông tin sản phẩm (nút ⓘ) */}
       {infoProduct && (
         <div
-          className="fixed inset-0 z-[2100] flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center"
+          className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
           onClick={() => setInfoProduct(null)}
         >
           <div
-            className="w-full max-w-sm rounded-t-2xl bg-white p-5 shadow-2xl sm:rounded-2xl"
+            className="flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white/85 ring-1 ring-white/60 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            style={{ WebkitBackdropFilter: "blur(32px)", backdropFilter: "blur(32px)" }}
           >
-            <div className="mb-3 flex items-start gap-3">
-              <ProductThumb product={infoProduct} size={52} contain />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-slate-800 leading-snug">{infoProduct.name}</p>
-                <p className="text-xs text-slate-400 mt-0.5">{infoProduct.brand} · {infoProduct.unit}</p>
+            {/* Header gradient + thumb + tên */}
+            <div className="relative bg-gradient-to-br from-emerald-50/80 via-white/40 to-sky-50/80 px-5 pb-4 pt-5">
+              <button
+                onClick={() => setInfoProduct(null)}
+                aria-label={t("Đóng")}
+                className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-800"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+              <div className="flex items-start gap-4">
+                <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100">
+                  <ProductThumb product={infoProduct} size={80} contain />
+                </div>
+                <div className="min-w-0 flex-1 pr-8 pt-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+                    {t("Thông tin sản phẩm")}
+                  </p>
+                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900">
+                    {infoProduct.name}
+                  </h3>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {infoProduct.brand && (
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
+                        {infoProduct.brand}
+                      </span>
+                    )}
+                    {infoProduct.unit && (
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+                        {infoProduct.unit}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <button onClick={() => setInfoProduct(null)} className="shrink-0 flex h-7 w-7 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100">✕</button>
             </div>
-            <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-              {infoProduct.info}
+
+            {/* Body cuộn được */}
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {infoProduct.info ? (
+                <section>
+                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                    {t("Mô tả")}
+                  </h4>
+                  <div className="whitespace-pre-wrap rounded-xl bg-slate-50/80 px-4 py-3 text-sm leading-relaxed text-slate-700 ring-1 ring-slate-100">
+                    {infoProduct.info}
+                  </div>
+                </section>
+              ) : (
+                <p className="rounded-xl bg-slate-50/80 px-4 py-6 text-center text-xs text-slate-400 ring-1 ring-slate-100">
+                  {t("Chưa có mô tả cho sản phẩm này.")}
+                </p>
+              )}
+
+              {infoProduct.certifications && infoProduct.certifications.length > 0 && (
+                <section className="mt-5">
+                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="7"/><path d="M8.21 13.89 7 22l5-3 5 3-1.21-8.12"/></svg>
+                    {t("Chứng nhận")}
+                    <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-emerald-700">
+                      {infoProduct.certifications.length}
+                    </span>
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {infoProduct.certifications.map((url, i) => (
+                      <a
+                        key={i}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group relative block overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400 hover:shadow-md"
+                      >
+                        <div className="flex aspect-square items-center justify-center bg-slate-50">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={t("Chứng nhận {n}", { n: i + 1 })}
+                            loading="lazy"
+                            className="h-full w-full object-contain p-1.5"
+                          />
+                        </div>
+                        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1 pt-4 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
+                          {t("Xem ảnh lớn")}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-slate-100 bg-white/60 px-5 py-3">
+              <button
+                onClick={() => setInfoProduct(null)}
+                className="w-full rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                {t("Đóng")}
+              </button>
             </div>
           </div>
         </div>
@@ -3310,12 +4218,13 @@ export default function Home() {
 
       {buyProduct && (
         <div
-          className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
+          className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
           onClick={() => !buySubmitting && setBuyProduct(null)}
         >
           <div
-            className="w-full max-w-md rounded-t-2xl border border-amber-200 bg-white p-5 shadow-xl sm:rounded-2xl"
+            className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl ring-1 ring-amber-200/70 bg-white/85 backdrop-blur-2xl p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            style={{ WebkitBackdropFilter: "blur(32px)" }}
           >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
@@ -3341,7 +4250,7 @@ export default function Home() {
             </div>
 
             <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              {t("Sản phẩm chưa có nhiều nơi bán để so sánh. Điền thông tin, shop sẽ liên hệ và giao tận nơi.")}
+              {t("Điền thông tin nhận hàng, shop sẽ liên hệ xác nhận và giao tận nơi.")}
             </p>
 
             <div className="space-y-2.5">

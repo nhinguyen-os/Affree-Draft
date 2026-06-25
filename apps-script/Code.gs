@@ -64,6 +64,8 @@ function onOpen() {
     .addItem("① Tạo tab Tệp + cột tệp (dropdown)", "menuSetupTep_")
     .addItem("② Tự gán tệp cho sản phẩm (gợi ý)", "menuAutoFillTep_")
     .addItem("③ Tạo tab Ưu tiên hiển thị + cột ưu tiên", "menuSetupPriority_")
+    .addSeparator()
+    .addItem("④ Điền giá niêm yết + % KM (từ master sheet)", "menuFillNiemYetKM_")
     .addToUi();
 }
 
@@ -738,4 +740,106 @@ function json_(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Fill 2 cột "gia_niem_yet" + "%_khuyen_mai" trong tab "Danh sách sản phẩm" (gid 1049432260)
+ * dựa vào master sheet (sheet ID 1akbwYjARnr2imdlFvPi6o12ktlj-0KXQfoDeroTpq1c, gid 169511719).
+ * Match theo cột A (product_id ↔ SKU). Chạy 1 lần qua menu "Giá Quanh Đây → Điền giá niêm yết + KM".
+ */
+function menuFillNiemYetKM_() {
+  var SOURCE_SHEET_ID = "1akbwYjARnr2imdlFvPi6o12ktlj-0KXQfoDeroTpq1c";
+  var SOURCE_GID = 169511719;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ui = SpreadsheetApp.getUi();
+
+  // Tab đích = "Danh sách sản phẩm" (tab đang nhập liệu giá; nếu sheet ko có tên này, dùng tab active).
+  var tgt = ss.getSheetByName("Danh sách sản phẩm") || ss.getActiveSheet();
+  if (!tgt) { ui.alert("Không tìm thấy tab đích"); return; }
+
+  // Mở source sheet & tìm tab theo gid.
+  var src;
+  try {
+    src = SpreadsheetApp.openById(SOURCE_SHEET_ID);
+  } catch (e) {
+    ui.alert("Không mở được source sheet. Cần quyền View. ID: " + SOURCE_SHEET_ID);
+    return;
+  }
+  var srcSheet = null;
+  src.getSheets().forEach(function (s) { if (s.getSheetId() === SOURCE_GID) srcSheet = s; });
+  if (!srcSheet) { ui.alert("Không tìm thấy tab gid=" + SOURCE_GID + " trong source"); return; }
+
+  // Đọc source: cột A = SKU, cột I (9) = GIA_BAO_BI_VAT, cột K (11) = %_KHUYEN_MAI.
+  // DÙNG getDisplayValues() để lấy đúng text hiển thị (vd "127,440") — getValues() trả về
+  // raw number bị diễn dịch sai locale (127.44 → ghi qua target ra 12 nghìn tỷ).
+  var srcLast = srcSheet.getLastRow();
+  if (srcLast < 2) { ui.alert("Source rỗng"); return; }
+  var srcText = srcSheet.getRange(2, 1, srcLast - 1, 11).getDisplayValues();
+  var map = {};
+  srcText.forEach(function (r) {
+    var sku = String(r[0] || "").trim();
+    if (!sku) return;
+    var gia = String(r[8] || "").trim();   // cột 9 (index 8) — GIA_BAO_BI_VAT
+    var km = String(r[10] || "").trim();   // cột 11 (index 10) — %_KHUYEN_MAI
+    // gia displayed dạng "127,440" — chuyển sang số nguyên VND (bỏ , và .).
+    var giaDigits = gia.replace(/[^\d]/g, "");
+    var giaNum = giaDigits ? Number(giaDigits) : "";
+    // km displayed dạng "7%" hoặc "0,07" — bóc thành số nguyên 0..100.
+    var kmRaw = km.replace("%", "").replace(",", ".").trim();
+    var kmNum = "";
+    if (kmRaw) {
+      var n = parseFloat(kmRaw);
+      if (isFinite(n)) kmNum = n <= 1 ? Math.round(n * 100) : Math.round(n);
+    }
+    map[sku] = { gia: giaNum, km: kmNum };
+  });
+
+  // Tìm cột đích trong tab đích.
+  var head = tgt.getRange(1, 1, 1, tgt.getLastColumn()).getValues()[0];
+  function findCol(names) {
+    for (var i = 0; i < head.length; i++) {
+      var h = String(head[i] || "").toLowerCase().trim();
+      for (var j = 0; j < names.length; j++) if (h === names[j]) return i + 1;
+    }
+    return -1;
+  }
+  var pidCol = findCol(["product_id", "sku", "mã sản phẩm"]);
+  var giaCol = findCol(["gia_niem_yet", "giá niêm yết", "gia niem yet", "gia_bao_bi", "gia_bao_bi_vat", "gia bao bi", "giá bao bì", "gia bao bi (+vat) (gia_bao_bi_vat)"]);
+  var kmCol = findCol(["%_khuyen_mai", "%_khuyenmai", "% khuyến mãi", "% khuyen mai", "khuyen_mai", "khuyến mãi", "khuyenmai"]);
+  var priceCol = findCol(["price", "gia", "giá", "giá bán"]);
+  if (pidCol < 0 || giaCol < 0 || kmCol < 0) {
+    ui.alert("Thiếu cột. Cần: product_id, gia_niem_yet, %_khuyen_mai. Đang có: " + head.join(" | "));
+    return;
+  }
+
+  var tgtLast = tgt.getLastRow();
+  if (tgtLast < 2) { ui.alert("Tab đích rỗng"); return; }
+  var pids = tgt.getRange(2, pidCol, tgtLast - 1, 1).getValues();
+  var giaCur = tgt.getRange(2, giaCol, tgtLast - 1, 1).getValues();
+  var kmCur = tgt.getRange(2, kmCol, tgtLast - 1, 1).getValues();
+  // Lấy price dạng text (display) để fallback giá niêm yết = price khi SKU không có trong master.
+  var priceText = priceCol > 0 ? tgt.getRange(2, priceCol, tgtLast - 1, 1).getDisplayValues() : null;
+  var filledFromMaster = 0, filledFallback = 0;
+  for (var i = 0; i < pids.length; i++) {
+    var pid = String(pids[i][0] || "").trim();
+    if (!pid) continue;
+    var m = map[pid];
+    if (m) {
+      giaCur[i][0] = m.gia;
+      kmCur[i][0] = m.km;
+      filledFromMaster++;
+    } else if (priceText) {
+      // Không có trong master → fallback: gia_niem_yet = price, % KM = 0.
+      var pTxt = String(priceText[i][0] || "").trim();
+      var pDigits = pTxt.replace(/[^\d]/g, "");
+      if (pDigits) {
+        giaCur[i][0] = Number(pDigits);
+        kmCur[i][0] = 0;
+        filledFallback++;
+      }
+    }
+  }
+  tgt.getRange(2, giaCol, tgtLast - 1, 1).setValues(giaCur);
+  tgt.getRange(2, kmCol, tgtLast - 1, 1).setValues(kmCur);
+  ui.alert("Xong!\n• Từ master: " + filledFromMaster + " dòng\n• Fallback (= price, KM=0): " + filledFallback + " dòng\n• Tổng: " + (tgtLast - 1) + " dòng");
 }
