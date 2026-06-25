@@ -276,7 +276,7 @@ async function detectActivePopup(page) {
 /**
  * Vòng lặp điều khiển chính của AI Agent - DOM-first approach
  */
-async function runAgenticLoop(page, payload, sendLog, sendStatus) {
+async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}) {
   const { productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
 
   // Kiểm tra API Key
@@ -299,13 +299,17 @@ async function runAgenticLoop(page, payload, sendLog, sendStatus) {
 
   // Điều hướng tới URL sản phẩm mục tiêu đầu tiên
   const { url } = payload;
-  sendLog(`Đang mở trang sản phẩm: ${url}...`);
-  try {
-    // Dùng "load" để đảm bảo JS đã chạy xong (quan trọng cho popup lazy-render)
-    await page.goto(url, { waitUntil: "load", timeout: 30000 });
-    sendLog("Đã tải xong trang. Bắt đầu xử lý...", "success");
-  } catch (gotoErr) {
-    sendLog(`Lỗi điều hướng ban đầu: ${gotoErr.message}`, "error");
+  if (!options.skipInitialGoto) {
+    sendLog(`Đang mở trang sản phẩm: ${url}...`);
+    try {
+      // Dùng "load" để đảm bảo JS đã chạy xong (quan trọng cho popup lazy-render)
+      await page.goto(url, { waitUntil: "load", timeout: 30000 });
+      sendLog("Đã tải xong trang. Bắt đầu xử lý...", "success");
+    } catch (gotoErr) {
+      sendLog(`Lỗi điều hướng ban đầu: ${gotoErr.message}`, "error");
+    }
+  } else {
+    sendLog("Tiếp tục AI loop trên trang hiện tại sau khi người dùng đã can thiệp.", "info");
   }
 
   // Chạy Playbook đặc thù của chuỗi cửa hàng (nếu có) trước khi vào AI loop
@@ -477,7 +481,9 @@ Trả về JSON (chỉ JSON, không markdown):
         case "pause":
           sendLog("⚠️ AI Agent dừng lại — cần bạn can thiệp (OTP / CAPTCHA / Mật khẩu / Thẻ thanh toán).", "warning");
           sendLog("👉 Hãy thao tác trực tiếp trên màn hình điều khiển ở Web App.", "info");
-          sendStatus("waiting_user_input");
+          sendStatus("waiting_user_input", {
+            reason: decision.reason
+          });
           return true;
 
         case "success":
