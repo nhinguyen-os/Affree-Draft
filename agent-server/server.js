@@ -52,6 +52,8 @@ wss.on("connection", async (ws) => {
   let page = null;
   let cdpSession = null;
   let isAutomating = false;
+  let lastOrderPayload = null;
+  let cancelledByUser = false;
 
   // Gửi log về client
   function sendLog(message, status = "info") {
@@ -125,10 +127,40 @@ wss.on("connection", async (ws) => {
     return;
   }
 
+  async function resumeAgenticLoop(reason, extraAction) {
+    if (!lastOrderPayload) {
+      sendLog("Không có payload đơn hàng trước đó để tiếp tục.", "warning");
+      return;
+    }
+    if (isAutomating) {
+      sendLog("Agent đang bận, chưa thể tiếp tục phiên hiện tại.", "warning");
+      return;
+    }
+
+    isAutomating = true;
+    cancelledByUser = false;
+    try {
+      if (typeof extraAction === "function") {
+        await extraAction();
+      }
+      sendLog(`Đang tiếp tục quy trình sau bước: ${reason}`, "info");
+      sendStatus("running", { reason: `resume:${reason}` });
+      const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true });
+      if (!aiHandled) {
+        sendLog("AI loop không xử lý được tiếp; giữ nguyên màn hình để user tự thao tác.", "warning");
+      }
+    } catch (err) {
+      sendLog(`Lỗi khi tiếp tục quy trình: ${err.message}`, "error");
+      sendStatus("failed", { error: err.message });
+    } finally {
+      isAutomating = false;
+    }
+  }
+
   // Nhận thông điệp từ Client
   ws.on("message", async (messageStr) => {
     try {
-      const msg = JSON.parse(messageStr);
+      const msg = JSON.parse(typeof messageStr === "string" ? messageStr : messageStr.toString());
 
       switch (msg.type) {
         case "navigate":
@@ -203,12 +235,62 @@ wss.on("connection", async (ws) => {
           break;
 
         case "run_order":
+          sendLog(`Đã nhận lệnh run_order cho: ${msg.payload?.productName || 'unknown product'}`, "info");
           // Kích hoạt chu trình đặt hàng tự động mô phỏng bằng Playwright
           if (isAutomating) {
             sendLog("Hiện đang chạy một quy trình đặt hàng tự động khác.", "warning");
             break;
           }
+          lastOrderPayload = msg.payload;
+          cancelledByUser = false;
           runAutomatedOrder(msg.payload);
+          break;
+
+        case "submit_otp":
+          await resumeAgenticLoop("otp", async () => {
+            if (msg.otp) {
+              await page.keyboard.type(String(msg.otp), { delay: 30 });
+              await page.keyboard.press("Enter");
+              sendLog("Đã nhận OTP từ orchestrator và điền vào trang.", "success");
+            }
+          });
+          break;
+
+        case "captcha_completed":
+          await resumeAgenticLoop("captcha_completed", async () => {
+            sendLog("Đã nhận tín hiệu CAPTCHA hoàn tất từ orchestrator.", "success");
+          });
+          break;
+
+        case "confirm_final_action":
+          await resumeAgenticLoop("confirm_final_action", async () => {
+            try {
+              await page.getByText(/đặt hàng|xác nhận|mua ngay|hoàn tất/i).first().click({ timeout: 3000 });
+              sendLog("Đã thử click nút xác nhận cuối cùng trên trang.", "success");
+            } catch (err) {
+              sendLog("Không tìm thấy nút xác nhận cuối cùng bằng matcher tổng quát, AI sẽ tự tiếp tục.", "warning");
+            }
+          });
+          break;
+
+        case "payment_submitted":
+          await resumeAgenticLoop("payment_submitted", async () => {
+            sendLog("Đã nhận tín hiệu người dùng báo thanh toán xong, bắt đầu xác minh lại trang.", "info");
+          });
+          break;
+
+        case "choose_handoff":
+          cancelledByUser = true;
+          isAutomating = false;
+          sendStatus("failed", { error: "handoff_to_user", orderUrl: page.url() });
+          sendLog("Phiên này đã được chuyển sang thao tác thủ công theo yêu cầu orchestrator.", "warning");
+          break;
+
+        case "cancel_order":
+          cancelledByUser = true;
+          isAutomating = false;
+          sendStatus("cancelled", { error: "cancelled_by_user", orderUrl: page.url() });
+          sendLog("Phiên đặt hàng đã bị hủy từ orchestrator.", "warning");
           break;
 
         default:
@@ -218,6 +300,10 @@ wss.on("connection", async (ws) => {
       console.error("[Agent Server] Lỗi xử lý message:", e);
     }
   });
+
+  try {
+    ws.send(JSON.stringify({ type: "ready" }));
+  } catch (e) {}
 
   // Tự động hóa tiến trình mua hàng
   async function runAutomatedOrder(payload) {

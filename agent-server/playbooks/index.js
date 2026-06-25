@@ -9,10 +9,7 @@
 const PLAYBOOKS = {
   coop: require("./cooponline"),
   cooponline: require("./cooponline"),
-  // Thêm các chuỗi mới ở đây:
-  // bhx: require("./bhx"),
-  // concung: require("./concung"),
-  // aeon: require("./aeon"),
+  tuoixanhnhanhngon: require("./tuoixanhnhanhngon"),
 };
 
 /**
