@@ -145,6 +145,9 @@ export function TrimmedLogo({
         if (keyOutWhite) {
           const stack: number[] = [];
           const visited = new Uint8Array(w * h);
+          // Chỉ key PURE WHITE / TRANSPARENT (3 kênh >=235) — không relax sang cream/ivory
+          // vì wreath/crest brand thường dùng beige sáng có saturation thấp → keying lan vào
+          // ăn mất logo (vd Beauty Republic mất wreath khi check brightness+saturation).
           const isNearWhiteOrTransparent = (idx: number) => {
             const i = idx * 4;
             const a = data[i + 3];

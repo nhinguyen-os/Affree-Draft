@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.1";
+export const APP_VERSION = "1.3.2";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,25 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.2",
+      date: "25.06.2026",
+      highlights: [
+        "Bấm vào logo nhãn tài trợ → mở thẳng trang cửa hàng của chuỗi (vd Astra Bean) — không bị giới hạn quốc gia",
+        "Tag 'TÀI TRỢ / PHỔ BIẾN' chuyển lên đỉnh thẻ logo, không còn che lên tên/biểu tượng",
+        "Logo nhãn tự nhận màu nền theo bộ nhận diện brand, phủ đều cả thẻ (Mencode vàng, Vinamilk xanh, Beauty Republic gold…)",
+        "Trang 'Phiên bản' chia 2 cấp cha–con: bản 1.3 chứa các bản con 1.3.1, 1.3.2…; mục đánh số dọc, dễ đọc trên máy tính",
+        "Tìm địa chỉ ngoài Việt Nam chính xác hơn — gõ tên bang/nước (vd 'California') không còn trả gợi ý lạc đề ở TP.HCM",
+        "Đổi vị trí trên thanh đầu: giỏ hàng & lịch sử lên trên, ô địa chỉ xuống dưới để bố cục cân đối hơn",
+        "Bản đồ: bấm xem sản phẩm của cửa hàng → mở trang riêng có tên cửa hàng làm tiêu đề, danh mục cuộn ngang, sản phẩm xếp dọc như trang chủ",
+        "Khu vực sự kiện (vd Worldcup) đẩy lên đầu để dễ thấy",
+        "Hiển thị spinner 'đang tải dữ liệu' rõ ràng khi catalog chưa nạp xong",
+        "Tệp 'Dịch vụ' giờ liệt kê đúng các dịch vụ OCS cung cấp (định giá, xây dựng, nhà đất, B2B, …)",
+        "Icon lửa 🔥 trong 'Giá hời quanh đây' có hiệu ứng nhấp nháy sinh động",
+        "Túi ghép / túi đôi / túi đa dạng: thêm nút ⓘ để xem chi tiết từng sản phẩm trong túi",
+        "Cập nhật hiệu ứng kính (liquid glass) theo phong cách iOS / macOS 26-27 cho các popup",
+        "Bản đồ chỉ hiển thị cửa hàng cùng quốc gia user đang đứng (vd ở Canada → không hiện cửa hàng VN)",
+      ],
+    }, {
       subVersion: "1.3.1",
       date: "24.06.2026",
       highlights: [

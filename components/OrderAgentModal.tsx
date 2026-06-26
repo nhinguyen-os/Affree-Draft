@@ -251,7 +251,7 @@ export default function OrderAgentModal({
 
   return (
     <div
-      className="fixed inset-0 z-[1100] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[2200] flex items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
       onClick={onClose}
     >
@@ -271,7 +271,7 @@ export default function OrderAgentModal({
         <div className="flex items-center justify-between border-b border-white/20 px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-bold text-slate-900">
-              {phase === "done" ? t("Đã đặt hàng") : t("Phục vụ bởi Agentic AI")}
+              {phase === "done" ? t("Đã đặt hàng") : t("Phục vụ bởi Affree Agentic AI - AAAI")}
               {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
             </h2>
             <p className="truncate text-xs text-slate-700">

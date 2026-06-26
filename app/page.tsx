@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
 import { chainColor, chainLabel, findChainBySlug, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
 import { TrimmedLogo } from "@/components/TrimmedLogo";
@@ -117,14 +117,24 @@ async function nominatimSearch(q: string, bounded: boolean): Promise<GeoResult[]
   const res = await fetch(url);
   if (!res.ok) return [];
   const data = await res.json();
+  // Nếu query bắt đầu bằng số nhà (vd "234 nguyễn...") nhưng Nominatim không trả house_number,
+  // tự prepend số nhà vào label để gợi ý hiển thị đúng địa chỉ user đang tìm.
+  const houseNumMatch = q.trim().match(/^(\d+[-/]?\d*[a-zA-Z]?)\s/);
+  const queryHouseNum = houseNumMatch ? houseNumMatch[1] : null;
   return (Array.isArray(data) ? data : [])
-    .map((d: { display_name?: string; lat?: string; lon?: string; address?: Record<string, string> }) => ({
-      label: cleanLabel(d.address, d.display_name ?? ""),
-      lat: parseFloat(d.lat ?? ""),
-      lng: parseFloat(d.lon ?? ""),
-      area: areaFromAddress(d.address),
-      cc: (d.address?.country_code ?? "").toLowerCase(),
-    }))
+    .map((d: { display_name?: string; lat?: string; lon?: string; address?: Record<string, string> }) => {
+      let label = cleanLabel(d.address, d.display_name ?? "");
+      if (queryHouseNum && !d.address?.house_number && !/^\d/.test(label)) {
+        label = `${queryHouseNum} ${label}`;
+      }
+      return {
+        label,
+        lat: parseFloat(d.lat ?? ""),
+        lng: parseFloat(d.lon ?? ""),
+        area: areaFromAddress(d.address),
+        cc: (d.address?.country_code ?? "").toLowerCase(),
+      };
+    })
     .filter((r: GeoResult) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
 }
 
@@ -426,9 +436,15 @@ function LocationPanel({
   onClose: () => void;
   t: (vi: string, vars?: Record<string, string | number>) => string;
 }) {
+  const [inputVal, setInputVal] = useState(addrQuery);
+  useEffect(() => {
+    const timer = setTimeout(() => setAddrQuery(inputVal), 500);
+    return () => clearTimeout(timer);
+  }, [inputVal, setAddrQuery]);
+
   return (
     <div
-      className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/50 p-4"
+      className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/50 p-4"
       onClick={onClose}
     >
       <div
@@ -476,14 +492,15 @@ function LocationPanel({
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            setAddrQuery(inputVal);
             if (addrResults.length > 0) pickAddress(addrResults[0]);
             else searchAddress();
           }}
           className="relative"
         >
           <input
-            value={addrQuery}
-            onChange={(e) => setAddrQuery(e.target.value)}
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
             autoFocus
             placeholder={t("VD: 123 Lê Lợi, Quận 1, TP.HCM")}
             className="w-full rounded-lg border border-slate-300 py-2 pl-3 pr-9 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
@@ -632,11 +649,12 @@ export default function Home() {
   // Map tên nhãn → màu nền chủ đạo (tự detect từ logo qua TrimmedLogo). Logo có nền màu
   // đặc (vd Mencode vàng, Vinamilk xanh) sẽ paint card cùng màu → fill 100% khung.
   const [sponsorFill, setSponsorFill] = useState<Record<string, string>>({});
-  // Override màu nền cho logo nền trắng/đa-màu mà TrimmedLogo không bắt đúng:
-  // sample dominant non-white pixel trong source và hardcode theo brand identity.
-  // Beauty Republic: gold tones (#B78932); Alo Clean: tan (#DAB787).
+  // Override màu nền cho logo mà TrimmedLogo không bắt đúng.
+  // Beauty Republic: logo crest trên nền trắng → override gold + keyOutWhite (chỉ key pure-white).
+  // Alo Clean: gradient + decorative band ở mép giữa → override khớp 4 góc cho mượt.
   const SPONSOR_FILL_OVERRIDES: Record<string, string> = {
     "Beauty Republic": "#B78932",
+    "Alo Clean": "#DFB77D",
   };
   // Aspect ratio (w/h) sau trim — card width co theo để logo fill 100% chiều cao + ngang.
   const [sponsorAspect, setSponsorAspect] = useState<Record<string, number>>({});
@@ -984,14 +1002,15 @@ export default function Home() {
       setAddrSearching(false);
       return;
     }
-    const t = setTimeout(async () => {
-      setAddrSearching(true);
-      const results = await forwardGeocode(q);
+    setAddrSearching(true);
+    let cancelled = false;
+    forwardGeocode(q).then((results) => {
+      if (cancelled) return;
       setAddrResults(results);
       setAddrSearching(false);
       setAddrSearched(true);
-    }, 500);
-    return () => clearTimeout(t);
+    });
+    return () => { cancelled = true; setAddrSearching(false); };
   }, [addrQuery]);
 
   // Khi mở chi tiết sản phẩm hoặc quay lại danh sách → cuộn lên đầu trang + nạp lại
@@ -1725,6 +1744,16 @@ export default function Home() {
       }));
     }
     let stores = getStores();
+    // Lọc theo QUỐC GIA: store nằm ngoài quốc gia user đang đứng → ẩn khỏi map.
+    // Hiện toàn bộ store của catalog là VN (Vietnam bbox: lat 8.0-23.5, lng 102-110).
+    // User ở quốc gia khác (vd Canada/Mỹ) → không hiện store VN trên map nữa.
+    if (country && country !== "vn") {
+      stores = stores.filter((s) => {
+        if (s.lat == null || s.lng == null) return false;
+        const inVN = s.lat >= 8 && s.lat <= 23.5 && s.lng >= 102 && s.lng <= 110;
+        return !inVN; // giữ store ngoài VN; bỏ store trong VN
+      });
+    }
     if (radiusKm != null && userLoc) {
       stores = stores.filter((s) =>
         s.lat != null && s.lng != null
@@ -1734,7 +1763,7 @@ export default function Home() {
     }
     return stores.map((s) => ({ store: s }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, storesReady]);
+  }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
   async function recordBuy(o: RankedOffer) {
@@ -2001,17 +2030,22 @@ export default function Home() {
           <Link
             href="/"
             onClick={() => {
-              // Reset hoàn toàn về trang chủ: bỏ mọi filter/chọn để URL "/" không bị
-              // state→URL effect đẩy ngược lại /nganh/... hoặc /nhan/...
-              setSelected(null);
-              setActiveTep(null);
-              setActiveCat(null);
-              setActiveBrand(null);
-              setActiveChain(null);
-              setActiveService(null);
-              setQuickFilter(null);
-              setQuery("");
-              setPage(1);
+              // Reset bằng startTransition để re-render lớn (clear filter → show ALL sections)
+              // chạy ở priority THẤP, không block navigation/scroll. URL chuyển về "/" ngay,
+              // các section nặng (sponsors/deals/groupSections) render dần sau.
+              // Cuộn lên đầu trước để user thấy header thay vì chờ skeleton.
+              window.scrollTo(0, 0);
+              startTransition(() => {
+                setSelected(null);
+                setActiveTep(null);
+                setActiveCat(null);
+                setActiveBrand(null);
+                setActiveChain(null);
+                setActiveService(null);
+                setQuickFilter(null);
+                setQuery("");
+                setPage(1);
+              });
             }}
             className="flex shrink-0 items-center gap-2"
           >
@@ -2141,7 +2175,7 @@ export default function Home() {
 
       {verOpen && (
         <div
-          className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+          className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
           onClick={() => setVerOpen(false)}
         >
           <div
@@ -2559,7 +2593,7 @@ export default function Home() {
                 <h2 className="text-sm font-semibold text-slate-700">{t("Nhãn tài trợ - Nhãn phổ biến")}</h2>
                 <span className="text-[11px] text-slate-400">{t("Nhãn của nhà mình & nhãn phổ biến")}</span>
               </div>
-              <div className="flex gap-2 overflow-x-auto scroll-smooth px-2 pb-2 pt-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="flex gap-4 overflow-x-auto scroll-smooth px-3 pb-2 pt-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {catalog.sponsors.map((sp) => {
                   const isSponsor = sp.kind === "sponsor";
                   const cls =
@@ -2574,10 +2608,18 @@ export default function Home() {
                           ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
                       <span className="relative">
                         <span
-                          className={`flex h-20 w-24 items-center justify-center rounded-2xl shadow-sm transition group-hover:shadow-md ${
+                          className={`flex h-24 items-center justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md ${
                             SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] ? "" : "border border-slate-200"
                           }`}
-                          style={{ backgroundColor: SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] || "#ffffff" }}
+                          // Height 96px (lớn hơn nhẹ so với 80px của tile 'Dịch vụ quanh đây').
+                          // Width co theo aspect thật → card edge khớp ảnh edge, không gap.
+                          // Sàn 80px (logo vuông bằng tile dịch vụ), trần 192px (logo siêu dài không tràn).
+                          style={{
+                            backgroundColor: SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] || "#ffffff",
+                            width: sponsorAspect[sp.name]
+                              ? `${Math.max(80, Math.min(192, Math.round(96 * sponsorAspect[sp.name])))}px`
+                              : "112px",
+                          }}
                         >
                           {sp.logo ? (
                             <TrimmedLogo
@@ -2606,7 +2648,14 @@ export default function Home() {
                           {isSponsor ? t("Tài trợ") : t("Phổ biến")}
                         </span>
                       </span>
-                      <span className="block min-h-[2rem] w-24 line-clamp-2 text-center text-[12px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700">
+                      <span
+                        className="block min-h-[2rem] line-clamp-2 text-center text-[12px] font-medium leading-tight text-slate-600 group-hover:text-emerald-700"
+                        style={{
+                          width: sponsorAspect[sp.name]
+                            ? `${Math.max(64, Math.min(160, Math.round(80 * sponsorAspect[sp.name])))}px`
+                            : "96px",
+                        }}
+                      >
                         {sp.name}
                       </span>
                     </>
@@ -3468,7 +3517,7 @@ export default function Home() {
 
               {alertOpen && (
                 <div
-                  className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+                  className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
                   onClick={() => setAlertOpen(false)}
                 >
                   <div
@@ -4349,26 +4398,31 @@ export default function Home() {
               <ul className="space-y-2">
                 {tuiInfo.items.map((it) => {
                   const p = catalog.products.find((x) => x.id === it.productId);
+                  const gia = it.gia || priceStats.get(it.productId)?.min || 0;
                   return (
-                    <li key={it.productId} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
-                        {p ? <ProductThumb product={p} size={48} contain /> : <span className="text-xs font-bold text-slate-400">{it.name.slice(0, 2)}</span>}
+                    <li key={it.productId} className="rounded-xl border border-slate-200 bg-white p-2.5">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
+                          {p ? <ProductThumb product={p} size={48} contain /> : <span className="text-xs font-bold text-slate-400">{it.name.slice(0, 2)}</span>}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
+                          {p && (p.brand || p.unit) && <p className="truncate text-[11px] text-slate-400">{[p.brand, p.unit].filter(Boolean).join(" · ")}</p>}
+                          {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia)}</p>}
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
-                        {p && <p className="truncate text-[11px] text-slate-400">{p.brand} · {p.unit}</p>}
-                        <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(it.gia)}</p>
-                      </div>
-                      {p && (
-                        <button
-                          type="button"
-                          onClick={() => { setTuiInfo(null); setInfoProduct(p); }}
-                          aria-label={t("Xem thông tin sản phẩm")}
-                          title={t("Xem thông tin sản phẩm")}
-                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-                        >
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                        </button>
+                      {p?.info && (
+                        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-[12px] leading-relaxed text-slate-600">{p.info}</p>
+                      )}
+                      {p?.certifications && p.certifications.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {p.certifications.map((url, i) => (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <a key={i} href={url} target="_blank" rel="noopener noreferrer" title={t("Chứng nhận {n}", { n: i + 1 })} className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400">
+                              <img src={url} alt={t("Chứng nhận {n}", { n: i + 1 })} loading="lazy" className="h-full w-full object-contain p-1" />
+                            </a>
+                          ))}
+                        </div>
                       )}
                     </li>
                   );
@@ -4505,7 +4559,7 @@ export default function Home() {
 
       {buyProduct && (
         <div
-          className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+          className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
           onClick={() => !buySubmitting && setBuyProduct(null)}
         >
           <div

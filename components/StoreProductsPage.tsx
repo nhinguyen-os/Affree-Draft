@@ -81,7 +81,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   const activeEmoji = activeTile?.emoji ?? (activeSectionIdx >= 0 ? DEFAULT_TILE_EMOJIS[activeSectionIdx % DEFAULT_TILE_EMOJIS.length] : "🛒");
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[2050] flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50" style={{ top: headerH }}>
+    <div className="fixed inset-x-0 bottom-0 z-[2050] flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50" style={{ top: headerH || 64 }}>
       <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: "touch" }}>
         {/* Header — sticky trong scroll container để sticks đúng */}
         <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 backdrop-blur-sm">
