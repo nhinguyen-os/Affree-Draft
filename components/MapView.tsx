@@ -191,6 +191,7 @@ export default function MapView({
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [destPin, setDestPin] = useState<DestPin | null>(null);
   const [destPinPopup, setDestPinPopup] = useState(false);
+  const [hiddenChains, setHiddenChains] = useState<Chain[]>([]);
   const destMarkerRef = useRef<L.Marker>(null);
 
   // Update selectedStore fields if markers change
@@ -214,6 +215,21 @@ export default function MapView({
     if (!userLoc || !map) return;
     map.flyTo([userLoc.lat, userLoc.lng], 15, { duration: 0.5 });
   }, [userLoc, map]);
+
+  const toggleChain = useCallback((chain: Chain) => {
+    setHiddenChains((prev) => (prev.includes(chain) ? prev.filter((c) => c !== chain) : [...prev, chain]));
+  }, []);
+
+  const visibleMarkers = useMemo(
+    () => markers.filter((m) => !hiddenChains.includes(m.store.chain)),
+    [markers, hiddenChains],
+  );
+
+  useEffect(() => {
+    if (selectedStore && hiddenChains.includes(selectedStore.store.chain)) {
+      setSelectedStore(null);
+    }
+  }, [selectedStore, hiddenChains]);
 
   const handleMapClick = useCallback((e: L.LeafletMouseEvent) => {
     setSelectedStore(null);
@@ -241,8 +257,10 @@ export default function MapView({
   );
 
   const chainKeys: Chain[] = [];
+  const chainCounts: Record<string, number> = {};
   for (const m of markers) {
     if (!chainKeys.includes(m.store.chain)) chainKeys.push(m.store.chain);
+    chainCounts[m.store.chain] = (chainCounts[m.store.chain] ?? 0) + 1;
   }
 
   // Load configured map url from process.env if tileUrl is not provided
@@ -299,7 +317,7 @@ export default function MapView({
         )}
 
         <ClusterGroup
-          markers={markers}
+          markers={visibleMarkers}
           highlightId={highlightId}
           t={t}
           onMarkerClick={setSelectedStore}
@@ -444,7 +462,7 @@ export default function MapView({
           fontSize: 11,
           lineHeight: 1.5,
           color: "#334155",
-          pointerEvents: "none",
+          pointerEvents: "auto",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -454,15 +472,38 @@ export default function MapView({
         {chainKeys.length > 0 && (
           <div style={{ marginTop: 2, marginBottom: 2 }}>
             <div style={{ color: "#64748b", fontSize: 10 }}>{t("Cửa hàng (theo màu):")}</div>
-            {chainKeys.map((c) => (
-              <div key={c} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width="11" height="13" viewBox="0 0 24 24" style={{ display: "block" }}>
-                  <path fill={chainColor(c)} stroke="#fff" strokeWidth="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" />
-                  <circle cx="12" cy="9" r="2.6" fill="#fff" />
-                </svg>
-                {chainLabel(c)}
-              </div>
-            ))}
+            {chainKeys.map((c) => {
+              const isHidden = hiddenChains.includes(c);
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => toggleChain(c)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    width: "100%",
+                    border: "none",
+                    background: "transparent",
+                    padding: "1px 0",
+                    cursor: "pointer",
+                    opacity: isHidden ? 0.4 : 1,
+                    color: isHidden ? "#94a3b8" : "#334155",
+                    textDecoration: isHidden ? "line-through" : "none",
+                    fontSize: 11,
+
+                  }}
+                >
+                  <svg width="11" height="13" viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
+                    <path fill={chainColor(c)} stroke="#fff" strokeWidth="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" />
+                    <circle cx="12" cy="9" r="2.6" fill="#fff" />
+                  </svg>
+                  <span style={{ flex: 1, textAlign: "left" }}>{chainLabel(c)}</span>
+                  <span style={{ color: "#94a3b8", fontSize: 10 }}>({chainCounts[c] ?? 0})</span>
+                </button>
+              );
+            })}
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
