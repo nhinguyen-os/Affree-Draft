@@ -38,6 +38,7 @@ loadEnvFile(path.join(__dirname, "..", ".env"));
 const { chromium } = require("playwright");
 const WebSocket = require("ws");
 const { runAgenticLoop } = require("./agent-llm");
+const cooponlinePlaybook = require("./playbooks/cooponline");
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
@@ -72,19 +73,32 @@ wss.on("connection", async (ws) => {
     } catch (e) {}
   }
 
+  async function sendScreenshotFrame() {
+    if (!page || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const viewport = page.viewportSize() || { width: 1024, height: 768 };
+      const data = await page.screenshot({ type: "jpeg", quality: 62 });
+      ws.send(JSON.stringify({
+        type: "screencast",
+        data: data.toString("base64"),
+        width: viewport.width,
+        height: viewport.height
+      }));
+    } catch (e) {
+      sendLog(`Không gửi được ảnh màn hình: ${e.message}`, "warning");
+    }
+  }
+
   try {
-    // Khởi động trình duyệt Chromium. 
-    // Trong môi trường Docker cần --no-sandbox và --disable-setuid-sandbox
     browser = await chromium.launch({
-      headless: process.env.HEADLESS !== "false", // Chạy headless theo biến môi trường
+      headless: process.env.HEADLESS !== "false",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-blink-features=AutomationControlled" // Né tránh phát hiện bot cơ bản
+        "--disable-blink-features=AutomationControlled"
       ]
     });
 
-    // Tạo context trình duyệt với viewport cố định để chuẩn hóa tọa độ tương tác
     context = await browser.newContext({
       viewport: { width: 1024, height: 768 },
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -94,32 +108,37 @@ wss.on("connection", async (ws) => {
     page = await context.newPage();
     sendLog("Đã khởi tạo trình duyệt thành công.", "success");
 
-    // Khởi tạo CDP (Chrome DevTools Protocol) session để bắt luồng Screencast
+    // Bước 1: Mở trang giữ chỗ để có DOM trước
+    await page.setContent(`
+      <html><body style="margin:0;background:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#64748b;font-size:14px;">
+        <div>Đang chờ lệnh từ Co.op…</div>
+      </body></html>
+    `);
+
+    // Bước 2: Khởi tạo CDP và bắt đầu screencast
     cdpSession = await context.newCDPSession(page);
-    
-    // Bắt đầu screencast gửi ảnh JPEG nén qua WebSocket
     await cdpSession.send("Page.startScreencast", {
       format: "jpeg",
       quality: 60,
       maxWidth: 1024,
       maxHeight: 768,
-      everyNthFrame: 1 // Gửi mọi khung hình thay đổi
+      everyNthFrame: 1
     });
 
-    cdpSession.on("Page.screencastFrame", ({ data, sessionId, metadata }) => {
-      // Gửi base64 frame và metadata về cho React Client
+    cdpSession.on("Page.screencastFrame", ({ data, sessionId }) => {
       try {
         ws.send(JSON.stringify({
           type: "screencast",
-          data: data, // string base64
+          data: data,
           width: 1024,
           height: 768
         }));
       } catch (err) {}
-
-      // Xác nhận đã nhận khung hình (Acknowledge) để CDP gửi khung tiếp theo
       cdpSession.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
     });
+
+    // Bước 3: Gửi 1 screenshot ngay lập tức để client không phải chờ frame CDP đầu tiên
+    await sendScreenshotFrame();
 
   } catch (err) {
     sendLog(`Lỗi khởi tạo trình duyệt: ${err.message}`, "error");
@@ -165,20 +184,27 @@ wss.on("connection", async (ws) => {
       switch (msg.type) {
         case "navigate":
           sendLog(`Đang điều hướng tới: ${msg.url}...`);
-          await page.goto(msg.url, { waitUntil: "domcontentloaded" });
+          await page.goto(msg.url, { waitUntil: "commit", timeout: 20000 });
+          await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {
+            sendLog("Trang đã bắt đầu tải nhưng chưa báo domcontentloaded, vẫn hiển thị màn hình hiện tại.", "warning");
+          });
+          if (ws.readyState !== WebSocket.OPEN || page.isClosed()) break;
+          await page.waitForTimeout(500).catch(() => {});
+          if (ws.readyState !== WebSocket.OPEN || page.isClosed()) break;
+          await sendScreenshotFrame();
           sendLog(`Đã tải xong trang: ${msg.url}`, "success");
           break;
 
         case "click":
-          // Tọa độ click được chuẩn hóa theo tỷ lệ khung hình viewport (1024x768)
           if (!isAutomating) {
             await page.mouse.click(msg.x, msg.y);
+            await page.waitForTimeout(120);
+            await sendScreenshotFrame();
           }
           break;
 
         case "move":
         case "mousemove":
-          // Di chuyển chuột
           if (!isAutomating) {
             await page.mouse.move(msg.x, msg.y);
           }
@@ -195,26 +221,20 @@ wss.on("connection", async (ws) => {
           if (!isAutomating) {
             await page.mouse.move(msg.x, msg.y);
             await page.mouse.up();
+            await page.waitForTimeout(120);
+            await sendScreenshotFrame();
           }
           break;
 
         case "keydown":
           if (!isAutomating) {
-            try {
-              await page.keyboard.down(msg.key);
-            } catch (err) {
-              // Bỏ qua lỗi phím không hợp lệ (ví dụ: chữ có dấu tiếng Việt 'Đ', 'á'...)
-            }
+            try { await page.keyboard.down(msg.key); } catch (err) {}
           }
           break;
 
         case "keyup":
           if (!isAutomating) {
-            try {
-              await page.keyboard.up(msg.key);
-            } catch (err) {
-              // Bỏ qua
-            }
+            try { await page.keyboard.up(msg.key); } catch (err) {}
           }
           break;
 
@@ -222,15 +242,30 @@ wss.on("connection", async (ws) => {
           if (!isAutomating) {
             try {
               await page.keyboard.press(msg.key);
-            } catch (err) {
-              // Bỏ qua
-            }
+              await page.waitForTimeout(120);
+              await sendScreenshotFrame();
+            } catch (err) {}
           }
           break;
 
         case "type":
           if (!isAutomating) {
             await page.keyboard.type(msg.text);
+            await page.waitForTimeout(120);
+            await sendScreenshotFrame();
+          }
+          break;
+
+        case "wheel":
+          if (!isAutomating) {
+            const deltaX = Number.isFinite(Number(msg.deltaX)) ? Number(msg.deltaX) : 0;
+            const deltaY = Number.isFinite(Number(msg.deltaY)) ? Number(msg.deltaY) : 0;
+            if (Number.isFinite(Number(msg.x)) && Number.isFinite(Number(msg.y))) {
+              await page.mouse.move(Number(msg.x), Number(msg.y));
+            }
+            await page.mouse.wheel(deltaX, deltaY);
+            await page.waitForTimeout(160);
+            await sendScreenshotFrame();
           }
           break;
 
@@ -293,6 +328,42 @@ wss.on("connection", async (ws) => {
           sendLog("Phiên đặt hàng đã bị hủy từ orchestrator.", "warning");
           break;
 
+        case "coop_show_cart":
+          if (isAutomating) {
+            sendLog("Hiện đang chạy một quy trình tự động khác.", "warning");
+            break;
+          }
+          isAutomating = true;
+          cooponlinePlaybook
+            .showCartPreview(page, msg.payload || msg, sendLog, sendStatus, sendScreenshotFrame)
+            .then(() => sendScreenshotFrame())
+            .catch((err) => {
+              sendLog(`Co.opmart màn hình thao tác lỗi: ${err.message}`, "error");
+              sendStatus("failed", { error: err.message });
+            })
+            .finally(() => {
+              isAutomating = false;
+            });
+          break;
+
+        case "coop_profile_setup":
+          if (isAutomating) {
+            sendLog("Hiện đang chạy một quy trình tự động khác.", "warning");
+            break;
+          }
+          isAutomating = true;
+          cooponlinePlaybook
+            .showProfileSetup(page, msg.payload || msg, sendLog, sendStatus, sendScreenshotFrame)
+            .then(() => sendScreenshotFrame())
+            .catch((err) => {
+              sendLog(`Co.opmart cập nhật hồ sơ lỗi: ${err.message}`, "error");
+              sendStatus("failed", { error: err.message });
+            })
+            .finally(() => {
+              isAutomating = false;
+            });
+          break;
+
         default:
           console.log(`[Agent Server] Lệnh không xác định: ${msg.type}`);
       }
@@ -308,36 +379,21 @@ wss.on("connection", async (ws) => {
   // Tự động hóa tiến trình mua hàng
   async function runAutomatedOrder(payload) {
     isAutomating = true;
-    
     try {
       sendStatus("running");
-      
-      // Gọi AI Agentic Loop điều khiển bằng thị giác LLM
       const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
-      if (aiHandled) {
-        isAutomating = false;
-        return;
-      }
+      if (aiHandled) { isAutomating = false; return; }
 
-      // Fallback kịch bản CSS selectors cũ khi không có API key
       const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
       sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
-
-      // Bước 1: Mở trang sản phẩm
       sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);
 
-      // Bước 2: Nhấp thêm vào giỏ / Mua ngay
-      sendLog(`Tìm và thêm sản phẩm "${productName}" vào giỏ hàng...`);
-      
-      // Tìm các nút mua hàng phổ biến ở Việt Nam
       const buySelectors = [
         "text=Mua ngay", "text=MUA NGAY", "text=Thêm vào giỏ hàng", "text=THÊM VÀO GIỎ",
-        "button:has-text('Mua')", "button:has-text('Đặt')", ".btn-buy", ".add-to-cart",
-        "a:has-text('Mua')"
+        "button:has-text('Mua')", "button:has-text('Đặt')", ".btn-buy", ".add-to-cart", "a:has-text('Mua')"
       ];
-      
       let clickedBuy = false;
       for (const selector of buySelectors) {
         try {
@@ -346,106 +402,40 @@ wss.on("connection", async (ws) => {
             await btn.scrollIntoViewIfNeeded();
             await btn.click();
             clickedBuy = true;
-            sendLog(`Đã click nút mua hàng bằng selector: "${selector}"`, "success");
+            sendLog(`Đã click nút mua hàng: "${selector}"`, "success");
             break;
           }
         } catch (e) {}
       }
-
       if (!clickedBuy) {
-        // Nếu không tìm thấy, giả lập click vào vị trí phỏng đoán ở giữa màn hình
-        sendLog("Không phát hiện nút mua tự động bằng chữ. Vui lòng click trực tiếp vào nút mua trên màn hình truyền phát.", "warning");
-        await page.waitForTimeout(3000); // Chờ user click
+        sendLog("Không phát hiện nút mua tự động. Vui lòng click trực tiếp trên màn hình.", "warning");
+        await page.waitForTimeout(3000);
       }
-
       await page.waitForTimeout(2000);
-
-      // Bước 3: Điền thông tin giao hàng
-      sendLog("Đang tiến hành điền thông tin người mua...");
-      
-      // Tìm các input họ tên, số điện thoại, địa chỉ
-      const nameSelectors = ["input[placeholder*='tên']", "input[placeholder*='Name']", "input[name*='name']", "input[name*='fullname']"];
-      const phoneSelectors = ["input[placeholder*='thoại']", "input[placeholder*='Phone']", "input[name*='phone']", "input[name*='tel']"];
-      const addressSelectors = ["input[placeholder*='địa chỉ']", "input[placeholder*='Address']", "textarea[placeholder*='chỉ']", "input[name*='address']"];
-
-      // Điền họ tên
-      let filledName = false;
-      for (const sel of nameSelectors) {
-        try {
-          const el = page.locator(sel).first();
-          if (await el.isVisible()) {
-            await el.fill(buyerName);
-            filledName = true;
-            break;
-          }
-        } catch (e) {}
-      }
-      if (filledName) sendLog(`Đã điền họ tên: ${buyerName}`, "success");
-
-      // Điền SĐT
-      let filledPhone = false;
-      for (const sel of phoneSelectors) {
-        try {
-          const el = page.locator(sel).first();
-          if (await el.isVisible()) {
-            await el.fill(buyerPhone);
-            filledPhone = true;
-            break;
-          }
-        } catch (e) {}
-      }
-      if (filledPhone) sendLog(`Đã điền SĐT: ${buyerPhone}`, "success");
-
-      // Điền địa chỉ
-      let filledAddress = false;
-      for (const sel of addressSelectors) {
-        try {
-          const el = page.locator(sel).first();
-          if (await el.isVisible()) {
-            await el.fill(buyerAddress);
-            filledAddress = true;
-            break;
-          }
-        } catch (e) {}
-      }
-      if (filledAddress) sendLog(`Đã điền địa chỉ giao hàng: ${buyerAddress}`, "success");
-
-      await page.waitForTimeout(1500);
-
-      // Bước 4: Chờ OTP / Đăng nhập / Thanh toán (Yêu cầu con người can thiệp)
       sendStatus("waiting_user_input");
       sendLog("⚠️ AGENT TẠM DỪNG: Cần khách hàng thực hiện OTP hoặc thanh toán trực tiếp trên màn hình!");
-      sendLog("Mẹo: Bạn có thể click chuột và gõ phím trực tiếp lên ô màn hình trình duyệt ở Web App để nhập OTP/thẻ ngân hàng.");
-
-      // Trả lại quyền tương tác tự do cho user
       isAutomating = false;
 
-      // Đợi xem user có hoàn thành không (chờ tối đa 5 phút)
       let isDone = false;
       for (let i = 0; i < 300; i++) {
-        // Kiểm tra xem trang có chuyển hướng sang trang cảm ơn/thành công không
         const currentUrl = page.url();
         if (currentUrl.includes("thank-you") || currentUrl.includes("success") || currentUrl.includes("don-hang") || currentUrl.includes("checkout/complete")) {
-          sendLog(`Phát hiện đặt hàng thành công! URL hiện tại: ${currentUrl}`, "success");
+          sendLog(`Phát hiện đặt hàng thành công! URL: ${currentUrl}`, "success");
           sendStatus("completed", { orderUrl: currentUrl });
           isDone = true;
           break;
         }
         await page.waitForTimeout(1000);
       }
-
-      if (!isDone) {
-        sendLog("Hết thời gian chờ (Timeout). Vui lòng kiểm tra lại đơn hàng.", "warning");
-      }
+      if (!isDone) sendLog("Hết thời gian chờ. Vui lòng kiểm tra lại đơn hàng.", "warning");
 
     } catch (err) {
-      sendLog(`Lỗi trong tiến trình tự động đặt hàng: ${err.message}`, "error");
+      sendLog(`Lỗi tiến trình đặt hàng: ${err.message}`, "error");
       sendStatus("failed", { error: err.message });
       isAutomating = false;
     }
   }
 
-  // Dọn dẹp tài nguyên khi ngắt kết nối
   async function cleanup() {
     console.log("[Agent Server] Đang dọn dẹp tài nguyên phiên...");
     try {

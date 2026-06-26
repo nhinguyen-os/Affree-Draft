@@ -129,7 +129,7 @@ export function physicalStoresOfChain(chain: Chain): Store[] {
 }
 
 export function getStore(id: string): Store | undefined {
-  return (dynamicIndex ?? STORE_INDEX)[id];
+  return dynamicIndex?.[id] ?? STORE_INDEX[id];
 }
 
 /**
