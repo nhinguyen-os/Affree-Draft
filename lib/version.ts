@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.2";
+export const APP_VERSION = "1.3.3";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,19 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.3",
+      date: "26.06.2026",
+      highlights: [
+        "Thêm khu vực 'Nhạc bản quyền — Khúc Chạm': mua trọn album (999.999đ) hoặc mua từng bài, có 'Nghe thử' để nghe trước khi mua",
+        "Trình phát nhạc Khúc Chạm nổi ở góc màn hình — thu gọn hoặc mở lại tuỳ ý; chọn bài là phát ngay",
+        "Popup 'Mua ngay' và giỏ hàng ghi rõ tên nơi bán (vd 'Shopee'), không viết tắt",
+        "Cửa hàng không nhận đặt online vẫn hiển thị thông tin liên hệ để bạn chủ động liên hệ",
+        "Thẻ sản phẩm hiển thị thông tin đầy đủ hơn, có viền & đổ bóng đồng bộ",
+        "Bộ lọc bán kính ở 'Giá hời quanh đây' đồng bộ giao diện với bộ lọc trên bản đồ",
+        "Sửa lỗi một số popup bị mờ / khó đọc khi máy ở chế độ tối — nền luôn sáng, chữ luôn rõ",
+        "Sau khi định vị, cửa hàng & sản phẩm tự bám theo tỉnh/thành bạn đang đứng (vd TP.HCM) để hiển thị sát nhu cầu & tải nhẹ hơn",
+      ],
+    }, {
       subVersion: "1.3.2",
       date: "25.06.2026",
       highlights: [

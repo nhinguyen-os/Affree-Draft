@@ -228,6 +228,10 @@ const EDGE_BLUR_LEFT =
   "pointer-events-none absolute inset-y-0 left-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_right,#000,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000,transparent)]";
 const EDGE_BLUR_RIGHT =
   "pointer-events-none absolute inset-y-0 right-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_left,#000,transparent)] [-webkit-mask-image:linear-gradient(to_left,#000,transparent)]";
+// Ô (tile) kiểu iOS/macOS 26-27 "liquid glass": bo góc mượt + ring mảnh + bóng MỀM 2 lớp
+// (ambient to + contact nhỏ) + vệt sáng kính ở mép trên (inset highlight). Hover: bóng nở.
+const TILE_GLASS =
+  "rounded-[22px] ring-1 ring-black/[0.06] shadow-[0_6px_18px_-6px_rgba(15,23,42,0.18),0_2px_5px_-2px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-200 group-hover:shadow-[0_14px_30px_-8px_rgba(15,23,42,0.26),0_4px_10px_-2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]";
 
 /** Hàng cuộn ngang có đổ bóng kính 2 mép — mỗi mép CHỈ hiện khi còn cuộn được hướng đó
  *  (thẻ đầu/cuối không bị nhòe khi chưa cuộn). Tự bắt scroll + resize. */
@@ -3027,7 +3031,7 @@ export default function Home() {
                         }`}
                       >
                         <span
-                          className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 text-5xl transition group-hover:scale-105 ${s.tint}`}
+                          className={`flex h-20 w-20 items-center justify-center overflow-hidden text-5xl group-hover:scale-105 ${TILE_GLASS} ${s.tint}`}
                         >
                           {(() => {
                             const sp = catalog?.sponsors?.find(
@@ -3105,7 +3109,7 @@ export default function Home() {
                           ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
                       <span className="relative">
                         <span
-                          className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 shadow-sm transition group-hover:shadow-md"
+                          className={`flex h-20 w-20 items-center justify-center overflow-hidden ${TILE_GLASS}`}
                           // Vuông 80×80 đồng kích thước với tile 'Dịch vụ quanh đây' để 2 section
                           // đồng phong cách. Logo tự dò màu nền brand + trim lề rỗng (TrimmedLogo).
                           style={{
@@ -3266,7 +3270,7 @@ export default function Home() {
                   {areaDeals.map((d) => (
                     <div
                       key={d.product.id}
-                      className="group relative flex w-36 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-2.5 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-40"
+                      className="group relative flex w-36 shrink-0 flex-col rounded-2xl bg-white p-2.5 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)] sm:w-40"
                     >
                       <span
                         role="button"
@@ -3437,7 +3441,7 @@ export default function Home() {
                   ) : isTuiActive ? (
                   <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                     {catalog!.tui!.map((tu) => (
-                      <li key={tu.chuyenTrang + tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500">
+                      <li key={tu.chuyenTrang + tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]">
                         <span
                           role="button"
                           tabIndex={0}
@@ -3502,7 +3506,7 @@ export default function Home() {
                       return (
                         <li key={p.id}>
                           <div
-                            className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
+                            className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]"
                           >
                             <div className="mb-3 flex min-h-[20px] flex-wrap items-start gap-1">
                               {tags.map((tag) => (
@@ -3638,7 +3642,7 @@ export default function Home() {
                         {tuis.map((tu) => (
                           <div
                             key={tu.chuyenTrang + tu.maTui + tu.tenTui}
-                            className="group relative flex w-44 shrink-0 flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500 sm:w-48"
+                            className="group relative flex w-44 shrink-0 flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)] sm:w-48"
                           >
                             <span
                               role="button"
@@ -3777,7 +3781,7 @@ export default function Home() {
                           return (
                             <li key={p.id}>
                               <div
-                                className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
+                                className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]"
                               >
                                 <div className="mb-3 flex min-h-[20px] flex-wrap items-start gap-1">
                                   {tags.map((tag) => (
@@ -3858,7 +3862,7 @@ export default function Home() {
                           return (
                             <div key={p.id} className="w-36 shrink-0 sm:w-40">
                               <div
-                                className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500"
+                                className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]"
                               >
                                 <div className="mb-3 flex min-h-[20px] flex-wrap items-start gap-1">
                                   {tags.map((tag) => (
