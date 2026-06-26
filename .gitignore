@@ -1,7 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
+node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -42,3 +42,4 @@ next-env.d.ts
 
 # Tạm bỏ qua khi push (PAT chưa có scope workflow) — thêm lại khi token có quyền
 .github/workflows/scrape.yml
+/logs
