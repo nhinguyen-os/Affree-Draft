@@ -17,6 +17,8 @@ export interface Store {
   online?: boolean;
   /** Mã tiền tệ của cửa hàng (vd "USD"). Trống → mặc định "VND". Giá sản phẩm hiển thị theo tiền tệ này. */
   currency?: string;
+  /** SĐT cửa hàng (cột phone/sdt trong sheet stores). Dùng cho cửa hàng KHÔNG order online — show nút Gọi + Zalo. */
+  phone?: string;
 }
 
 export interface Product {

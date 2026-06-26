@@ -650,10 +650,11 @@ export default function Home() {
   // đặc (vd Mencode vàng, Vinamilk xanh) sẽ paint card cùng màu → fill 100% khung.
   const [sponsorFill, setSponsorFill] = useState<Record<string, string>>({});
   // Override màu nền cho logo mà TrimmedLogo không bắt đúng.
-  // Beauty Republic: logo crest trên nền trắng → override gold + keyOutWhite (chỉ key pure-white).
+  // Beauty Republic: BỎ override (gold #B78932 + keyOutWhite làm logo bị xấu: chữ
+  // "BEAUTY REPUBLIC" mờ/bị crop, emblem mất nét). Để card trắng tự nhiên, logo
+  // crest gold/lá hiện rõ trên nền trắng = đẹp hơn.
   // Alo Clean: gradient + decorative band ở mép giữa → override khớp 4 góc cho mượt.
   const SPONSOR_FILL_OVERRIDES: Record<string, string> = {
-    "Beauty Republic": "#B78932",
     "Alo Clean": "#DFB77D",
   };
   // Aspect ratio (w/h) sau trim — card width co theo để logo fill 100% chiều cao + ngang.

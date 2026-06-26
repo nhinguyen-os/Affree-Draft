@@ -380,6 +380,25 @@ export default function MapView({
                   </button>
                 )}
               </div>
+              {/* SĐT cửa hàng — nút Gọi (mobile + bàn) + Zalo (chỉ mobile VN) cho cửa hàng KHÔNG order online */}
+              {selectedStore.store.phone && (() => {
+                const raw = selectedStore.store.phone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
+                const isMobileVN = /^0[35789]\d{8}$/.test(raw);
+                return (
+                  <div style={{ marginTop: 5, display: "flex", gap: 5 }}>
+                    <a href={`tel:${raw}`} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#fff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72a2 2 0 0 1 1.72 2z"/></svg>
+                      {t("Gọi")}
+                    </a>
+                    {isMobileVN && (
+                      <a href={`https://zalo.me/${raw}`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#0068ff", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        {t("Zalo")}
+                      </a>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>,
           document.body
