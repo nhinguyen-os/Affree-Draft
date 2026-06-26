@@ -1775,7 +1775,7 @@ export default function Home() {
                   {userAddr || t("Vị trí của bạn")}
                 </span>
                 <div className="flex items-center gap-1">
-                  {[1, 3, 5, 10].map((r) => (
+                  {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1, 3, 5, 10].map((r) => (
                     <button
                       key={r}
                       type="button"
@@ -1785,7 +1785,7 @@ export default function Home() {
                         : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
                         }`}
                     >
-                      {r} km
+                     {r < 1 ? `${Math.round(r * 1000)}m` : `${r}km`}
                     </button>
                   ))}
                 </div>
