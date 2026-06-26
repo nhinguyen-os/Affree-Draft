@@ -691,152 +691,171 @@ export default function OrderAgentModal({
     setCoopBrowserFrame("");
     try {
       coopBrowserWsRef.current?.close();
-      const ws = new WebSocket("ws://localhost:8080");
-      coopBrowserWsRef.current = ws;
-      let opened = false;
-      let receivedFrame = false;
-      let commandAcknowledged = false;
-      let commandAttempts = 0;
-      let lastCommandAt = 0;
-      const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
-      const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
-      const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
-      const buildOpenMessage = () =>
-        mode === "profileSetup"
-          ? {
-              type: "coop_profile_setup",
-              phone: phoneDigits,
-              password,
-              name,
-              email,
-              address,
-              addressLine: coopAddressParts.addressLine,
-              provinceCode: coopAddressParts.provinceCode,
-              provinceName: coopAddressParts.provinceName,
-              districtCode: coopAddressParts.districtCode,
-              districtName: coopAddressParts.districtName,
-              wardCode: coopAddressParts.wardCode,
-              wardName: coopAddressParts.wardName,
-              terminalCode: coopTerminalCode,
-              terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
-              terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
-              terminalId: selectedCoopTerminal?.terminalId,
-              siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
-            }
-          : result?.cartToken
+    } catch (e) {}
+
+    const wsSessionId = `coop-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const baseUrl = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080";
+    const separator = baseUrl.includes("?") ? "&" : "?";
+
+    fetch(`/api/agent/token?sessionId=${wsSessionId}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("API token fetch error");
+        return res.json();
+      })
+      .then((data) => {
+        let wsUrl = `${baseUrl}${separator}sessionId=${wsSessionId}`;
+        if (data.token) {
+          wsUrl += `&timestamp=${data.timestamp}&token=${data.token}`;
+        }
+
+        const ws = new WebSocket(wsUrl);
+        coopBrowserWsRef.current = ws;
+        let opened = false;
+        let receivedFrame = false;
+        let commandAcknowledged = false;
+        let commandAttempts = 0;
+        let lastCommandAt = 0;
+        const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
+        const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
+        const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
+        const buildOpenMessage = () =>
+          mode === "profileSetup"
             ? {
-                type: "coop_show_cart",
-              cartToken: result.cartToken,
-              terminalCode: result.terminalCode || coopTerminalCode,
-              terminalName: result.browserSession?.terminalName,
-              terminalAddress: result.browserSession?.terminalAddress,
-              terminalId: result.browserSession?.terminalId,
-              siteId: result.browserSession?.siteId,
-              deliveryDate: preparedDeliveryDate,
-              slotFrom: preparedSlotFrom,
-              slotTo: preparedSlotTo,
-              address,
-              addressLine: coopAddressParts.addressLine,
-              provinceCode: coopAddressParts.provinceCode,
-              provinceName: coopAddressParts.provinceName,
-              districtCode: coopAddressParts.districtCode,
-              districtName: coopAddressParts.districtName,
-              wardCode: coopAddressParts.wardCode,
-              wardName: coopAddressParts.wardName,
-              name,
-              email,
-              phone: phoneDigits,
-              password,
-              checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
-              browserSession: result.browserSession,
-            }
-          : { type: "navigate", url: result?.checkoutUrl || result?.cartUrl || "https://cooponline.vn" };
-      const sendOpenCommand = () => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        commandAttempts += 1;
-        lastCommandAt = Date.now();
-        ws.send(JSON.stringify(buildOpenMessage()));
-      };
-      const connectionTimeout = window.setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
-          ws.close();
-        }
-      }, 2500);
-      const commandRetry = window.setInterval(() => {
-        if (!opened || commandAcknowledged || ws.readyState !== WebSocket.OPEN) return;
-        if (commandAttempts >= 5) {
-          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng Co.op chưa nhận lệnh mở màn hình. Vui lòng bấm Đóng màn hình rồi mở lại."));
-          window.clearInterval(commandRetry);
-          return;
-        }
-        if (commandAttempts === 0 || Date.now() - lastCommandAt > 3000) {
-          sendOpenCommand();
-        }
-      }, 1000);
-      const frameTimeout = window.setTimeout(() => {
-        if (opened && !receivedFrame) {
-          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng chưa nhận được ảnh. Đang thử nạp lại màn hình Co.op…"));
-          sendOpenCommand();
-        }
-      }, 7000);
-      ws.onopen = () => {
-        opened = true;
-        window.clearTimeout(connectionTimeout);
-        setCoopBrowserStatus(t("Đã kết nối agent-server, đang chờ trình duyệt sẵn sàng…"));
-      };
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(String(event.data)) as {
-            type?: string;
-            data?: string;
-            message?: string;
-            status?: string;
-            phase?: string;
-            width?: number;
-            height?: number;
-          };
-          if (message.type === "screencast" && message.data) {
-            receivedFrame = true;
-            window.clearTimeout(frameTimeout);
-            setCoopBrowserFrame(`data:image/jpeg;base64,${message.data}`);
-            if (message.width && message.height) setCoopBrowserSize({ width: message.width, height: message.height });
+                type: "coop_profile_setup",
+                phone: phoneDigits,
+                password,
+                name,
+                email,
+                address,
+                addressLine: coopAddressParts.addressLine,
+                provinceCode: coopAddressParts.provinceCode,
+                provinceName: coopAddressParts.provinceName,
+                districtCode: coopAddressParts.districtCode,
+                districtName: coopAddressParts.districtName,
+                wardCode: coopAddressParts.wardCode,
+                wardName: coopAddressParts.wardName,
+                terminalCode: coopTerminalCode,
+                terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
+                terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
+                terminalId: selectedCoopTerminal?.terminalId,
+                siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
+              }
+            : result?.cartToken
+              ? {
+                  type: "coop_show_cart",
+                cartToken: result.cartToken,
+                terminalCode: result.terminalCode || coopTerminalCode,
+                terminalName: result.browserSession?.terminalName,
+                terminalAddress: result.browserSession?.terminalAddress,
+                terminalId: result.browserSession?.terminalId,
+                siteId: result.browserSession?.siteId,
+                deliveryDate: preparedDeliveryDate,
+                slotFrom: preparedSlotFrom,
+                slotTo: preparedSlotTo,
+                address,
+                addressLine: coopAddressParts.addressLine,
+                provinceCode: coopAddressParts.provinceCode,
+                provinceName: coopAddressParts.provinceName,
+                districtCode: coopAddressParts.districtCode,
+                districtName: coopAddressParts.districtName,
+                wardCode: coopAddressParts.wardCode,
+                wardName: coopAddressParts.wardName,
+                name,
+                email,
+                phone: phoneDigits,
+                password,
+                checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
+                browserSession: result.browserSession,
+              }
+            : { type: "navigate", url: result?.checkoutUrl || result?.cartUrl || "https://cooponline.vn" };
+        const sendOpenCommand = () => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          commandAttempts += 1;
+          lastCommandAt = Date.now();
+          ws.send(JSON.stringify(buildOpenMessage()));
+        };
+        const connectionTimeout = window.setTimeout(() => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
+            ws.close();
           }
-          if (message.type === "log" && message.message) {
-            setCoopBrowserStatus(message.message);
-            if (/khởi tạo trình duyệt thành công/i.test(message.message) && commandAttempts === 0) {
-              window.setTimeout(sendOpenCommand, 100);
+        }, 2500);
+        const commandRetry = window.setInterval(() => {
+          if (!opened || commandAcknowledged || ws.readyState !== WebSocket.OPEN) return;
+          if (commandAttempts >= 5) {
+            setCoopBrowserStatus(t("Đã kết nối agent-server nhưng Co.op chưa nhận lệnh mở màn hình. Vui lòng bấm Đóng màn hình rồi mở lại."));
+            window.clearInterval(commandRetry);
+            return;
+          }
+          if (commandAttempts === 0 || Date.now() - lastCommandAt > 3000) {
+            sendOpenCommand();
+          }
+        }, 1000);
+        const frameTimeout = window.setTimeout(() => {
+          if (opened && !receivedFrame) {
+            setCoopBrowserStatus(t("Đã kết nối agent-server nhưng chưa nhận được ảnh. Đang thử nạp lại màn hình Co.op…"));
+            sendOpenCommand();
+          }
+        }, 7000);
+        ws.onopen = () => {
+          opened = true;
+          window.clearTimeout(connectionTimeout);
+          setCoopBrowserStatus(t("Đã kết nối agent-server, đang chờ trình duyệt sẵn sàng…"));
+        };
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(String(event.data)) as {
+              type?: string;
+              data?: string;
+              message?: string;
+              status?: string;
+              phase?: string;
+              width?: number;
+              height?: number;
+            };
+            if (message.type === "screencast" && message.data) {
+              receivedFrame = true;
+              window.clearTimeout(frameTimeout);
+              setCoopBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+              if (message.width && message.height) setCoopBrowserSize({ width: message.width, height: message.height });
             }
-            if (/Co\.opmart|Co\.op/i.test(message.message)) {
+            if (message.type === "log" && message.message) {
+              setCoopBrowserStatus(message.message);
+              if (/khởi tạo trình duyệt thành công/i.test(message.message) && commandAttempts === 0) {
+                window.setTimeout(sendOpenCommand, 100);
+              }
+              if (/Co\.opmart|Co\.op/i.test(message.message)) {
+                commandAcknowledged = true;
+                window.clearInterval(commandRetry);
+              }
+            }
+            if (message.type === "status" && message.phase?.startsWith("coop_assist_")) {
               commandAcknowledged = true;
               window.clearInterval(commandRetry);
+              if (message.phase === "coop_assist_ready") {
+                setCoopBrowserStatus(t("Màn hình Co.op đã sẵn sàng, bạn có thể click/gõ trực tiếp tại đây."));
+              }
+              if (message.phase === "coop_assist_manual") {
+                setCoopBrowserStatus(t("Co.op cần bạn thao tác tiếp trên màn hình đang mở."));
+              }
             }
+          } catch {
+            // Ignore malformed frames from local agent server.
           }
-          if (message.type === "status" && message.phase?.startsWith("coop_assist_")) {
-            commandAcknowledged = true;
-            window.clearInterval(commandRetry);
-            if (message.phase === "coop_assist_ready") {
-              setCoopBrowserStatus(t("Màn hình Co.op đã sẵn sàng, bạn có thể click/gõ trực tiếp tại đây."));
-            }
-            if (message.phase === "coop_assist_manual") {
-              setCoopBrowserStatus(t("Co.op cần bạn thao tác tiếp trên màn hình đang mở."));
-            }
-          }
-        } catch {
-          // Ignore malformed frames from local agent server.
-        }
-      };
-      ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
-      ws.onclose = () => {
-        window.clearTimeout(connectionTimeout);
-        window.clearTimeout(frameTimeout);
-        window.clearInterval(commandRetry);
-        if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
-        coopBrowserWsRef.current = null;
-      };
-    } catch {
-      setCoopBrowserStatus(t("Không mở được màn hình Co.op."));
-    }
+        };
+        ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
+        ws.onclose = () => {
+          window.clearTimeout(connectionTimeout);
+          window.clearTimeout(frameTimeout);
+          window.clearInterval(commandRetry);
+          if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
+          coopBrowserWsRef.current = null;
+        };
+      })
+      .catch((err) => {
+        console.error("Lỗi khởi tạo token:", err);
+        setCoopBrowserStatus(t("Lỗi bảo mật khi mở kết nối trình duyệt Co.op."));
+      });
   };
 
   const getCoopBrowserPoint = (event: { currentTarget: HTMLElement; clientX: number; clientY: number }) => {

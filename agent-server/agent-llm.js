@@ -274,7 +274,7 @@ async function detectActivePopup(page) {
 }
 
 /**
- * Vòng lặp điều khiển chính của AI Agent - DOM-first approach
+ * Vòng lặp điều khiển chính của AI Agentic - DOM-first approach
  */
 async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}) {
   const { productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
@@ -365,7 +365,7 @@ async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}) 
       ? `- ⚠️ HIỆN CÓ POPUP/MODAL ĐANG MỞ: class="${activePopup}". Hãy ưu tiên tìm nút đóng (X, Close, Đóng, Tiếp tục, Bỏ qua...) trong danh sách phần tử để tắt popup này TRƯỚC KHI làm bất cứ việc gì khác.\n`
       : "";
 
-    const promptText = `Bạn là AI Agent điều khiển trình duyệt để đặt hàng online.
+    const promptText = `Bạn là AI Agentic điều khiển trình duyệt để đặt hàng online.
 Thông tin đặt hàng:
 - Sản phẩm: "${productName}"
 - Số lượng: ${qty}
@@ -479,7 +479,7 @@ Trả về JSON (chỉ JSON, không markdown):
           break;
 
         case "pause":
-          sendLog("⚠️ AI Agent dừng lại — cần bạn can thiệp (OTP / CAPTCHA / Mật khẩu / Thẻ thanh toán).", "warning");
+          sendLog("⚠️ AI Agentic dừng lại — cần bạn can thiệp (OTP / CAPTCHA / Mật khẩu / Thẻ thanh toán).", "warning");
           sendLog("👉 Hãy thao tác trực tiếp trên màn hình điều khiển ở Web App.", "info");
           sendStatus("waiting_user_input", {
             reason: decision.reason
@@ -502,7 +502,7 @@ Trả về JSON (chỉ JSON, không markdown):
     await page.waitForTimeout(1000);
   }
 
-  sendLog("⚠️ Đã đạt giới hạn tối đa 25 bước. Dừng AI Agent.", "warning");
+  sendLog("⚠️ Đã đạt giới hạn tối đa 25 bước. Dừng AI Agentic.", "warning");
   sendStatus("failed", { error: "Max steps reached" });
   return true;
 }

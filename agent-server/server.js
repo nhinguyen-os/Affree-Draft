@@ -452,13 +452,21 @@ wss.on("connection", async (ws) => {
     console.log("[Agent Server] Đã giải phóng phiên.");
   }
 
-  ws.on("close", () => {
+  ws.on("close", async () => {
     console.log("[Agent Server] Client đã đóng kết nối.");
-    cleanup();
+    await cleanup();
+    if (process.env.EXIT_ON_CLOSE === "true") {
+      console.log("[Agent Server] EXIT_ON_CLOSE=true. Đang thoát...");
+      process.exit(0);
+    }
   });
 
-  ws.on("error", (err) => {
+  ws.on("error", async (err) => {
     console.error("[Agent Server] Lỗi kết nối WebSocket:", err);
-    cleanup();
+    await cleanup();
+    if (process.env.EXIT_ON_CLOSE === "true") {
+      console.log("[Agent Server] EXIT_ON_CLOSE=true. Đang thoát do lỗi...");
+      process.exit(1);
+    }
   });
 });
