@@ -1051,6 +1051,180 @@ function formatCoopDisplayDate(value) {
   return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value || "");
 }
 
+async function clickCoopCheckoutDate(page, displayDate) {
+  const match = String(displayDate || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return false;
+  const [, day, month, year] = match;
+  const picked = await page.evaluate(({ day, month, year }) => {
+    const isVisible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const allNodes = Array.from(document.querySelectorAll("button, td, div, span, [role='button'], [role='gridcell']"));
+    const dayNumber = String(Number(day));
+    const candidates = allNodes
+      .filter((el) => {
+        if (!isVisible(el)) return false;
+        const text = normalize(el.textContent);
+        if (text !== day && text !== dayNumber) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width >= 16 && rect.width <= 80 && rect.height >= 16 && rect.height <= 80;
+      })
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        const scope = el.closest("[class*='calendar'], [class*='datepicker'], [class*='picker'], [role='dialog'], [class*='popover']") || el.parentElement;
+        const scopeText = normalize(scope?.textContent);
+        const label = normalize(el.getAttribute("aria-label") || el.getAttribute("title") || "");
+        const score =
+          (scopeText.includes(month) ? 3 : 0) +
+          (scopeText.includes(year) ? 3 : 0) +
+          (/calendar|picker|date/i.test(String(scope?.className || "")) ? 4 : 0) +
+          (label.includes(month) || label.includes(year) ? 4 : 0) +
+          (rect.top > 120 ? 1 : 0);
+        return { el, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const target = candidates[0]?.el;
+    if (!target) return false;
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    target.click();
+    return true;
+  }, { day, month, year }).catch(() => false);
+  return Boolean(picked);
+}
+
+async function selectCoopCheckoutDate(page, displayDate) {
+  if (!displayDate) return false;
+  const dateInputs = [
+    'input[placeholder*="dd/mm" i]',
+    'input[placeholder*="ngày" i]',
+    'input[name*="date" i]',
+    'input[class*="date" i]',
+  ];
+
+  for (const selector of dateInputs) {
+    const input = page.locator(selector).first();
+    if (!(await input.isVisible({ timeout: 700 }).catch(() => false))) continue;
+    await input.scrollIntoViewIfNeeded().catch(() => null);
+    await input.click({ force: true }).catch(() => null);
+    await page.waitForTimeout(300);
+    const clickedPickerDay = await clickCoopCheckoutDate(page, displayDate);
+    if (clickedPickerDay) return true;
+
+    await input.fill(displayDate, { force: true }).catch(async () => {
+      await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => null);
+      await input.type(displayDate, { delay: 20 }).catch(() => null);
+    });
+    await input.evaluate((el, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }, displayDate).catch(() => null);
+    await input.press("Enter").catch(() => null);
+    await input.press("Tab").catch(() => null);
+    await page.waitForTimeout(300);
+    const currentValue = await input.inputValue().catch(() => "");
+    if (currentValue.includes(displayDate)) return true;
+  }
+
+  const openedByLabel = await page.evaluate(() => {
+    const labels = Array.from(document.querySelectorAll("label, div, span, p"));
+    const target = labels.find((el) => {
+      const text = String(el.textContent || "").toLowerCase();
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && text.includes("chọn ngày nhận hàng");
+    });
+    const clickable = target?.closest("div")?.querySelector("input, button, [role='button']") || target;
+    if (!clickable) return false;
+    clickable.click();
+    return true;
+  }).catch(() => false);
+  if (openedByLabel) {
+    await page.waitForTimeout(300);
+    if (await clickCoopCheckoutDate(page, displayDate)) return true;
+  }
+
+  const dateButton = page.getByText(displayDate, { exact: true }).first();
+  if (await dateButton.isVisible({ timeout: 700 }).catch(() => false)) {
+    await dateButton.click({ force: true }).catch(() => null);
+    return true;
+  }
+
+  return false;
+}
+
+async function selectCoopCheckoutSlot(page, slotFrom, slotTo) {
+  if (!slotFrom || !slotTo) return false;
+  const slotText = `${slotFrom} - ${slotTo}`;
+  const pickedByDom = await page.evaluate(({ slotFrom, slotTo, slotText }) => {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const isVisible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const label = Array.from(document.querySelectorAll("label, div, span, p")).find((el) => {
+      if (!isVisible(el)) return false;
+      return normalize(el.textContent).toLowerCase() === "chọn khung giờ";
+    });
+    const labelRect = label?.getBoundingClientRect();
+    const nodes = Array.from(document.querySelectorAll("button, label, [role='button'], div, span"));
+    const candidates = nodes
+      .filter((el) => {
+        if (!isVisible(el)) return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 45 || rect.width > 190 || rect.height < 28 || rect.height > 80) return false;
+        if (labelRect && (rect.top < labelRect.bottom - 4 || rect.top > labelRect.bottom + 180)) return false;
+        const text = normalize(el.textContent);
+        if (!text) return false;
+        return text === normalize(slotText) || (text.includes(slotFrom) && text.includes(slotTo) && text.length <= 28);
+      })
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        const text = normalize(el.textContent);
+        const tagScore = el.tagName === "BUTTON" ? 8 : el.getAttribute("role") === "button" ? 6 : 0;
+        const exactScore = text === normalize(slotText) ? 6 : 0;
+        const distanceScore = labelRect ? Math.max(0, 120 - Math.abs(rect.top - labelRect.bottom)) / 20 : 0;
+        const areaPenalty = rect.width * rect.height > 9000 ? 4 : 0;
+        return { el, score: tagScore + exactScore + distanceScore - areaPenalty };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const target = candidates[0]?.el;
+    if (!target) return false;
+    target.scrollIntoView({ block: "center", inline: "center" });
+    target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    target.click();
+    return true;
+  }, { slotFrom, slotTo, slotText }).catch(() => false);
+  if (pickedByDom) return true;
+
+  const slotCandidates = [
+    page.locator(`button:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+    page.locator(`[role="button"]:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+    page.locator(`label:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+  ];
+  for (const candidate of slotCandidates) {
+    if (!(await candidate.isVisible({ timeout: 700 }).catch(() => false))) continue;
+    const box = await candidate.boundingBox().catch(() => null);
+    if (!box || box.width > 190 || box.height > 90) continue;
+    await candidate.scrollIntoViewIfNeeded().catch(() => null);
+    await candidate.click({ force: true }).catch(() => null);
+    return true;
+  }
+  return false;
+}
+
 async function selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame) {
   const displayDate = formatCoopDisplayDate(payload.deliveryDate);
   const slotFrom = String(payload.slotFrom || "").trim();
@@ -1061,58 +1235,14 @@ async function selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame) {
   sendLog(`Co.opmart: Đang chọn ngày/khung giờ giao ${displayDate || ""} ${slotText || ""} trên checkout...`);
   let pickedDate = false;
   let pickedSlot = false;
+  await page.evaluate(() => window.scrollBy(0, Math.floor(window.innerHeight * 0.45))).catch(() => null);
 
   if (displayDate) {
-    const dateInputs = [
-      'input[placeholder*="dd/mm" i]',
-      'input[placeholder*="ngày" i]',
-      'input[name*="date" i]',
-      'input[class*="date" i]',
-    ];
-    for (const selector of dateInputs) {
-      const input = page.locator(selector).first();
-      if (!(await input.isVisible({ timeout: 700 }).catch(() => false))) continue;
-      await input.click({ force: true }).catch(() => null);
-      await input.fill(displayDate, { force: true }).catch(async () => {
-        await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => null);
-        await input.type(displayDate, { delay: 20 }).catch(() => null);
-      });
-      await input.evaluate((el, value) => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-        setter?.call(el, value);
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        el.dispatchEvent(new Event("blur", { bubbles: true }));
-      }, displayDate).catch(() => null);
-      pickedDate = true;
-      break;
-    }
-
-    if (!pickedDate) {
-      const dateButton = page.getByText(displayDate, { exact: true }).first();
-      if (await dateButton.isVisible({ timeout: 700 }).catch(() => false)) {
-        await dateButton.click({ force: true }).catch(() => null);
-        pickedDate = true;
-      }
-    }
+    pickedDate = await selectCoopCheckoutDate(page, displayDate);
   }
 
   if (slotText) {
-    const normalizedSlot = slotText.replace(/\s+/g, " ");
-    const slotCandidates = [
-      page.getByText(slotText, { exact: true }).first(),
-      page.getByText(normalizedSlot, { exact: true }).first(),
-      page.locator(`button:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
-      page.locator(`label:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
-      page.locator(`div:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
-    ];
-    for (const candidate of slotCandidates) {
-      if (!(await candidate.isVisible({ timeout: 700 }).catch(() => false))) continue;
-      await candidate.scrollIntoViewIfNeeded().catch(() => null);
-      await candidate.click({ force: true }).catch(() => null);
-      pickedSlot = true;
-      break;
-    }
+    pickedSlot = await selectCoopCheckoutSlot(page, slotFrom, slotTo);
   }
 
   if (pickedDate || pickedSlot) {
@@ -1129,6 +1259,15 @@ async function selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame) {
   return false;
 }
 
+async function selectCoopCheckoutScheduleWithRetry(page, payload, sendLog, sendFrame) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const ok = await selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame);
+    if (ok) return true;
+    await page.waitForTimeout(900);
+  }
+  return false;
+}
+
 async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
   sendStatus("coop_assist_opening");
   sendLog("Co.opmart: Đang nạp cart token vào trình duyệt thao tác...");
@@ -1138,7 +1277,7 @@ async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
   await safeGotoCoop(page, checkoutUrl, sendLog, sendFrame);
   await page.waitForTimeout(1500);
   await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 2500);
-  await selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame);
+  await selectCoopCheckoutScheduleWithRetry(page, payload, sendLog, sendFrame);
   await sendFrame?.();
   sendLog("Co.opmart: Đã mở màn checkout để người dùng thao tác.", "success");
   sendStatus("coop_assist_ready", { url: page.url() });

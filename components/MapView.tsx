@@ -34,18 +34,6 @@ type DestPin = {
   lat: number;
 };
 
-function isFiniteCoord(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isFiniteLatLng(value: { lat?: unknown; lng?: unknown } | null | undefined): value is { lat: number; lng: number } {
-  return !!value && isFiniteCoord(value.lat) && isFiniteCoord(value.lng);
-}
-
-function isFiniteCenter(value: [number, number] | null | undefined): value is [number, number] {
-  return Array.isArray(value) && isFiniteCoord(value[0]) && isFiniteCoord(value[1]);
-}
-
 // Optimised icon using /api/marker endpoint instead of raw HTML
 function storeIcon(color: string, cheapest: boolean, highlight: boolean, cheapestLabel: string) {
   const size = cheapest ? 40 : highlight ? 36 : 30;
@@ -88,19 +76,8 @@ const userLocIcon = L.divIcon({
 function Recenter({ center, zoom }: { center: [number, number]; zoom?: number }) {
   const map = useMap();
   useEffect(() => {
-    const lat = Number(center?.[0]);
-    const lng = Number(center?.[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-
-    const nextCenter: [number, number] = [lat, lng];
-    const currentZoom = map.getZoom();
-    const nextZoom = Number.isFinite(zoom) ? zoom : Number.isFinite(currentZoom) ? currentZoom : 13;
-
-    try {
-      map.flyTo(nextCenter, nextZoom, { duration: 0.6 });
-    } catch {
-      map.setView(nextCenter, nextZoom);
-    }
+    if (zoom != null) map.flyTo(center, zoom, { duration: 0.6 });
+    else map.flyTo(center, map.getZoom(), { duration: 0.6 });
   }, [center, zoom, map]);
   return null;
 }
@@ -166,16 +143,15 @@ function ClusterGroup({
     cluster.clearLayers();
 
     markers
-      .filter((m) => isFiniteLatLng(m.store))
+      .filter((m) => m.store.lat != null && m.store.lng != null)
       .forEach((m) => {
-        const store = m.store as Store & { lat: number; lng: number };
-        const marker = L.marker([store.lat, store.lng], {
-          icon: storeIcon(chainColor(store.chain), !!m.cheapest, store.id === highlightId, t("RẺ NHẤT")),
+        const marker = L.marker([m.store.lat as number, m.store.lng as number], {
+          icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, m.store.id === highlightId, t("RẺ NHẤT")),
         });
 
         marker.bindTooltip(`
-          <span style="font-weight: 600;">${chainLabel(store.chain)}</span>
-          · ${store.name}
+          <span style="font-weight: 600;">${chainLabel(m.store.chain)}</span>
+          · ${m.store.name}
           ${m.price != null ? ` · ${m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}` : ""}
         `, { direction: "top", offset: [0, -28], opacity: 1 });
 
@@ -218,8 +194,6 @@ export default function MapView({
   const [destPin, setDestPin] = useState<DestPin | null>(null);
   const [destPinPopup, setDestPinPopup] = useState(false);
   const destMarkerRef = useRef<L.Marker>(null);
-  const safeCenter = isFiniteCenter(center) ? center : [10.7769, 106.7009] as [number, number];
-  const safeUserLoc = isFiniteLatLng(userLoc) ? userLoc : null;
 
   // Update selectedStore fields if markers change
   useEffect(() => {
@@ -239,9 +213,9 @@ export default function MapView({
   }, [markers, selectedStore]);
 
   const recenter = useCallback(() => {
-    if (!safeUserLoc || !map) return;
-    map.flyTo([safeUserLoc.lat, safeUserLoc.lng], 15, { duration: 0.5 });
-  }, [safeUserLoc, map]);
+    if (!userLoc || !map) return;
+    map.flyTo([userLoc.lat, userLoc.lng], 15, { duration: 0.5 });
+  }, [userLoc, map]);
 
   const handleMapClick = useCallback((e: L.LeafletMouseEvent) => {
     setSelectedStore(null);
@@ -282,7 +256,7 @@ export default function MapView({
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       <MapContainer
         ref={setMap}
-        center={safeCenter}
+        center={center}
         zoom={zoomForRadius(radiusKm) ?? 13}
         scrollWheelZoom
         style={{ height: "100%", width: "100%" }}
@@ -293,21 +267,21 @@ export default function MapView({
           url={resolvedTileUrl}
         />
         <AttributionControl prefix={false} />
-        <Recenter center={safeCenter} zoom={zoomForRadius(radiusKm)} />
+        <Recenter center={center} zoom={zoomForRadius(radiusKm)} />
         <AutoResize />
         <MapEvents onClick={handleMapClick} />
 
-        {safeUserLoc && radiusKm && (
+        {userLoc && radiusKm && (
           <Circle
-            center={[safeUserLoc.lat, safeUserLoc.lng]}
+            center={[userLoc.lat, userLoc.lng]}
             radius={radiusKm * 1000}
             pathOptions={{ color: "#2563eb", weight: 1.5, fillColor: "#3b82f6", fillOpacity: 0.07 }}
           />
         )}
 
-        {safeUserLoc && (
+        {userLoc && (
           <Marker
-            position={[safeUserLoc.lat, safeUserLoc.lng]}
+            position={[userLoc.lat, userLoc.lng]}
             icon={userLocIcon}
             eventHandlers={{
               click: (e) => {
@@ -333,9 +307,9 @@ export default function MapView({
           onMarkerClick={setSelectedStore}
         />
 
-        {selectedStore && isFiniteLatLng(selectedStore.store) && (
+        {selectedStore && selectedStore.store.lat != null && selectedStore.store.lng != null && (
           <Popup
-            position={[selectedStore.store.lat, selectedStore.store.lng]}
+            position={[selectedStore.store.lat as number, selectedStore.store.lng as number]}
             eventHandlers={{
               remove: () => setSelectedStore(null),
             }}
@@ -428,7 +402,7 @@ export default function MapView({
         )}
       </MapContainer>
 
-      {safeUserLoc && (
+      {userLoc && (
         <button
           type="button"
           onClick={recenter}

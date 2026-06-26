@@ -55,6 +55,7 @@ type CoopOrderResult = {
     fullAddress?: string;
     availableDates?: string[];
     availableTimeSlots?: Array<{ from: string; to: string; disabled?: boolean }>;
+    availableSlotsByDate?: Record<string, Array<{ from: string; to: string; disabled?: boolean }>>;
     selectedDate?: string | null;
     selectedSlotFrom?: string | null;
     selectedSlotTo?: string | null;
@@ -113,7 +114,7 @@ const COOP_TIME_SLOTS: Array<{ from: string; to: string; disabled?: boolean }> =
   { from: "16:00", to: "18:00" },
   { from: "18:00", to: "20:00" },
 ];
-const COOP_DELIVERY_LEAD_MINUTES = 120;
+const COOP_DELIVERY_LEAD_MINUTES = 180;
 
 export default function OrderAgentModal({
   offer,
@@ -198,6 +199,8 @@ export default function OrderAgentModal({
   const [coopTerminals, setCoopTerminals] = useState<CoopTerminalChoice[]>([]);
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
+  const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
+  const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
   const lastCoopLookupAddressRef = useRef("");
 
   const steps: Step[] = useMemo(() => {
@@ -267,7 +270,10 @@ export default function OrderAgentModal({
   const coopBelowMinimum = isCoopReal && total < coopMinTotal;
   const todayInput = formatDateInput(new Date());
   const coopDeliveryDates = (coopResult?.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
-  const coopDeliverySlots = coopResult?.deliveryCheck?.availableTimeSlots ?? [];
+  const coopDeliverySlots =
+    (coopDeliveryDate ? coopResult?.deliveryCheck?.availableSlotsByDate?.[coopDeliveryDate] : undefined) ??
+    coopResult?.deliveryCheck?.availableTimeSlots ??
+    [];
   const coopSavedAddress = coopResult?.deliveryCheck?.fullAddress || "";
   const coopSelectedPaymentName = coopResult?.paymentCheck?.selectedMethodName || coopResult?.paymentCheck?.selectedMethodCode || "";
   const effectiveCoopDeliverySlots = getEffectiveCoopDeliverySlots(
@@ -352,20 +358,19 @@ export default function OrderAgentModal({
     terminalId: selectedCoopTerminal?.terminalId,
   });
 
-  const setCoopCartReady = (data: CoopOrderResult) => {
-    setCoopResult(data);
-    setCoopFlowId("");
-    setOtp("");
-    setCoopCheckoutPrepared(false);
-    setCoopStep("delivery");
-    setStepIndex(2);
+  const applyCoopDeliverySelection = (data: CoopOrderResult) => {
     const dates = (data.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
     const selectedDate = data.deliveryCheck?.selectedDate && data.deliveryCheck.selectedDate >= todayInput
       ? data.deliveryCheck.selectedDate
-      : dates[0] || "";
+      : dates[0] || coopDeliveryDate || "";
     if (selectedDate) setCoopDeliveryDate(selectedDate);
+
     const candidateSlots = getEffectiveCoopDeliverySlots(
-      data.deliveryCheck?.availableTimeSlots?.length ? data.deliveryCheck.availableTimeSlots : COOP_TIME_SLOTS,
+      selectedDate && data.deliveryCheck?.availableSlotsByDate?.[selectedDate]?.length
+        ? data.deliveryCheck.availableSlotsByDate[selectedDate]
+        : data.deliveryCheck?.availableTimeSlots?.length
+          ? data.deliveryCheck.availableTimeSlots
+          : COOP_TIME_SLOTS,
       selectedDate,
     );
     const selectedSlot =
@@ -382,6 +387,16 @@ export default function OrderAgentModal({
       setCoopSlotFrom("");
       setCoopSlotTo("");
     }
+  };
+
+  const setCoopCartReady = (data: CoopOrderResult) => {
+    setCoopResult(data);
+    setCoopFlowId("");
+    setOtp("");
+    setCoopCheckoutPrepared(false);
+    setCoopStep("delivery");
+    setStepIndex(2);
+    applyCoopDeliverySelection(data);
   };
 
   const startCoopOrder = async () => {
@@ -466,11 +481,13 @@ export default function OrderAgentModal({
         slotFrom: coopSlotFrom,
         slotTo: coopSlotTo,
       });
-      setCoopResult((current) => ({ ...(current ?? {}), ...data }));
+      const nextResult = { ...(coopResult ?? {}), ...data };
+      setCoopResult(nextResult);
+      applyCoopDeliverySelection(nextResult);
       setCoopCheckoutPrepared(true);
       setCoopStep("payment");
       setCoopBrowserStatus(t("Đã cập nhật lịch giao. Đang mở màn hình để bạn kiểm tra/chọn phương thức thanh toán."));
-      openCoopBrowserAssist(data);
+      openCoopBrowserAssist(nextResult);
     } catch (err) {
       setCoopError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -532,6 +549,9 @@ export default function OrderAgentModal({
       let commandAcknowledged = false;
       let commandAttempts = 0;
       let lastCommandAt = 0;
+      const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
+      const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
+      const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
       const buildOpenMessage = () =>
         mode === "profileSetup"
           ? {
@@ -556,9 +576,9 @@ export default function OrderAgentModal({
               terminalAddress: result.browserSession?.terminalAddress,
               terminalId: result.browserSession?.terminalId,
               siteId: result.browserSession?.siteId,
-              deliveryDate: coopDeliveryDate,
-              slotFrom: coopSlotFrom,
-              slotTo: coopSlotTo,
+              deliveryDate: preparedDeliveryDate,
+              slotFrom: preparedSlotFrom,
+              slotTo: preparedSlotTo,
               address,
               name,
               email,
@@ -576,7 +596,7 @@ export default function OrderAgentModal({
       };
       const connectionTimeout = window.setTimeout(() => {
         if (ws.readyState !== WebSocket.OPEN) {
-          setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run coop-agent-server` rồi bấm mở lại."));
+          setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
           ws.close();
         }
       }, 2500);
@@ -643,7 +663,7 @@ export default function OrderAgentModal({
           // Ignore malformed frames from local agent server.
         }
       };
-      ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run coop-agent-server` rồi thử lại."));
+      ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
       ws.onclose = () => {
         window.clearTimeout(connectionTimeout);
         window.clearTimeout(frameTimeout);
@@ -657,10 +677,19 @@ export default function OrderAgentModal({
   };
 
   const getCoopBrowserPoint = (event: { currentTarget: HTMLElement; clientX: number; clientY: number }) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+    const image = coopStreamImageRef.current;
+    const rect = (image ?? event.currentTarget).getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const x = Math.round(((event.clientX - rect.left) / rect.width) * coopBrowserSize.width);
-    const y = Math.round(((event.clientY - rect.top) / rect.height) * coopBrowserSize.height);
+    const frameAspect = coopBrowserSize.width / coopBrowserSize.height;
+    const boxAspect = rect.width / rect.height;
+    const contentWidth = boxAspect > frameAspect ? rect.height * frameAspect : rect.width;
+    const contentHeight = boxAspect > frameAspect ? rect.height : rect.width / frameAspect;
+    const contentLeft = rect.left + (rect.width - contentWidth) / 2;
+    const contentTop = rect.top + (rect.height - contentHeight) / 2;
+    const relativeX = Math.min(Math.max((event.clientX - contentLeft) / contentWidth, 0), 1);
+    const relativeY = Math.min(Math.max((event.clientY - contentTop) / contentHeight, 0), 1);
+    const x = Math.round(relativeX * coopBrowserSize.width);
+    const y = Math.round(relativeY * coopBrowserSize.height);
     return { x, y };
   };
 
@@ -670,21 +699,31 @@ export default function OrderAgentModal({
     sendCoopBrowserMessage({ type: "click", ...point });
   };
 
-  const wheelCoopBrowser = (event: React.WheelEvent<HTMLElement>) => {
-    const point = getCoopBrowserPoint(event);
-    if (!point) return;
-    event.preventDefault();
-    sendCoopBrowserMessage({
-      type: "wheel",
-      ...point,
-      deltaX: Math.round(event.deltaX),
-      deltaY: Math.round(event.deltaY),
-    });
-  };
-
   const focusCoopBrowser = (event: React.MouseEvent<HTMLDivElement>) => {
     event.currentTarget.focus();
   };
+
+  useEffect(() => {
+    if (!coopBrowserVisible) return;
+    const target = coopStreamWheelRef.current;
+    if (!target) return;
+
+    const onWheel = (event: WheelEvent) => {
+      const point = getCoopBrowserPoint({ currentTarget: target, clientX: event.clientX, clientY: event.clientY });
+      if (!point) return;
+      event.preventDefault();
+      event.stopPropagation();
+      sendCoopBrowserMessage({
+        type: "wheel",
+        ...point,
+        deltaX: Math.round(event.deltaX),
+        deltaY: Math.round(event.deltaY),
+      });
+    };
+
+    target.addEventListener("wheel", onWheel, { passive: false });
+    return () => target.removeEventListener("wheel", onWheel);
+  }, [coopBrowserVisible, coopBrowserSize.width, coopBrowserSize.height]);
 
   const keyCoopBrowser = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!coopBrowserVisible) return;
@@ -845,16 +884,16 @@ export default function OrderAgentModal({
   }, [coopDeliveryDate, todayInput]);
 
   useEffect(() => {
-    if (!coopSlotFrom || !coopSlotTo) return;
+    if (!coopDeliveryDate || !effectiveCoopDeliverySlots.length) return;
     const selectedSlot = effectiveCoopDeliverySlots.find(
       (item) => item.from === coopSlotFrom && item.to === coopSlotTo,
     );
-    if (selectedSlot?.disabled) {
-      setCoopSlotFrom("");
-      setCoopSlotTo("");
-      setCoopCheckoutPrepared(false);
-    }
-  }, [effectiveCoopDeliverySlots, coopSlotFrom, coopSlotTo]);
+    if (selectedSlot && !selectedSlot.disabled) return;
+    const nextSlot = effectiveCoopDeliverySlots.find((item) => !item.disabled);
+    setCoopSlotFrom(nextSlot?.from ?? "");
+    setCoopSlotTo(nextSlot?.to ?? "");
+    setCoopCheckoutPrepared(false);
+  }, [coopDeliveryDate, effectiveCoopDeliverySlots, coopSlotFrom, coopSlotTo]);
 
   if (isCoopReal) {
     const coopWizard = [
@@ -869,7 +908,7 @@ export default function OrderAgentModal({
     const hasCoopBrowser = coopBrowserVisible;
     const coopBrowserPanel = (
       <div
-        className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm"
+        className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm"
         tabIndex={0}
         onKeyDown={keyCoopBrowser}
         onMouseDown={focusCoopBrowser}
@@ -881,12 +920,13 @@ export default function OrderAgentModal({
           </button>
         </div>
         <div
-          className="flex min-h-0 flex-1 items-center justify-center bg-white"
-          onWheel={wheelCoopBrowser}
+          ref={coopStreamWheelRef}
+          className="coop-stream-wheel-capture flex min-h-0 flex-1 items-center justify-center bg-white"
         >
-          {coopBrowserFrame ? (
-            <img
-              src={coopBrowserFrame}
+	          {coopBrowserFrame ? (
+	            <img
+	              ref={coopStreamImageRef}
+	              src={coopBrowserFrame}
 	              alt="Co.op checkout thao tác"
 	              className="h-full max-h-full w-full cursor-crosshair object-contain"
 	              onClick={clickCoopBrowser}
@@ -1299,24 +1339,37 @@ export default function OrderAgentModal({
             }
 	            .coop-modal-body--split {
 	              display: grid;
-	              grid-template-columns: minmax(340px, 390px) minmax(0, 1fr);
+	              grid-template-columns: minmax(340px, 390px) minmax(0, 980px);
 	              column-gap: 20px;
 	              align-items: stretch;
 	              justify-content: center;
 	              padding: 14px;
-              background: #f8fafc;
-            }
+	              background: #f8fafc;
+	              overscroll-behavior: contain;
+	            }
             .coop-left-pane {
               position: relative;
               max-height: 100%;
               overflow-y: scroll;
               scrollbar-gutter: stable;
             }
-            .coop-stream-pane {
-              height: 100%;
-              max-width: 1060px;
-              overflow: hidden;
-            }
+	            .coop-stream-pane {
+	              align-self: center;
+	              width: 100%;
+	              max-width: 960px;
+	              height: auto;
+	              max-height: 100%;
+	              aspect-ratio: 4 / 3;
+	              overflow: hidden;
+	              overscroll-behavior: contain;
+	            }
+	            .coop-stream-pane > div {
+	              height: 100%;
+	            }
+	            .coop-stream-wheel-capture {
+	              overscroll-behavior: contain;
+	              touch-action: none;
+	            }
             @media (max-width: 900px) {
               .coop-modal-body--split {
                 grid-template-columns: 1fr;

@@ -155,6 +155,7 @@ export type CoopDeliveryCheck = {
   requireDeliveryTimeSlot?: string;
   availableDates: string[];
   availableTimeSlots: CoopDeliverySlot[];
+  availableSlotsByDate?: Record<string, CoopDeliverySlot[]>;
   fullAddress?: string;
   selectedDate?: string | null;
   selectedSlotFrom?: string | null;
@@ -185,9 +186,13 @@ export type CoopDeliveryInfo = {
   phone?: string;
   email?: string;
   addressId?: string;
+  addressLine?: string;
   wardId?: string;
+  wardName?: string;
   districtId?: string;
+  districtName?: string;
   provinceId?: string;
+  provinceName?: string;
   fullAddress?: string;
   siteId?: number;
   scheduledDeliveryDate?: string;
@@ -546,6 +551,55 @@ function buildProfileFullAddress(address: CoopProfileAddress) {
   );
 }
 
+function splitCoopFullAddress(value?: string) {
+  const parts = String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return {
+    address: parts.length > 3 ? parts.slice(0, -3).join(", ") : parts[0],
+    wardName: parts.length > 3 ? parts[parts.length - 3] : undefined,
+    districtName: parts.length > 2 ? parts[parts.length - 2] : undefined,
+    provinceName: parts.length > 1 ? parts[parts.length - 1] : undefined,
+  };
+}
+
+function normalizeCoopLocationName(value?: string) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferCoopLocationCodes(input: {
+  provinceName?: string;
+  districtName?: string;
+  wardName?: string;
+}) {
+  const province = normalizeCoopLocationName(input.provinceName);
+  const district = normalizeCoopLocationName(input.districtName);
+  const ward = normalizeCoopLocationName(input.wardName);
+  if (
+    (province.includes("ho chi minh") || province.includes("hcm") || province.includes("tp.hcm")) &&
+    district.includes("tan phu") &&
+    ward.includes("tan son nhi")
+  ) {
+    return {
+      provinceCode: "79",
+      districtCode: "7908",
+      wardCode: "790801",
+      provinceName: input.provinceName || "Thành phố Hồ Chí Minh",
+      districtName: input.districtName || "Quận Tân Phú",
+      wardName: input.wardName || "Phường Tân Sơn Nhì",
+    };
+  }
+  return null;
+}
+
 function profileAddressToDeliveryInfo(profile: CoopProfile, fallback?: CoopDeliveryInfo): CoopDeliveryInfo | null {
   const address = profile.address;
   if (!address?.id || !address.wardCode || !address.districtCode || !address.provinceCode) return null;
@@ -558,9 +612,13 @@ function profileAddressToDeliveryInfo(profile: CoopProfile, fallback?: CoopDeliv
     phone: fallback?.phone || address.telephone || profile.telephone,
     email: fallback?.email || address.email || profile.email,
     addressId: address.id,
+    addressLine: address.address,
     wardId: address.wardCode,
+    wardName: address.wardName,
     districtId: address.districtCode,
+    districtName: address.districtName,
     provinceId: address.provinceCode,
+    provinceName: address.provinceName,
     fullAddress,
     siteId: fallback?.siteId,
   };
@@ -619,25 +677,108 @@ async function setCoopDefaultAddress(input: { accessToken: string; address: Coop
   return parseJsonResponse(res, { method: "PATCH", request: payload });
 }
 
+function buildCoopAddressPayload(input: {
+  profile: CoopProfile;
+  fallback?: CoopDeliveryInfo;
+  current?: CoopProfileAddress | null;
+}) {
+  const parsed = splitCoopFullAddress(input.fallback?.fullAddress);
+  const current = input.current;
+  const provinceName = input.fallback?.provinceName || parsed.provinceName || current?.provinceName;
+  const districtName = input.fallback?.districtName || parsed.districtName || current?.districtName;
+  const wardName = input.fallback?.wardName || parsed.wardName || current?.wardName;
+  const inferredCodes = inferCoopLocationCodes({ provinceName, districtName, wardName });
+  return {
+    name: input.fallback?.name || current?.name || input.profile.name || input.fallback?.phone,
+    telephone: input.fallback?.phone || current?.telephone || input.profile.telephone,
+    email: input.fallback?.email || current?.email || input.profile.email,
+    provinceCode: input.fallback?.provinceId || current?.provinceCode || inferredCodes?.provinceCode,
+    districtCode: input.fallback?.districtId || current?.districtCode || inferredCodes?.districtCode,
+    wardCode: input.fallback?.wardId || current?.wardCode || inferredCodes?.wardCode,
+    address: input.fallback?.addressLine || parsed.address || current?.address,
+    platformId: COOP_PLATFORM_ID,
+    provinceName: provinceName || inferredCodes?.provinceName,
+    districtName: districtName || inferredCodes?.districtName,
+    wardName: wardName || inferredCodes?.wardName,
+    isDefault: true,
+    longitude: current?.longitude ?? "",
+    latitude: current?.latitude ?? "",
+  };
+}
+
+function completeCoopAddressPayload(payload: ReturnType<typeof buildCoopAddressPayload>) {
+  return Boolean(
+    payload.name &&
+      payload.telephone &&
+      payload.provinceCode &&
+      payload.districtCode &&
+      payload.wardCode &&
+      payload.address,
+  );
+}
+
+async function upsertCoopDeliveryAddress(input: {
+  accessToken: string;
+  profile: CoopProfile;
+  fallback?: CoopDeliveryInfo;
+}) {
+  const current = input.profile.address;
+  const payload = buildCoopAddressPayload({
+    profile: input.profile,
+    fallback: input.fallback,
+    current,
+  });
+  if (!completeCoopAddressPayload(payload)) return current ?? null;
+
+  if (current?.id) {
+    const res = await coopFetch(`${USER_API_URL}/addresses/${current.id}`, {
+      method: "PATCH",
+      headers: { ...userHeaders(input.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    await parseJsonResponse(res, { method: "PATCH", request: payload });
+    return { ...current, ...payload, id: current.id };
+  }
+
+  const res = await coopFetch(`${USER_API_URL}/addresses`, {
+    method: "POST",
+    headers: { ...userHeaders(input.accessToken), "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const data = await parseJsonResponse<{ result?: { address?: CoopProfileAddress }; data?: CoopProfileAddress }>(res, {
+    method: "POST",
+    request: payload,
+  });
+  return data.result?.address ?? data.data ?? null;
+}
+
 async function resolveCoopDeliveryInfo(input: {
   accessToken: string;
   fallback?: CoopDeliveryInfo;
 }): Promise<CoopDeliveryInfo> {
-  if (isCompleteCoopDeliveryInfo(input.fallback)) return input.fallback;
-
   const profile = await getCoopProfile({ accessToken: input.accessToken });
-  if (profile.address?.id) {
-    await setCoopDefaultAddress({ accessToken: input.accessToken, address: profile.address }).catch(() => null);
+  const syncedAddress = await upsertCoopDeliveryAddress({
+    accessToken: input.accessToken,
+    profile,
+    fallback: input.fallback,
+  });
+  const syncedProfile: CoopProfile = syncedAddress ? { ...profile, address: syncedAddress } : profile;
+
+  if (syncedProfile.address?.id && !input.fallback?.fullAddress) {
+    await setCoopDefaultAddress({ accessToken: input.accessToken, address: syncedProfile.address }).catch(() => null);
   }
-  const deliveryInfo = profileAddressToDeliveryInfo(profile, input.fallback);
+  const deliveryInfo = profileAddressToDeliveryInfo(syncedProfile, input.fallback);
   if (deliveryInfo && isCompleteCoopDeliveryInfo(deliveryInfo)) return deliveryInfo;
+  if (isCompleteCoopDeliveryInfo(input.fallback)) return input.fallback;
 
   throw new CoopOrderError("Co.op chưa có địa chỉ mặc định hợp lệ trong tài khoản.", {
     status: 400,
     code: "COOP_DEFAULT_ADDRESS_MISSING",
     detail: {
       profileId: profile.id,
-      hasAddress: Boolean(profile.address),
+      hasAddress: Boolean(syncedProfile.address),
       fallback: input.fallback,
     },
   });
@@ -800,11 +941,24 @@ export async function createCoopCart(input: { accessToken: string; terminalCode:
   return { cartToken, data };
 }
 
+export async function clearCoopCart(input: { accessToken: string; terminalCode: string; cartToken: string }) {
+  const url = new URL(CART_API_URL);
+  url.searchParams.set("terminal", input.terminalCode);
+  const res = await coopFetch(url, {
+    method: "DELETE",
+    headers: cartHeaders(input.accessToken, input.cartToken),
+    cache: "no-store",
+  });
+  const data = await parseJsonResponse(res, { method: "DELETE", request: { terminal: input.terminalCode } });
+  return { cartToken: readCartToken(res, input.cartToken), data };
+}
+
 export async function addCoopCartItem(input: {
   accessToken: string;
   terminalCode: string;
   cartToken: string;
   item: CoopCartItem;
+  clearExisting?: boolean;
 }) {
   const url = new URL(CART_ITEMS_API_URL);
   url.searchParams.set("terminal", input.terminalCode);
@@ -820,7 +974,7 @@ export async function addCoopCartItem(input: {
         ],
       },
     ],
-    override: false,
+    override: input.clearExisting === true,
   };
   const res = await coopFetch(url, {
     method: "POST",
@@ -863,6 +1017,28 @@ function todayLocalIsoDate() {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeCoopDeliverySlots(slots: unknown): CoopDeliverySlot[] {
+  if (!Array.isArray(slots)) return [];
+  return slots
+    .flatMap((slot) => {
+      const item = slot as {
+        from?: unknown;
+        to?: unknown;
+        disabled?: unknown;
+        isDisabled?: unknown;
+        enabled?: unknown;
+      };
+      const from = typeof item.from === "string" ? item.from : "";
+      const to = typeof item.to === "string" ? item.to : "";
+      if (!from || !to) return [];
+      return [{
+        from,
+        to,
+        disabled: Boolean(item.disabled ?? item.isDisabled ?? item.enabled === false),
+      }];
+    });
+}
+
 function parseDeliveryCheck(cart: unknown): CoopDeliveryCheck {
   const root = cart as { data?: Record<string, unknown> };
   const data = (root?.data ?? root) as {
@@ -877,17 +1053,24 @@ function parseDeliveryCheck(cart: unknown): CoopDeliveryCheck {
       name?: string;
       isSelected?: boolean;
       requireDeliveryTimeSlot?: string;
-      availableDeliveryDateTime?: Array<{ date?: string; timeSlots?: CoopDeliverySlot[] }>;
-      availableTimeSlots?: CoopDeliverySlot[];
+      availableDeliveryDateTime?: Array<{ date?: string; timeSlots?: unknown }>;
+      availableTimeSlots?: unknown;
     }>;
   };
   const service = data.deliveryServices?.find((item) => item.isSelected) ?? data.deliveryServices?.[0];
   const today = todayLocalIsoDate();
-  const availableDates = (service?.availableDeliveryDateTime ?? [])
-    .map((item) => toCoopIsoDate(item.date))
-    .filter((item): item is string => typeof item === "string" && item >= today);
-  const availableTimeSlots = (service?.availableTimeSlots ?? []).filter((slot) => slot.from && slot.to);
   const selectedDate = toCoopIsoDate(data.deliveryInfo?.scheduledDeliveryDate ?? null);
+  const availableSlotsByDate: Record<string, CoopDeliverySlot[]> = {};
+  for (const item of service?.availableDeliveryDateTime ?? []) {
+    const date = toCoopIsoDate(item.date);
+    if (!date || date < today) continue;
+    availableSlotsByDate[date] = normalizeCoopDeliverySlots(item.timeSlots);
+  }
+  const availableDates = Object.keys(availableSlotsByDate);
+  const slotDate = selectedDate && availableSlotsByDate[selectedDate] ? selectedDate : availableDates[0];
+  const slotsForDate = slotDate ? availableSlotsByDate[slotDate] ?? [] : [];
+  const fallbackTimeSlots = normalizeCoopDeliverySlots(service?.availableTimeSlots);
+  const availableTimeSlots = slotsForDate.length ? slotsForDate : fallbackTimeSlots;
   const selectedSlotFrom = data.deliveryInfo?.scheduledDeliveryTimeSlotFrom ?? null;
   const selectedSlotTo = data.deliveryInfo?.scheduledDeliveryTimeSlotTo ?? null;
 
@@ -897,6 +1080,7 @@ function parseDeliveryCheck(cart: unknown): CoopDeliveryCheck {
     requireDeliveryTimeSlot: service?.requireDeliveryTimeSlot,
     availableDates,
     availableTimeSlots,
+    availableSlotsByDate,
     fullAddress: data.deliveryInfo?.fullAddress ?? undefined,
     selectedDate,
     selectedSlotFrom,
@@ -1210,11 +1394,17 @@ export async function addItemToCoopAccountCart(input: {
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
   });
-  const added = await addCoopCartItem({
+  const cleared = await clearCoopCart({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: created.cartToken,
+  });
+  const added = await addCoopCartItem({
+    accessToken: input.accessToken,
+    terminalCode: input.terminalCode,
+    cartToken: cleared.cartToken || created.cartToken,
     item: input.item,
+    clearExisting: true,
   });
   const cart = await getCoopCart({
     accessToken: input.accessToken,
