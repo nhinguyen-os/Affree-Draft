@@ -27,10 +27,10 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   lotte: { label: "LOTTE Mart", color: "#ed1c24", home: "https://www.lottemart.vn", online: true },
   krmart: { label: "Korea Mart", color: "#003478", home: "https://xinchaokoreamart.com", online: true },
   astrabean: { label: "Astrabean", color: "#6f4e37", home: "https://day-sales.com/store/astrabean/product", currency: "USD" },
-  other: { label: "Khác", color: "#64748b", home: "", online: true },
+  other: { label: "Khác", color: "#3948e6", home: "", online: true },
 };
 
-const DEFAULT_COLOR = "#64748b";
+const DEFAULT_COLOR = "#3948e6";
 
 /** Tên hiển thị của nguồn, có fallback cho nguồn lạ. */
 export function chainLabel(chain: Chain): string {

@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const color = searchParams.get("color") || "64748b";
+  const color = searchParams.get("color") || "3948e6";
   // Ensure the color is prefixed with '#'
   const cleanColor = color.startsWith("#") ? color : `#${color}`;
 
