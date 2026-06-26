@@ -30,6 +30,20 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# local agent/runtime artifacts
+/.codex-runtime/
+/.codex-runtime/**
+.codex-runtime*/
+.coop_token_cache.json
+logs/
+__pycache__/
+scripts/__pycache__/
+
+# paused BHX experiments/artifacts
+app/api/bhx-agent/
+integrations/bhx/
+ss.html
+
 # env files (can opt-in for committing if needed)
 .env
 

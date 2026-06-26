@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "coop-agent-server": "node agent-server/server.js",
     "start": "next start",
     "scrape": "tsx scripts/scrape-live.ts",
     "push-real": "tsx scripts/push-real.ts",

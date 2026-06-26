@@ -1,3 +1,5 @@
+const { createHash, randomBytes } = require("node:crypto");
+
 /**
  * Playbook for cooponline.vn (Co.opmart Online)
  * Xử lý các bước đặc thù của trang cooponline.vn:
@@ -23,6 +25,25 @@ function parseAddress(fullAddress) {
   const ward = parts.slice(-3, -2)[0] || "";
   const street = parts.slice(0, -3).join(", ") || parts[0] || "";
   return { street, ward, district, province };
+}
+
+function base64Url(buffer) {
+  return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function buildCoopAuthorizeUrl() {
+  const verifier = base64Url(randomBytes(48));
+  const challenge = base64Url(createHash("sha256").update(verifier).digest());
+  const url = new URL("https://oauth-saigoncoop.oauth.teko.vn/oauth/authorize");
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", "a58f641112ee4d198dc6db4d90bc5cfa");
+  url.searchParams.set("redirect_uri", "https://cooponline.vn/kirin-brand.kirin");
+  url.searchParams.set("scope", "openid profile us om ppm loyalty-consumer-bff payment-consumer-bff staff-bff");
+  url.searchParams.set("state", base64Url(randomBytes(24)));
+  url.searchParams.set("nonce", base64Url(randomBytes(24)));
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  return url.toString();
 }
 
 /**
@@ -82,17 +103,40 @@ async function dumpModalElements(page, sendLog) {
 async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdownId, valueText) {
   if (!valueText) return false;
 
-  const inputSel = `input[placeholder="${inputPlaceholder}"]`;
+  const inputPlaceholders = Array.isArray(inputPlaceholder) ? inputPlaceholder : [inputPlaceholder];
 
   try {
-    const input = page.locator(inputSel).first();
+    let input = null;
+    for (const placeholder of inputPlaceholders) {
+      const exact = page.locator(`input[placeholder="${placeholder}"]`).first();
+      if (await waitForVisible(exact, 600)) {
+        input = exact;
+        break;
+      }
+      const partial = page.locator(`input[placeholder*="${placeholder}" i]`).first();
+      if (await waitForVisible(partial, 600)) {
+        input = partial;
+        break;
+      }
+    }
+    if (!input) {
+      const labelText = inputPlaceholders.join(" / ");
+      sendLog(`Co.opmart: Không thấy input "${labelText}".`, "warning");
+      return false;
+    }
     if (!(await waitForVisible(input, 3000))) {
-      sendLog(`Co.opmart: Không thấy input "${inputPlaceholder}".`, "warning");
+      sendLog(`Co.opmart: Không thấy input "${inputPlaceholders.join(" / ")}".`, "warning");
+      return false;
+    }
+
+    const enabled = await input.isEnabled().catch(() => false);
+    if (!enabled) {
+      sendLog(`Co.opmart: Input "${inputPlaceholders.join(" / ")}" đang bị khóa.`, "warning");
       return false;
     }
 
     // Click vào input, xóa nội dung cũ và gõ giá trị mới từng ký tự
-    await input.click();
+    await input.click({ timeout: 2500 });
     await page.waitForTimeout(200);
     await input.fill("");
     await input.type(valueText, { delay: 60 });
@@ -229,6 +273,45 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
 }
 
 
+async function disableCoopGeolocationToggle(page, sendLog) {
+  const hasDisabledAddressInput = await page
+    .locator('input[placeholder*="Chọn tỉnh" i]:disabled, input[placeholder*="Chọn quận" i]:disabled, input[placeholder*="Chọn phường" i]:disabled')
+    .first()
+    .isVisible({ timeout: 800 })
+    .catch(() => false);
+  if (!hasDisabledAddressInput) return false;
+
+  const switched = await page.evaluate(() => {
+    const modal = document.querySelector(".teko-modal-show") ||
+      document.querySelector('[class*="teko-modal"]') ||
+      document.querySelector(".modal.show") ||
+      document;
+    const isVisible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const candidates = Array.from(modal.querySelectorAll('button, input[type="checkbox"], [role="switch"], [class*="switch"], [class*="toggle"]'));
+    const toggle = candidates.find((el) => {
+      if (!isVisible(el)) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 24 && rect.width <= 80 && rect.height >= 16 && rect.height <= 48;
+    });
+    if (!toggle) return false;
+    toggle.click();
+    toggle.dispatchEvent(new Event("input", { bubbles: true }));
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  });
+
+  if (switched) {
+    sendLog("Co.opmart: Đã tắt định vị để nhập địa chỉ thủ công.", "success");
+    await page.waitForTimeout(1000);
+  }
+  return switched;
+}
+
 async function handleAddressPopup(page, payload, sendLog) {
   const { buyerAddress } = payload;
 
@@ -273,21 +356,22 @@ async function handleAddressPopup(page, payload, sendLog) {
   }
 
   await page.waitForTimeout(500);
+  await disableCoopGeolocationToggle(page, sendLog);
 
   // Phân tích địa chỉ thành các thành phần
   const addr = parseAddress(buyerAddress);
   sendLog(`Co.opmart: Điền địa chỉ: Tỉnh="${addr.province}" | Quận="${addr.district}" | Phường="${addr.ward}" | Đường="${addr.street}"`);
 
   // Điền từng cấp theo placeholder và id container dropdown thực tế
-  await fillAddressAutocomplete(page, sendLog,
+  const provinceOk = await fillAddressAutocomplete(page, sendLog,
     "Chọn tỉnh/thành phố", "provinceCode", addr.province);
   await page.waitForTimeout(700);
 
-  await fillAddressAutocomplete(page, sendLog,
+  const districtOk = await fillAddressAutocomplete(page, sendLog,
     "Chọn quận/ huyện", "districtCode", addr.district);
   await page.waitForTimeout(700);
 
-  await fillAddressAutocomplete(page, sendLog,
+  const wardOk = await fillAddressAutocomplete(page, sendLog,
     "Chọn phường/xã", "wardCode", addr.ward);
   await page.waitForTimeout(700);
 
@@ -303,6 +387,11 @@ async function handleAddressPopup(page, payload, sendLog) {
     }
   } catch { }
 
+  if (!provinceOk || !districtOk || !wardOk) {
+    sendLog("Co.opmart: Chưa điền đủ tỉnh/quận/phường nên dừng ở popup địa chỉ để bạn thao tác.", "warning");
+    await dumpModalElements(page, sendLog).catch(() => null);
+    return;
+  }
 
   // Bấm nút xác nhận — dùng selector chính xác từ DOM dump (button[type=submit] text="Xác nhận")
 
@@ -515,4 +604,545 @@ async function run(page, payload, sendLog, sendStatus) {
   return { done: false }; // Để AI DOM loop tiếp tục phần checkout
 }
 
-module.exports = { run };
+async function safeGotoCoop(page, url, sendLog, sendFrame) {
+  await page.goto(url, { waitUntil: "commit", timeout: 20000 });
+  await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {
+    sendLog("Co.opmart: Trang đã bắt đầu tải nhưng chưa báo domcontentloaded, vẫn hiển thị màn hình hiện tại.", "warning");
+  });
+  await page.waitForTimeout(500).catch(() => {});
+  await sendFrame?.();
+}
+
+function applyCoopBrowserState(state) {
+  const write = (key, value) => {
+    if (value == null || value === "") return;
+    localStorage.setItem(key, String(value));
+  };
+  const writeJson = (key, value) => {
+    if (value == null) return;
+    localStorage.setItem(key, JSON.stringify(value));
+  };
+  const writeCookie = (key, value, encode = false) => {
+    if (value == null || value === "") return;
+    const expires = new Date(Date.now() + 63072000000).toUTCString();
+    const cookieValue = encode ? encodeURIComponent(String(value)) : String(value);
+    document.cookie = `${key}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;Path=/;`;
+    document.cookie = `${key}=${cookieValue};expires=${expires};Path=/;SameSite=None;Secure;`;
+  };
+  const writeSelectedInfo = (key, value, encodeCookie = false) => {
+    if (value == null || value === "") return;
+    write(key.toUpperCase(), value);
+    writeCookie(key, value, encodeCookie);
+  };
+
+  write("cart_token", state.cartToken);
+  write("cartToken", state.cartToken);
+  write("x-cart-token", state.cartToken);
+
+  if (state.accessToken) {
+    write("ACCESS_TOKEN", state.accessToken);
+    if (state.refreshToken) write("REFRESH_TOKEN", state.refreshToken);
+    write("userPhone", state.phone);
+    write("userId", state.userId);
+    write("userEmail", state.email);
+    write("siteId", state.siteId);
+  }
+
+  writeSelectedInfo("terminal", state.terminalCode);
+  writeSelectedInfo("terminal_id", state.terminalId);
+  writeSelectedInfo("terminal_name", state.terminalName, true);
+  writeSelectedInfo("isGetGeoLocation", "false");
+  writeSelectedInfo("userTerminalCode", state.terminalCode);
+  writeSelectedInfo("userTerminalId", state.terminalId);
+
+  const terminal = {
+    terminalCode: state.terminalCode,
+    code: state.terminalCode,
+    terminalId: state.terminalId,
+    id: state.terminalId,
+    terminalName: state.terminalName,
+    name: state.terminalName,
+    address: state.terminalAddress,
+    fullAddress: state.terminalAddress,
+    siteId: state.siteId,
+  };
+  const location = {
+    address: state.address,
+    fullAddress: state.address,
+  };
+  writeJson("TERMINALS", [terminal]);
+  writeJson("USER_LOCATION", location);
+
+  write("terminal", state.terminalCode);
+  write("terminalCode", state.terminalCode);
+  write("currentTerminal", state.terminalCode);
+
+  if (state.accessToken && state.userId) {
+    const userInfo = {
+      sub: state.userId,
+      phone_number: state.phone,
+      phoneNumber: state.phone,
+      name: state.phone || state.userId,
+      email: state.email || "",
+    };
+    const events = {
+      addSilentRenewError() {},
+      addAccessTokenExpiring() {},
+      addAccessTokenExpired() {},
+      removeSilentRenewError() {},
+      removeAccessTokenExpiring() {},
+      removeAccessTokenExpired() {},
+    };
+    const fakeUser = {
+      events,
+      isLoggedIn() {
+        return true;
+      },
+      getAccessToken() {
+        return state.accessToken;
+      },
+      getUserInfo() {
+        return userInfo;
+      },
+      loadUser() {
+        return Promise.resolve(userInfo);
+      },
+      unloadUser() {
+        return Promise.resolve();
+      },
+      login() {
+        return Promise.resolve(userInfo);
+      },
+      loginSilent() {
+        return Promise.resolve(userInfo);
+      },
+      logout() {
+        return Promise.resolve();
+      },
+      signinRedirect() {
+        return Promise.resolve();
+      },
+      signinSilent() {
+        return Promise.resolve(userInfo);
+      },
+      signinSilentCallback() {
+        return Promise.resolve(userInfo);
+      },
+    };
+    const patchTekoId = (teko) => {
+      if (!teko || typeof teko !== "object") return teko;
+      try {
+        Object.defineProperty(teko, "user", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return fakeUser;
+          },
+          set() {},
+        });
+      } catch {}
+      return teko;
+    };
+
+    let tekoValue = patchTekoId(window.TekoID && typeof window.TekoID === "object" ? window.TekoID : {});
+    try {
+      Object.defineProperty(window, "TekoID", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return patchTekoId(tekoValue);
+        },
+        set(value) {
+          tekoValue = patchTekoId(value || {});
+        },
+      });
+    } catch {
+      window.TekoID = patchTekoId(tekoValue);
+    }
+
+    if (!window.__affreeCoopTekoPatchTimer) {
+      const stopAt = Date.now() + 30000;
+      window.__affreeCoopTekoPatchTimer = setInterval(() => {
+        try {
+          patchTekoId(window.TekoID);
+          if (Date.now() > stopAt) {
+            clearInterval(window.__affreeCoopTekoPatchTimer);
+            window.__affreeCoopTekoPatchTimer = null;
+          }
+        } catch {}
+      }, 25);
+    }
+  }
+}
+
+async function seedCartState(page, payload, sendLog, sendFrame) {
+  const cartToken = payload.cartToken || payload.cart_token || payload.xCartToken;
+  const session = payload.browserSession || {};
+  const terminalCode = payload.terminalCode || session.terminalCode || payload.terminal || "";
+  const address = payload.address || payload.fullAddress || "";
+  if (!cartToken) throw new Error("Thiếu cartToken Co.op để mở màn hình thao tác.");
+
+  const seed = {
+    cartToken,
+    terminalCode,
+    terminalId: payload.terminalId || session.terminalId,
+    terminalName: payload.terminalName || session.terminalName || terminalCode,
+    terminalAddress: payload.terminalAddress || session.terminalAddress || "",
+    siteId: payload.siteId || session.siteId,
+    address,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    userId: session.userId,
+    phone: session.phone,
+    email: session.email,
+  };
+  await page.addInitScript(applyCoopBrowserState, seed);
+
+  sendLog("Co.opmart: Đang mở trang chủ để nạp cart token...");
+  await safeGotoCoop(page, "https://cooponline.vn/", sendLog, sendFrame);
+  await page.evaluate(applyCoopBrowserState, seed);
+}
+
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+async function acceptCoopLoginTerms(page, sendLog) {
+  const checked = await page.evaluate(() => {
+    const isVisible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const inputs = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+    const checkbox = inputs.reverse().find((input) => isVisible(input) || input.offsetParent !== null);
+    if (checkbox) {
+      if (!checkbox.checked) {
+        checkbox.click();
+        checkbox.dispatchEvent(new Event("input", { bubbles: true }));
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return checkbox.checked;
+    }
+
+    const labels = Array.from(document.querySelectorAll("label, [role='checkbox'], span, div"));
+    const label = labels.find((el) => {
+      const text = (el.textContent || "").toLowerCase();
+      return isVisible(el) && /đồng ý|chính sách bảo mật|điều khoản/.test(text);
+    });
+    if (label) {
+      label.click();
+      const nextCheckbox = document.querySelector('input[type="checkbox"]');
+      return nextCheckbox ? nextCheckbox.checked : true;
+    }
+    return false;
+  });
+
+  if (checked) {
+    const visibleCheckbox = page.locator('input[type="checkbox"]').last();
+    const actualChecked = await visibleCheckbox.isChecked({ timeout: 500 }).catch(() => true);
+    if (actualChecked) {
+      sendLog("Co.opmart: Đã xác nhận điều khoản đăng nhập.", "success");
+      return true;
+    }
+  }
+
+  const visibleCheckbox = page.locator('input[type="checkbox"]').last();
+  if (await visibleCheckbox.isVisible({ timeout: 800 }).catch(() => false)) {
+    const box = await visibleCheckbox.boundingBox().catch(() => null);
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => null);
+    } else {
+      await visibleCheckbox.click({ force: true }).catch(() => null);
+    }
+    const nowChecked = await visibleCheckbox.isChecked().catch(() => false);
+    if (nowChecked) {
+      sendLog("Co.opmart: Đã xác nhận điều khoản đăng nhập.", "success");
+      return true;
+    }
+  }
+
+  sendLog("Co.opmart: Chưa tick được ô điều khoản đăng nhập, vẫn thử gửi form để giữ màn hình cho bạn thao tác.", "warning");
+  return false;
+}
+
+async function ensureCoopPasswordLogin(page, payload, sendLog, sendFrame) {
+  const phone = String(payload.phone || payload.browserSession?.phone || "").replace(/\D/g, "");
+  const password = String(payload.password || "");
+  if (!phone || !password) {
+    sendLog("Co.opmart: Thiếu số điện thoại hoặc mật khẩu để đăng nhập hồ sơ.", "warning");
+    return false;
+  }
+
+  const profileTitle = page.getByText(/Cập nhật thông tin cá nhân/i).first();
+  if (await profileTitle.isVisible({ timeout: 1000 }).catch(() => false)) return true;
+
+  sendLog("Co.opmart: Đang mở trang đăng nhập để cập nhật hồ sơ...");
+  await safeGotoCoop(page, buildCoopAuthorizeUrl(), sendLog, sendFrame);
+  await page.waitForTimeout(1500);
+  const locationPopup = page.getByText(/Hoặc nhập địa chỉ|Bật định vị/i).first();
+  if (await locationPopup.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await handleAddressPopup(page, { buyerAddress: payload.address || payload.fullAddress || payload.browserSession?.address || "" }, sendLog);
+    await page.waitForTimeout(1500);
+    await sendFrame?.();
+  }
+
+  const phoneInput = page.locator('input[placeholder*="Nhập số điện thoại" i], input[type="tel"], input[name*="phone" i], input[placeholder*="số điện thoại" i], input[placeholder*="phone" i], input[placeholder*="tài khoản" i]').first();
+  const passwordInput = page.locator('input[placeholder*="Nhập mật khẩu" i], input[type="password"], input[name*="password" i], input[placeholder*="mật khẩu" i], input[placeholder*="password" i]').first();
+  if (!(await waitForVisible(phoneInput, 8000)) || !(await waitForVisible(passwordInput, 8000))) {
+    sendLog("Co.opmart: Chưa thấy form đăng nhập Co.op. Có thể trang đang giữ phiên hoặc đổi giao diện.", "warning");
+    return false;
+  }
+
+  await phoneInput.fill(phone);
+  await passwordInput.fill(password);
+  await acceptCoopLoginTerms(page, sendLog);
+  const loginButtons = [
+    'button:has-text("Đăng nhập")',
+    'button:has-text("Tiếp tục")',
+    'button[type="submit"]',
+  ];
+  for (const selector of loginButtons) {
+    const button = page.locator(selector).first();
+    if (await waitForVisible(button, 1200)) {
+      await button.click({ force: true });
+      sendLog("Co.opmart: Đã gửi form đăng nhập.", "success");
+      await page.waitForTimeout(5000);
+      await sendFrame?.();
+      const postLoginLocationPopup = page.getByText(/Hoặc nhập địa chỉ|Bật định vị/i).first();
+      if (await postLoginLocationPopup.isVisible({ timeout: 1000 }).catch(() => false)) {
+        sendLog("Co.opmart: Co.op yêu cầu chọn địa chỉ sau đăng nhập, đang xử lý tiếp...");
+        await handleAddressPopup(page, { buyerAddress: payload.address || payload.fullAddress || payload.browserSession?.address || "" }, sendLog);
+        await page.waitForTimeout(2500);
+        if (await phoneInput.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await phoneInput.fill(phone);
+          await passwordInput.fill(password);
+          await acceptCoopLoginTerms(page, sendLog);
+          await button.click({ force: true });
+          sendLog("Co.opmart: Đã gửi lại form đăng nhập sau khi chọn địa chỉ.", "success");
+          await page.waitForTimeout(5000);
+        }
+        await sendFrame?.();
+      }
+      const stillOnLogin = await phoneInput.isVisible({ timeout: 500 }).catch(() => false);
+      if (stillOnLogin) {
+        const pageText = await page.locator("body").innerText({ timeout: 1000 }).catch(() => "");
+        const errorHint = pageText
+          .split("\n")
+          .map((line) => line.trim())
+          .find((line) => /vui lòng|không đúng|sai|khóa|captcha|robot|xác minh|điều khoản/i.test(line));
+        sendLog(
+          errorHint
+            ? `Co.opmart: Login chưa đi tiếp: ${errorHint}`
+            : "Co.opmart: Login chưa đi tiếp, đang giữ màn hình đăng nhập để bạn thao tác.",
+          "warning"
+        );
+        return false;
+      }
+      return true;
+    }
+  }
+  sendLog("Co.opmart: Không tìm thấy nút đăng nhập.", "warning");
+  return false;
+}
+
+async function fillCoopProfilePopup(page, payload, sendLog, sendFrame, timeoutMs = 12000) {
+  const title = page.getByText(/Cập nhật thông tin cá nhân/i).first();
+  const found = await title.isVisible({ timeout: timeoutMs }).catch(() => false);
+  if (!found) {
+    sendLog("Co.opmart: Không thấy popup cập nhật thông tin cá nhân.", "warning");
+    return false;
+  }
+
+  const profileName = String(payload.name || payload.browserSession?.name || payload.phone || "").trim();
+  const profileEmail = String(payload.email || payload.browserSession?.email || "").trim();
+  const fullAddress = String(payload.address || payload.browserSession?.address || payload.fullAddress || "").trim();
+  const addr = parseAddress(fullAddress);
+
+  sendLog("Co.opmart: Đang điền popup cập nhật thông tin cá nhân...");
+  const nameInput = page.locator('input[placeholder*="họ tên" i], input[placeholder*="họ và tên" i]').first();
+  if (profileName && await waitForVisible(nameInput, 2500)) {
+    await nameInput.fill(profileName);
+  }
+
+  if (validEmail(profileEmail)) {
+    const emailInput = page.locator('input[placeholder*="email" i], input[type="email"]').first();
+    if (await waitForVisible(emailInput, 1500)) await emailInput.fill(profileEmail);
+  }
+
+  await fillAddressAutocomplete(page, sendLog, ["Tỉnh/Thành phố", "Chọn tỉnh/thành phố"], "provinceCode", addr.province);
+  await page.waitForTimeout(700);
+  await fillAddressAutocomplete(page, sendLog, ["Quận/Huyện", "Chọn quận/ huyện", "Chọn quận/huyện"], "districtCode", addr.district);
+  await page.waitForTimeout(700);
+  await fillAddressAutocomplete(page, sendLog, ["Phường/Xã", "Chọn phường/xã", "Chọn"], "wardCode", addr.ward);
+  await page.waitForTimeout(700);
+
+  const streetInput = page.locator('input[placeholder*="Số nhà" i], input[placeholder*="tên đường" i], input#address').last();
+  if (addr.street && await waitForVisible(streetInput, 2000)) {
+    await streetInput.fill(addr.street);
+  }
+
+  await sendFrame?.();
+  const saveButtons = [
+    'button:has-text("Lưu thông tin")',
+    'button:has-text("Cập nhật")',
+    'button[type="submit"]',
+  ];
+  for (const selector of saveButtons) {
+    const button = page.locator(selector).last();
+    if (await waitForVisible(button, 1500)) {
+      await button.click();
+      sendLog("Co.opmart: Đã lưu thông tin cá nhân.", "success");
+      await page.waitForTimeout(3500);
+      await sendFrame?.();
+      return true;
+    }
+  }
+
+  sendLog("Co.opmart: Không tìm thấy nút Lưu thông tin trên popup hồ sơ.", "warning");
+  return false;
+}
+
+async function closeCoopMarketingPopup(page) {
+  const closeCandidates = [
+    'button[aria-label*="close" i]',
+    'button:has-text("×")',
+    '[role="button"]:has-text("×")',
+    'svg[class*="close" i]',
+  ];
+  for (const selector of closeCandidates) {
+    const target = page.locator(selector).last();
+    if (await target.isVisible({ timeout: 700 }).catch(() => false)) {
+      await target.click({ force: true }).catch(() => null);
+      await page.waitForTimeout(500);
+      return true;
+    }
+  }
+  await page.keyboard.press("Escape").catch(() => null);
+  return false;
+}
+
+async function showProfileSetup(page, payload, sendLog, sendStatus, sendFrame) {
+  sendStatus("coop_assist_opening");
+  const loggedIn = await ensureCoopPasswordLogin(page, payload, sendLog, sendFrame);
+  if (!loggedIn) {
+    sendStatus("coop_assist_manual", { url: page.url(), reason: "login_pending" });
+    return { done: true, manual: true };
+  }
+  const profileHandledBeforeCheckout = await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 6000);
+  await closeCoopMarketingPopup(page);
+  await safeGotoCoop(page, "https://cooponline.vn/checkout", sendLog, sendFrame);
+  await page.waitForTimeout(2500);
+  await closeCoopMarketingPopup(page);
+  const profileHandled = profileHandledBeforeCheckout || await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 18000);
+  if (profileHandled) {
+    sendLog("Co.opmart: Đã xử lý popup cập nhật hồ sơ.", "success");
+    sendStatus("coop_assist_ready", { url: page.url() });
+    return { done: true };
+  }
+  sendLog("Co.opmart: Chưa thấy popup hồ sơ sau đăng nhập, đang giữ màn hình Co.op hiện tại để bạn kiểm tra.", "warning");
+  sendStatus("coop_assist_manual", { url: page.url(), reason: "profile_popup_not_found" });
+  return { done: true, manual: true };
+}
+
+function formatCoopDisplayDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value || "");
+}
+
+async function selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame) {
+  const displayDate = formatCoopDisplayDate(payload.deliveryDate);
+  const slotFrom = String(payload.slotFrom || "").trim();
+  const slotTo = String(payload.slotTo || "").trim();
+  const slotText = slotFrom && slotTo ? `${slotFrom} - ${slotTo}` : "";
+  if (!displayDate && !slotText) return false;
+
+  sendLog(`Co.opmart: Đang chọn ngày/khung giờ giao ${displayDate || ""} ${slotText || ""} trên checkout...`);
+  let pickedDate = false;
+  let pickedSlot = false;
+
+  if (displayDate) {
+    const dateInputs = [
+      'input[placeholder*="dd/mm" i]',
+      'input[placeholder*="ngày" i]',
+      'input[name*="date" i]',
+      'input[class*="date" i]',
+    ];
+    for (const selector of dateInputs) {
+      const input = page.locator(selector).first();
+      if (!(await input.isVisible({ timeout: 700 }).catch(() => false))) continue;
+      await input.click({ force: true }).catch(() => null);
+      await input.fill(displayDate, { force: true }).catch(async () => {
+        await input.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => null);
+        await input.type(displayDate, { delay: 20 }).catch(() => null);
+      });
+      await input.evaluate((el, value) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        setter?.call(el, value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("blur", { bubbles: true }));
+      }, displayDate).catch(() => null);
+      pickedDate = true;
+      break;
+    }
+
+    if (!pickedDate) {
+      const dateButton = page.getByText(displayDate, { exact: true }).first();
+      if (await dateButton.isVisible({ timeout: 700 }).catch(() => false)) {
+        await dateButton.click({ force: true }).catch(() => null);
+        pickedDate = true;
+      }
+    }
+  }
+
+  if (slotText) {
+    const normalizedSlot = slotText.replace(/\s+/g, " ");
+    const slotCandidates = [
+      page.getByText(slotText, { exact: true }).first(),
+      page.getByText(normalizedSlot, { exact: true }).first(),
+      page.locator(`button:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+      page.locator(`label:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+      page.locator(`div:has-text("${slotFrom}")`).filter({ hasText: slotTo }).first(),
+    ];
+    for (const candidate of slotCandidates) {
+      if (!(await candidate.isVisible({ timeout: 700 }).catch(() => false))) continue;
+      await candidate.scrollIntoViewIfNeeded().catch(() => null);
+      await candidate.click({ force: true }).catch(() => null);
+      pickedSlot = true;
+      break;
+    }
+  }
+
+  if (pickedDate || pickedSlot) {
+    await page.waitForTimeout(700);
+    await sendFrame?.();
+    sendLog(
+      `Co.opmart: ${pickedDate ? "Đã chọn ngày nhận hàng" : "Chưa chọn được ngày tự động"}; ${pickedSlot ? "đã chọn khung giờ" : "chưa chọn được khung giờ tự động"}.`,
+      pickedDate && pickedSlot ? "success" : "warning"
+    );
+    return pickedDate && (!slotText || pickedSlot);
+  }
+
+  sendLog("Co.opmart: Chưa tự chọn được ngày/khung giờ trên checkout, bạn có thể chọn trực tiếp trên màn hình stream.", "warning");
+  return false;
+}
+
+async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
+  sendStatus("coop_assist_opening");
+  sendLog("Co.opmart: Đang nạp cart token vào trình duyệt thao tác...");
+  await seedCartState(page, payload, sendLog, sendFrame);
+  const checkoutUrl = payload.checkoutUrl || payload.cartUrl || "https://cooponline.vn/checkout";
+  sendLog("Co.opmart: Đang mở checkout Co.op...");
+  await safeGotoCoop(page, checkoutUrl, sendLog, sendFrame);
+  await page.waitForTimeout(1500);
+  await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 2500);
+  await selectCoopCheckoutSchedule(page, payload, sendLog, sendFrame);
+  await sendFrame?.();
+  sendLog("Co.opmart: Đã mở màn checkout để người dùng thao tác.", "success");
+  sendStatus("coop_assist_ready", { url: page.url() });
+  return { done: true };
+}
+
+module.exports = { run, showCartPreview, showProfileSetup };
