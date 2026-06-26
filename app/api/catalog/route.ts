@@ -9,11 +9,10 @@ import { fetchSheetStores } from "@/lib/sheet-stores";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
-// REALTIME: tắt cache hoàn toàn — sửa sheet (thứ tự danh mục, Ẩn/Hiện, emoji, giá…) hiện
-// NGAY ở web sau lần reload kế tiếp. Trade-off: mỗi request đập trực tiếp Google Sheets;
-// chấp nhận được vì traffic nhỏ và Google CDN còn cache phía họ ~vài giây.
-export const revalidate = 0;
-export const dynamic = "force-dynamic";
+// Cache 30s ở Vercel edge — request đầu mỗi 30s mới đập Google Sheets (~3.5s), các request
+// sau lấy từ cache (~100ms). Sửa sheet hiện sau ≤30s. Trade-off chấp nhận: trước đây
+// revalidate=0 khiến mọi user đợi 3.5s; giờ chỉ 1 user/30s phải đợi.
+export const revalidate = 30;
 
 // Nguồn catalog CHÍNH: Google Sheet "Danh sách sản phẩm" (định dạng product_id) trong
 // folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.

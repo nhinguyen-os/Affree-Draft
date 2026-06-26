@@ -2608,17 +2608,13 @@ export default function Home() {
                           ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
                       <span className="relative">
                         <span
-                          className={`flex h-24 items-center justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md ${
+                          className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md ${
                             SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] ? "" : "border border-slate-200"
                           }`}
-                          // Height 96px (lớn hơn nhẹ so với 80px của tile 'Dịch vụ quanh đây').
-                          // Width co theo aspect thật → card edge khớp ảnh edge, không gap.
-                          // Sàn 80px (logo vuông bằng tile dịch vụ), trần 192px (logo siêu dài không tràn).
+                          // Vuông 80×80 đồng kích thước với tile 'Dịch vụ quanh đây' để 2 section
+                          // đồng phong cách. Logo tự dò màu nền brand + trim lề rỗng (TrimmedLogo).
                           style={{
                             backgroundColor: SPONSOR_FILL_OVERRIDES[sp.name] || sponsorFill[sp.name] || "#ffffff",
-                            width: sponsorAspect[sp.name]
-                              ? `${Math.max(80, Math.min(192, Math.round(96 * sponsorAspect[sp.name])))}px`
-                              : "112px",
                           }}
                         >
                           {sp.logo ? (
@@ -2627,9 +2623,8 @@ export default function Home() {
                               alt={sp.name}
                               className="h-full w-full object-contain"
                               keyOutWhite={!!SPONSOR_FILL_OVERRIDES[sp.name]}
-                              onResult={({ fillColor, aspect }) => {
+                              onResult={({ fillColor }) => {
                                 if (fillColor) setSponsorFill((m) => (m[sp.name] === fillColor ? m : { ...m, [sp.name]: fillColor }));
-                                if (aspect && Number.isFinite(aspect)) setSponsorAspect((m) => (m[sp.name] === aspect ? m : { ...m, [sp.name]: aspect }));
                               }}
                             />
                           ) : (
