@@ -13,8 +13,8 @@ export interface CoopProductParams {
 }
 
 export interface CoopLocationParams {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   address?: string;
 }
 

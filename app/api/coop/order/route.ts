@@ -238,11 +238,12 @@ function buildDeliveryInfo(body: Record<string, unknown>, phone: string): CoopDe
 
 async function resolveCartItem(body: Record<string, unknown>) {
   const terminalCode = normalizeTerminalCode(body.terminalCode);
-  const sku = extractCoopSku(body.sku, body.productUrl, body.sellerSku, body.productId);
+  const sku = extractCoopSku(body.sku, body.productUrl, body.sellerSku);
   if (!sku) {
     throw new CoopOrderError("Không tìm được SKU Co.op từ sản phẩm/link hiện tại.", {
       status: 400,
       code: "COOP_SKU_MISSING",
+      detail: { sku: body.sku, productUrl: body.productUrl, sellerSku: body.sellerSku, productId: body.productId },
     });
   }
 
@@ -362,6 +363,8 @@ async function addCartWithCoopToken(input: {
     cartToken: cartResult.cartToken,
     cart: cartResult.cart,
     deliveryInfo: cartResult.deliveryInfo,
+    addressSync: cartResult.addressSync,
+    cartCleared: cartResult.cartCleared,
     deliveryCheck: cartResult.deliveryCheck,
     paymentCheck: cartResult.paymentCheck,
     browserSession,
@@ -541,6 +544,8 @@ export async function POST(req: NextRequest) {
         cartToken: cartResult.cartToken,
         cart: cartResult.cart,
         deliveryInfo: cartResult.deliveryInfo,
+        addressSync: cartResult.addressSync,
+        cartCleared: cartResult.cartCleared,
         deliveryCheck: cartResult.deliveryCheck,
         paymentCheck: cartResult.paymentCheck,
         browserSession,

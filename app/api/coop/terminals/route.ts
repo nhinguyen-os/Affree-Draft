@@ -5,17 +5,21 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const lat = Number(url.searchParams.get("lat"));
-  const lng = Number(url.searchParams.get("lng"));
+  const latParam = url.searchParams.get("lat");
+  const lngParam = url.searchParams.get("lng");
+  const lat = latParam == null ? undefined : Number(latParam);
+  const lng = lngParam == null ? undefined : Number(lngParam);
+  const address = url.searchParams.get("address")?.trim() || undefined;
+  const hasLatLng = Number.isFinite(lat) && Number.isFinite(lng);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return NextResponse.json({ error: "Missing lat/lng" }, { status: 400 });
+  if (!hasLatLng && !address) {
+    return NextResponse.json({ error: "Missing address or lat/lng" }, { status: 400 });
   }
 
   const location = {
-    lat,
-    lng,
-    address: url.searchParams.get("address") ?? undefined,
+    lat: hasLatLng ? lat : undefined,
+    lng: hasLatLng ? lng : undefined,
+    address,
   };
 
   try {

@@ -42,6 +42,8 @@ const cooponlinePlaybook = require("./playbooks/cooponline");
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
+const DEFAULT_GEO_LAT = Number(process.env.AGENT_GEO_LAT || "10.8050");
+const DEFAULT_GEO_LON = Number(process.env.AGENT_GEO_LON || "106.6650");
 
 console.log(`[Agent Server] Đang chạy tại cổng ${PORT}...`);
 
@@ -102,8 +104,10 @@ wss.on("connection", async (ws) => {
     context = await browser.newContext({
       viewport: { width: 1024, height: 768 },
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      deviceScaleFactor: 1
+      deviceScaleFactor: 1,
+      geolocation: { latitude: DEFAULT_GEO_LAT, longitude: DEFAULT_GEO_LON },
     });
+    await context.grantPermissions(["geolocation"]);
 
     page = await context.newPage();
     sendLog("Đã khởi tạo trình duyệt thành công.", "success");

@@ -12,19 +12,117 @@ const { createHash, randomBytes } = require("node:crypto");
  * - { done: false } : đã xử lý bootstrap xong, nhường lại cho AI DOM loop
  */
 
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeProvinceName(value) {
+  const normalized = normalizeText(value);
+  if (
+    normalized === "tphcm" ||
+    normalized === "tp.hcm" ||
+    normalized === "tp hcm" ||
+    normalized.includes("ho chi minh")
+  ) {
+    return "Thành phố Hồ Chí Minh";
+  }
+  return value;
+}
+
+function inferDistrictFromWard(ward) {
+  const normalized = normalizeText(ward);
+  if (normalized.includes("tan son hoa")) return "Quận Tân Bình";
+  if (normalized === "phuong 2" || normalized === "p 2") return "Quận Tân Bình";
+  return "";
+}
+
+function normalizeWardName(value) {
+  const normalized = normalizeText(value);
+  if (normalized.includes("tan son hoa")) return "Phường 2";
+  return value;
+}
+
+function looksLikeWard(value) {
+  const normalized = normalizeText(value);
+  return normalized.startsWith("phuong ") || normalized.startsWith("xa ") || normalized.startsWith("thi tran ");
+}
+
+function looksLikeDistrict(value) {
+  const normalized = normalizeText(value);
+  return normalized.startsWith("quan ") || normalized.startsWith("huyen ") || normalized.startsWith("tp ") || normalized.startsWith("thanh pho ");
+}
+
 /**
  * Phân tích địa chỉ đầy đủ thành các thành phần riêng biệt.
  * Ví dụ: "123 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh"
- * → { street: "123 Nguyễn Huệ", ward: "Phường Bến Nghé", district: "Quận 1", province: "TP. Hồ Chí Minh" }
+ * → { street: "123 Nguyễn Huệ", ward: "Phường Bến Nghé", district: "Quận 1", province: "Thành phố Hồ Chí Minh" }
  */
 function parseAddress(fullAddress) {
-  const parts = fullAddress.split(",").map((s) => s.trim()).filter(Boolean);
-  // Chiết xuất theo thứ tự từ cuối
-  const province = parts.slice(-1)[0] || "";
-  const district = parts.slice(-2, -1)[0] || "";
-  const ward = parts.slice(-3, -2)[0] || "";
-  const street = parts.slice(0, -3).join(", ") || parts[0] || "";
+  const parts = String(fullAddress || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return { street: "", ward: "", district: "", province: "" };
+
+  const province = normalizeProvinceName(parts.at(-1) || "");
+  let district = parts.length >= 4 ? parts.at(-2) || "" : "";
+  let ward = "";
+  let street = "";
+
+  if (parts.length >= 4) {
+    ward = normalizeWardName(parts.at(-3) || "");
+    street = parts.slice(0, -3).join(", ") || parts[0] || "";
+  } else if (parts.length === 3) {
+    const middle = parts[1] || "";
+    if (looksLikeWard(middle)) {
+      ward = normalizeWardName(middle);
+      district = inferDistrictFromWard(ward);
+      street = parts[0] || "";
+    } else if (looksLikeDistrict(middle)) {
+      district = middle;
+      street = parts[0] || "";
+    } else {
+      street = parts[0] || "";
+      ward = normalizeWardName(middle);
+    }
+  } else if (parts.length === 2) {
+    street = parts[0] || "";
+  } else {
+    street = parts[0] || "";
+  }
+
   return { street, ward, district, province };
+}
+
+async function hasAddressInput(page, placeholders) {
+  const list = Array.isArray(placeholders) ? placeholders : [placeholders];
+  for (const placeholder of list) {
+    const exact = page.locator(`input[placeholder="${placeholder}"]`).first();
+    if (await exact.isVisible({ timeout: 300 }).catch(() => false)) return true;
+    const partial = page.locator(`input[placeholder*="${placeholder}" i]`).first();
+    if (await partial.isVisible({ timeout: 300 }).catch(() => false)) return true;
+  }
+  return false;
+}
+
+function buildStreetDetail(addr, hasWardField) {
+  if (hasWardField || !addr.ward) return addr.street;
+  return [addr.street, addr.ward].filter(Boolean).join(", ");
+}
+
+function getPayloadAddressParts(payload) {
+  const fallbackAddress = String(payload.address || payload.browserSession?.address || payload.fullAddress || "").trim();
+  const parsed = parseAddress(fallbackAddress);
+  return {
+    street: String(payload.addressLine || payload.streetAddress || parsed.street || "").trim(),
+    province: String(payload.provinceName || payload.browserSession?.provinceName || parsed.province || "").trim(),
+    district: String(payload.districtName || payload.browserSession?.districtName || parsed.district || "").trim(),
+    ward: String(payload.wardName || payload.browserSession?.wardName || parsed.ward || "").trim(),
+  };
 }
 
 function base64Url(buffer) {
@@ -120,9 +218,61 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
       }
     }
     if (!input) {
-      const labelText = inputPlaceholders.join(" / ");
-      sendLog(`Co.opmart: Không thấy input "${labelText}".`, "warning");
-      return false;
+      const markedByLabel = await page.evaluate((labels) => {
+        const normalize = (value) => String(value || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/đ/g, "d")
+          .replace(/Đ/g, "d")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+        const targets = labels.map(normalize).filter(Boolean);
+        const visible = (el) => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        };
+        document.querySelectorAll("[data-coop-autocomplete-input]").forEach((el) => el.removeAttribute("data-coop-autocomplete-input"));
+        const modal = Array.from(document.querySelectorAll(".teko-modal-show, [class*='teko-modal'], [role='dialog'], body"))
+          .filter(visible)
+          .sort((a, b) => {
+            const ar = a.getBoundingClientRect();
+            const br = b.getBoundingClientRect();
+            return (ar.width * ar.height) - (br.width * br.height);
+          })[0] || document;
+        const labelsEls = Array.from(modal.querySelectorAll("label, div, span, p"))
+          .filter((el) => visible(el) && targets.some((target) => normalize(el.textContent).includes(target)));
+        const inputs = Array.from(modal.querySelectorAll("input, [role='combobox'], [class*='select']"))
+          .filter((el) => visible(el) && !el.disabled);
+        for (const label of labelsEls) {
+          const lr = label.getBoundingClientRect();
+          const ranked = inputs
+            .map((el) => {
+              const rect = el.getBoundingClientRect();
+              const sameColumn = Math.abs(rect.left - lr.left) < 90 || (rect.left >= lr.left - 20 && rect.left <= lr.right + 260);
+              const below = rect.top >= lr.bottom - 8 && rect.top <= lr.bottom + 95;
+              const distance = Math.abs(rect.top - lr.bottom) + Math.abs(rect.left - lr.left) / 4;
+              return { el, ok: sameColumn && below, distance };
+            })
+            .filter((item) => item.ok)
+            .sort((a, b) => a.distance - b.distance);
+          const target = ranked[0]?.el;
+          if (target) {
+            target.setAttribute("data-coop-autocomplete-input", "true");
+            return true;
+          }
+        }
+        return false;
+      }, inputPlaceholders);
+      if (markedByLabel) {
+        input = page.locator('[data-coop-autocomplete-input="true"]').first();
+      } else {
+        const labelText = inputPlaceholders.join(" / ");
+        sendLog(`Co.opmart: Không thấy input "${labelText}".`, "warning");
+        return false;
+      }
     }
     if (!(await waitForVisible(input, 3000))) {
       sendLog(`Co.opmart: Không thấy input "${inputPlaceholders.join(" / ")}".`, "warning");
@@ -136,10 +286,15 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
     }
 
     // Click vào input, xóa nội dung cũ và gõ giá trị mới từng ký tự
-    await input.click({ timeout: 2500 });
+    await input.click({ timeout: 2500, force: true });
     await page.waitForTimeout(200);
-    await input.fill("");
-    await input.type(valueText, { delay: 60 });
+    await input.fill("").catch(async () => {
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => null);
+      await page.keyboard.press("Backspace").catch(() => null);
+    });
+    await input.type(valueText, { delay: 60 }).catch(async () => {
+      await page.keyboard.type(valueText, { delay: 60 });
+    });
     await page.waitForTimeout(900); // Chờ autocomplete render
 
     // Thực hiện tìm kiếm và gán cờ phần tử khớp nhất bên trong dropdown bằng page.evaluate
@@ -203,6 +358,7 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
 
         const text = (el.textContent || '').trim();
         if (!text) continue;
+        if (/không có dữ liệu|khong co du lieu|no data/i.test(text)) continue;
 
         candidates.push({ element: el, text: text });
       }
@@ -234,7 +390,11 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
       // Fallback 1: Lấy item đầu tiên có class .css-6sgxfm hoặc tương đương
       const genericOptions = container.querySelectorAll('.css-6sgxfm, [class*="-option"], li');
       if (genericOptions.length > 0) {
-        const firstOpt = genericOptions[0];
+        const firstOpt = Array.from(genericOptions).find((el) => {
+          const text = (el.textContent || '').trim();
+          return text && !/không có dữ liệu|khong co du lieu|no data/i.test(text);
+        });
+        if (!firstOpt) return { success: false, reason: 'Dropdown chỉ có trạng thái không có dữ liệu' };
         firstOpt.setAttribute('data-antigravity-target', 'true');
         return { success: true, text: firstOpt.textContent.trim(), tag: firstOpt.tagName.toLowerCase(), isFallback: true };
       }
@@ -273,14 +433,7 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
 }
 
 
-async function disableCoopGeolocationToggle(page, sendLog) {
-  const hasDisabledAddressInput = await page
-    .locator('input[placeholder*="Chọn tỉnh" i]:disabled, input[placeholder*="Chọn quận" i]:disabled, input[placeholder*="Chọn phường" i]:disabled')
-    .first()
-    .isVisible({ timeout: 800 })
-    .catch(() => false);
-  if (!hasDisabledAddressInput) return false;
-
+async function enableCoopGeolocationToggle(page, sendLog) {
   const switched = await page.evaluate(() => {
     const modal = document.querySelector(".teko-modal-show") ||
       document.querySelector('[class*="teko-modal"]') ||
@@ -299,22 +452,63 @@ async function disableCoopGeolocationToggle(page, sendLog) {
       return rect.width >= 24 && rect.width <= 80 && rect.height >= 16 && rect.height <= 48;
     });
     if (!toggle) return false;
+    const checked =
+      toggle.checked === true ||
+      toggle.getAttribute("aria-checked") === "true" ||
+      /checked|active|on/i.test(String(toggle.className || ""));
+    if (checked) return "already-on";
     toggle.click();
     toggle.dispatchEvent(new Event("input", { bubbles: true }));
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
+    return "turned-on";
   });
 
-  if (switched) {
-    sendLog("Co.opmart: Đã tắt định vị để nhập địa chỉ thủ công.", "success");
-    await page.waitForTimeout(1000);
+  if (switched === "already-on") {
+    sendLog("Co.opmart: Toggle định vị đã bật sẵn.", "success");
+    return true;
   }
-  return switched;
+  if (switched === "turned-on") {
+    sendLog("Co.opmart: Đã bật toggle định vị.", "success");
+    await page.waitForTimeout(1000);
+    return true;
+  }
+  sendLog("Co.opmart: Không thấy toggle định vị, sẽ thử xác nhận popup hiện tại.", "warning");
+  return false;
 }
 
-async function handleAddressPopup(page, payload, sendLog) {
-  const { buyerAddress } = payload;
+async function confirmCoopAddressPopup(page, sendLog) {
+  const clicked = await page.evaluate(() => {
+    const modal = document.querySelector(".teko-modal-show") ||
+      document.querySelector('[class*="teko-modal"]') ||
+      document.querySelector(".modal.show") ||
+      document;
+    const isVisible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const buttons = Array.from(modal.querySelectorAll("button"));
+    const target = buttons.find((button) => {
+      if (!isVisible(button)) return false;
+      const text = (button.textContent || "").trim().toLowerCase();
+      return text.includes("xác nhận") || text.includes("xac nhan") || text.includes("tiếp tục") || text.includes("tiep tuc");
+    }) || buttons.find((button) => isVisible(button) && button.type === "submit");
+    if (!target) return false;
+    target.click();
+    return true;
+  }).catch(() => false);
 
+  if (clicked) {
+    sendLog("Co.opmart: Đã bấm xác nhận popup địa chỉ.", "success");
+    await page.waitForTimeout(1500);
+    return true;
+  }
+  sendLog("Co.opmart: Không tìm thấy nút xác nhận trên popup địa chỉ.", "warning");
+  return false;
+}
+
+async function handleAddressPopup(page, sendLog) {
   sendLog("Co.opmart: Chờ popup địa chỉ xuất hiện (tối đa 15 giây)...");
 
   // Scroll xuống để kích hoạt popup địa chỉ
@@ -356,69 +550,8 @@ async function handleAddressPopup(page, payload, sendLog) {
   }
 
   await page.waitForTimeout(500);
-  await disableCoopGeolocationToggle(page, sendLog);
-
-  // Phân tích địa chỉ thành các thành phần
-  const addr = parseAddress(buyerAddress);
-  sendLog(`Co.opmart: Điền địa chỉ: Tỉnh="${addr.province}" | Quận="${addr.district}" | Phường="${addr.ward}" | Đường="${addr.street}"`);
-
-  // Điền từng cấp theo placeholder và id container dropdown thực tế
-  const provinceOk = await fillAddressAutocomplete(page, sendLog,
-    "Chọn tỉnh/thành phố", "provinceCode", addr.province);
-  await page.waitForTimeout(700);
-
-  const districtOk = await fillAddressAutocomplete(page, sendLog,
-    "Chọn quận/ huyện", "districtCode", addr.district);
-  await page.waitForTimeout(700);
-
-  const wardOk = await fillAddressAutocomplete(page, sendLog,
-    "Chọn phường/xã", "wardCode", addr.ward);
-  await page.waitForTimeout(700);
-
-
-  // Điền số nhà, tên đường vào input cuối cùng
-  try {
-    const streetInput = page.locator('input#address, input[placeholder*="Số nhà" i], input[placeholder*="tên đường" i]').first();
-    if (await waitForVisible(streetInput, 1500)) {
-      await streetInput.click();
-      await streetInput.fill(addr.street);
-      sendLog(`Co.opmart: Đã nhập địa chỉ chi tiết: "${addr.street}".`, "success");
-      await page.waitForTimeout(400);
-    }
-  } catch { }
-
-  if (!provinceOk || !districtOk || !wardOk) {
-    sendLog("Co.opmart: Chưa điền đủ tỉnh/quận/phường nên dừng ở popup địa chỉ để bạn thao tác.", "warning");
-    await dumpModalElements(page, sendLog).catch(() => null);
-    return;
-  }
-
-  // Bấm nút xác nhận — dùng selector chính xác từ DOM dump (button[type=submit] text="Xác nhận")
-
-  const confirmSelectors = [
-    'button:has-text("Xác nhận")',
-    'button:has-text("Lưu địa chỉ")',
-    'button:has-text("Lưu")',
-    'button:has-text("Tiếp tục")',
-    'button:has-text("Đồng ý")',
-    'button:has-text("OK")',
-    '.teko-modal-show button[class*="primary"]',
-    '.teko-modal-show button[type="submit"]',
-  ];
-
-  let addressConfirmed = false;
-  for (const sel of confirmSelectors) {
-    try {
-      const btn = page.locator(sel).first();
-      if (await waitForVisible(btn, 1000)) {
-        await btn.click();
-        sendLog("Co.opmart: Đã xác nhận địa chỉ giao hàng.", "success");
-        addressConfirmed = true;
-        await page.waitForTimeout(1500);
-        break;
-      }
-    } catch { }
-  }
+  await enableCoopGeolocationToggle(page, sendLog);
+  const addressConfirmed = await confirmCoopAddressPopup(page, sendLog);
 
   if (addressConfirmed) {
     // Bước tiếp theo: Chọn siêu thị gần bạn
@@ -444,7 +577,8 @@ async function handleAddressPopup(page, payload, sendLog) {
           if (!rectVisible(el)) continue;
           const text = (el.textContent || '').trim();
           const hasKm = /\d+(\.\d+)?\s*km/i.test(text);
-          if (hasKm) {
+          const hasStoreName = /co\.?opmart|co\.?opxtra|finelife/i.test(text);
+          if (hasKm && hasStoreName) {
             // Loại bỏ phần text km để xem có chứa store name / address khác không
             const remainingText = text.replace(/\d+(\.\d+)?\s*km/i, '').trim();
             if (remainingText.length > 5) {
@@ -593,7 +727,7 @@ async function run(page, payload, sendLog, sendStatus) {
   sendLog("Co.opmart Playbook: Bắt đầu...", "success");
 
   // Bước 1: Xử lý popup địa chỉ nếu có
-  await handleAddressPopup(page, payload, sendLog);
+  await handleAddressPopup(page, sendLog);
   await page.waitForTimeout(1000);
 
   // Bước 2: Thử thêm vào giỏ hàng trực tiếp
@@ -883,7 +1017,7 @@ async function ensureCoopPasswordLogin(page, payload, sendLog, sendFrame) {
   await page.waitForTimeout(1500);
   const locationPopup = page.getByText(/Hoặc nhập địa chỉ|Bật định vị/i).first();
   if (await locationPopup.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await handleAddressPopup(page, { buyerAddress: payload.address || payload.fullAddress || payload.browserSession?.address || "" }, sendLog);
+    await handleAddressPopup(page, sendLog);
     await page.waitForTimeout(1500);
     await sendFrame?.();
   }
@@ -913,7 +1047,7 @@ async function ensureCoopPasswordLogin(page, payload, sendLog, sendFrame) {
       const postLoginLocationPopup = page.getByText(/Hoặc nhập địa chỉ|Bật định vị/i).first();
       if (await postLoginLocationPopup.isVisible({ timeout: 1000 }).catch(() => false)) {
         sendLog("Co.opmart: Co.op yêu cầu chọn địa chỉ sau đăng nhập, đang xử lý tiếp...");
-        await handleAddressPopup(page, { buyerAddress: payload.address || payload.fullAddress || payload.browserSession?.address || "" }, sendLog);
+        await handleAddressPopup(page, sendLog);
         await page.waitForTimeout(2500);
         if (await phoneInput.isVisible({ timeout: 1000 }).catch(() => false)) {
           await phoneInput.fill(phone);
@@ -948,22 +1082,32 @@ async function ensureCoopPasswordLogin(page, payload, sendLog, sendFrame) {
 }
 
 async function fillCoopProfilePopup(page, payload, sendLog, sendFrame, timeoutMs = 12000) {
-  const title = page.getByText(/Cập nhật thông tin cá nhân/i).first();
-  const found = await title.isVisible({ timeout: timeoutMs }).catch(() => false);
+  const title = page.getByText(/Cập nhật thông tin cá nhân|Thông tin người nhận hàng/i).first();
+  const found = await title.isVisible({ timeout: Math.min(timeoutMs, 3000) }).catch(() => false) ||
+    await page
+      .locator('input[placeholder*="tên người nhận" i], input[placeholder*="họ tên" i], input[placeholder*="số điện thoại" i]')
+      .first()
+      .isVisible({ timeout: timeoutMs })
+      .catch(() => false);
   if (!found) {
-    sendLog("Co.opmart: Không thấy popup cập nhật thông tin cá nhân.", "warning");
+    sendLog("Co.opmart: Không thấy popup cập nhật thông tin cá nhân/người nhận.", "warning");
     return false;
   }
 
   const profileName = String(payload.name || payload.browserSession?.name || payload.phone || "").trim();
   const profileEmail = String(payload.email || payload.browserSession?.email || "").trim();
-  const fullAddress = String(payload.address || payload.browserSession?.address || payload.fullAddress || "").trim();
-  const addr = parseAddress(fullAddress);
+  const addr = getPayloadAddressParts(payload);
 
-  sendLog("Co.opmart: Đang điền popup cập nhật thông tin cá nhân...");
-  const nameInput = page.locator('input[placeholder*="họ tên" i], input[placeholder*="họ và tên" i]').first();
+  sendLog("Co.opmart: Đang điền popup thông tin người nhận/địa chỉ...");
+  const nameInput = page.locator('input[placeholder*="họ tên" i], input[placeholder*="họ và tên" i], input[placeholder*="tên người nhận" i]').first();
   if (profileName && await waitForVisible(nameInput, 2500)) {
     await nameInput.fill(profileName);
+  }
+
+  const phone = String(payload.phone || payload.browserSession?.phone || "").trim();
+  const phoneInput = page.locator('input[placeholder*="số điện thoại" i], input[type="tel"]').first();
+  if (phone && await waitForVisible(phoneInput, 1200)) {
+    await phoneInput.fill(phone);
   }
 
   if (validEmail(profileEmail)) {
@@ -975,18 +1119,23 @@ async function fillCoopProfilePopup(page, payload, sendLog, sendFrame, timeoutMs
   await page.waitForTimeout(700);
   await fillAddressAutocomplete(page, sendLog, ["Quận/Huyện", "Chọn quận/ huyện", "Chọn quận/huyện"], "districtCode", addr.district);
   await page.waitForTimeout(700);
-  await fillAddressAutocomplete(page, sendLog, ["Phường/Xã", "Chọn phường/xã", "Chọn"], "wardCode", addr.ward);
-  await page.waitForTimeout(700);
+  const hasWardField = await hasAddressInput(page, ["Phường/Xã", "Chọn phường/xã", "Chọn phường"]);
+  if (hasWardField) {
+    await fillAddressAutocomplete(page, sendLog, ["Phường/Xã", "Chọn phường/xã", "Chọn"], "wardCode", addr.ward);
+    await page.waitForTimeout(700);
+  }
 
   const streetInput = page.locator('input[placeholder*="Số nhà" i], input[placeholder*="tên đường" i], input#address').last();
   if (addr.street && await waitForVisible(streetInput, 2000)) {
-    await streetInput.fill(addr.street);
+    await streetInput.fill(buildStreetDetail(addr, hasWardField));
   }
 
   await sendFrame?.();
   const saveButtons = [
     'button:has-text("Lưu thông tin")',
+    'button:has-text("Lưu địa chỉ")',
     'button:has-text("Cập nhật")',
+    'button:has-text("Xác nhận")',
     'button[type="submit"]',
   ];
   for (const selector of saveButtons) {
@@ -1035,7 +1184,7 @@ async function showProfileSetup(page, payload, sendLog, sendStatus, sendFrame) {
   await safeGotoCoop(page, "https://cooponline.vn/checkout", sendLog, sendFrame);
   await page.waitForTimeout(2500);
   await closeCoopMarketingPopup(page);
-  const profileHandled = profileHandledBeforeCheckout || await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 18000);
+  const profileHandled = profileHandledBeforeCheckout || await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 45000);
   if (profileHandled) {
     sendLog("Co.opmart: Đã xử lý popup cập nhật hồ sơ.", "success");
     sendStatus("coop_assist_ready", { url: page.url() });
@@ -1276,7 +1425,7 @@ async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
   sendLog("Co.opmart: Đang mở checkout Co.op...");
   await safeGotoCoop(page, checkoutUrl, sendLog, sendFrame);
   await page.waitForTimeout(1500);
-  await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 2500);
+  await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 30000);
   await selectCoopCheckoutScheduleWithRetry(page, payload, sendLog, sendFrame);
   await sendFrame?.();
   sendLog("Co.opmart: Đã mở màn checkout để người dùng thao tác.", "success");

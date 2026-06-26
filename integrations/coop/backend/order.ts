@@ -34,30 +34,58 @@ type CoopTokenCache = {
   phone?: string; // SĐT gắn với token này
 };
 
-async function readTokenCache(phone: string): Promise<CoopTokenCache | null> {
-  if (!USE_TOKEN_CACHE) return null;
+type CoopTokenCacheFile =
+  | CoopTokenCache
+  | {
+      version?: number;
+      tokens?: Record<string, CoopTokenCache>;
+    };
+
+function isTokenCacheEntry(value: unknown): value is CoopTokenCache {
+  const entry = value as Partial<CoopTokenCache> | null;
+  return Boolean(entry?.access_token && entry.exp);
+}
+
+async function readTokenCacheFile(): Promise<Record<string, CoopTokenCache>> {
   try {
     const raw = await readFile(COOP_TOKEN_CACHE_PATH, "utf-8");
-    const cache = JSON.parse(raw) as CoopTokenCache;
-    if (!cache.access_token || !cache.exp) return null;
-    // Kiểm tra đúng user
-    if (cache.phone && cache.phone !== phone) return null;
-    // Kiểm tra còn hạn (trừ 5 phút buffer)
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (cache.exp - nowSec < 300) {
-      console.log(`[token-cache] Token hết hạn (exp=${cache.exp}, now=${nowSec}), cần login lại`);
-      return null;
+    const parsed = JSON.parse(raw) as CoopTokenCacheFile;
+    if ("tokens" in parsed && parsed.tokens && typeof parsed.tokens === "object") {
+      return Object.fromEntries(
+        Object.entries(parsed.tokens)
+          .filter(([, entry]) => isTokenCacheEntry(entry))
+          .map(([phone, entry]) => [normalizeCoopPhone(entry.phone || phone), { ...entry, phone: normalizeCoopPhone(entry.phone || phone) }]),
+      );
     }
-    console.log(`[token-cache] Dùng cached token cho ${phone} (còn ${Math.round((cache.exp - nowSec) / 3600)}h)`);
-    return cache;
+    if (isTokenCacheEntry(parsed)) {
+      const phone = normalizeCoopPhone(parsed.phone || "");
+      return phone ? { [phone]: { ...parsed, phone } } : {};
+    }
   } catch {
+    // Cache file is optional.
+  }
+  return {};
+}
+
+async function readTokenCache(phone: string): Promise<CoopTokenCache | null> {
+  if (!USE_TOKEN_CACHE) return null;
+  const normalizedPhone = normalizeCoopPhone(phone);
+  const tokens = await readTokenCacheFile();
+  const cache = tokens[normalizedPhone];
+  if (!cache?.access_token || !cache.exp) return null;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (cache.exp - nowSec < 300) {
+    console.log(`[token-cache] Token ${normalizedPhone} hết hạn (exp=${cache.exp}, now=${nowSec}), cần login lại`);
     return null;
   }
+  console.log(`[token-cache] Dùng cached token cho ${normalizedPhone} (còn ${Math.round((cache.exp - nowSec) / 3600)}h)`);
+  return cache;
 }
 
 export async function writeTokenCache(token: CoopTokenResponse, phone: string): Promise<void> {
   if (!USE_TOKEN_CACHE) return;
   try {
+    const normalizedPhone = normalizeCoopPhone(phone);
     // Decode exp từ JWT payload
     const parts = token.access_token.split(".");
     let exp = Math.floor(Date.now() / 1000) + (token.expires_in ?? 3600);
@@ -80,10 +108,16 @@ export async function writeTokenCache(token: CoopTokenResponse, phone: string): 
       iat,
       exp,
       sub,
-      phone,
+      phone: normalizedPhone,
     };
-    await writeFile(COOP_TOKEN_CACHE_PATH, JSON.stringify(cache, null, 2), "utf-8");
-    console.log(`[token-cache] Đã lưu token cho ${phone} (exp=${exp})`);
+    const tokens = await readTokenCacheFile();
+    tokens[normalizedPhone] = cache;
+    await writeFile(
+      COOP_TOKEN_CACHE_PATH,
+      JSON.stringify({ version: 2, tokens }, null, 2),
+      "utf-8",
+    );
+    console.log(`[token-cache] Đã lưu token cho ${normalizedPhone} (exp=${exp})`);
   } catch (err) {
     console.log(`[token-cache] Lỗi ghi cache: ${err}`);
   }
@@ -198,6 +232,12 @@ export type CoopDeliveryInfo = {
   scheduledDeliveryDate?: string;
   scheduledDeliveryTimeSlotFrom?: string;
   scheduledDeliveryTimeSlotTo?: string;
+};
+
+export type CoopAddressSyncInfo = {
+  action: "created" | "updated" | "existing" | "missing";
+  addressId?: string;
+  isDefault?: boolean;
 };
 
 type CoopCustomerInfo = {
@@ -721,14 +761,21 @@ async function upsertCoopDeliveryAddress(input: {
   accessToken: string;
   profile: CoopProfile;
   fallback?: CoopDeliveryInfo;
-}) {
+}): Promise<{ address: CoopProfileAddress | null; sync: CoopAddressSyncInfo }> {
   const current = input.profile.address;
   const payload = buildCoopAddressPayload({
     profile: input.profile,
     fallback: input.fallback,
     current,
   });
-  if (!completeCoopAddressPayload(payload)) return current ?? null;
+  if (!completeCoopAddressPayload(payload)) {
+    return {
+      address: current ?? null,
+      sync: current?.id
+        ? { action: "existing", addressId: current.id, isDefault: current.isDefault }
+        : { action: "missing" },
+    };
+  }
 
   if (current?.id) {
     const res = await coopFetch(`${USER_API_URL}/addresses/${current.id}`, {
@@ -738,7 +785,8 @@ async function upsertCoopDeliveryAddress(input: {
       cache: "no-store",
     });
     await parseJsonResponse(res, { method: "PATCH", request: payload });
-    return { ...current, ...payload, id: current.id };
+    const address = { ...current, ...payload, id: current.id };
+    return { address, sync: { action: "updated", addressId: current.id, isDefault: payload.isDefault } };
   }
 
   const res = await coopFetch(`${USER_API_URL}/addresses`, {
@@ -751,27 +799,32 @@ async function upsertCoopDeliveryAddress(input: {
     method: "POST",
     request: payload,
   });
-  return data.result?.address ?? data.data ?? null;
+  const address = data.result?.address ?? data.data ?? null;
+  return { address, sync: { action: "created", addressId: address?.id, isDefault: payload.isDefault } };
 }
 
 async function resolveCoopDeliveryInfo(input: {
   accessToken: string;
   fallback?: CoopDeliveryInfo;
-}): Promise<CoopDeliveryInfo> {
+}): Promise<{ deliveryInfo: CoopDeliveryInfo; addressSync: CoopAddressSyncInfo }> {
   const profile = await getCoopProfile({ accessToken: input.accessToken });
-  const syncedAddress = await upsertCoopDeliveryAddress({
+  const synced = await upsertCoopDeliveryAddress({
     accessToken: input.accessToken,
     profile,
     fallback: input.fallback,
   });
+  const syncedAddress = synced.address;
   const syncedProfile: CoopProfile = syncedAddress ? { ...profile, address: syncedAddress } : profile;
 
-  if (syncedProfile.address?.id && !input.fallback?.fullAddress) {
+  if (syncedProfile.address?.id) {
     await setCoopDefaultAddress({ accessToken: input.accessToken, address: syncedProfile.address }).catch(() => null);
   }
   const deliveryInfo = profileAddressToDeliveryInfo(syncedProfile, input.fallback);
-  if (deliveryInfo && isCompleteCoopDeliveryInfo(deliveryInfo)) return deliveryInfo;
-  if (isCompleteCoopDeliveryInfo(input.fallback)) return input.fallback;
+  const addressSync = syncedProfile.address?.id
+    ? { ...synced.sync, addressId: syncedProfile.address.id, isDefault: true }
+    : synced.sync;
+  if (deliveryInfo && isCompleteCoopDeliveryInfo(deliveryInfo)) return { deliveryInfo, addressSync };
+  if (isCompleteCoopDeliveryInfo(input.fallback)) return { deliveryInfo: input.fallback, addressSync };
 
   throw new CoopOrderError("Co.op chưa có địa chỉ mặc định hợp lệ trong tài khoản.", {
     status: 400,
@@ -1412,15 +1465,19 @@ export async function addItemToCoopAccountCart(input: {
     cartToken: added.cartToken,
   });
   let cartToken = cart.cartToken;
+  const cartCleared = Boolean(cleared.cartToken || cleared.data);
   let delivery:
     | Awaited<ReturnType<typeof updateCoopDeliveryInfo>>
     | null = null;
   let deliveryInfo = input.deliveryInfo;
+  let addressSync: CoopAddressSyncInfo | undefined;
   if (input.deliveryInfo?.fullAddress && input.deliveryInfo.name && input.deliveryInfo.phone) {
-    deliveryInfo = await resolveCoopDeliveryInfo({
+    const resolved = await resolveCoopDeliveryInfo({
       accessToken: input.accessToken,
       fallback: input.deliveryInfo,
     });
+    deliveryInfo = resolved.deliveryInfo;
+    addressSync = resolved.addressSync;
     delivery = await updateCoopDeliveryInfo({
       accessToken: input.accessToken,
       terminalCode: input.terminalCode,
@@ -1441,5 +1498,7 @@ export async function addItemToCoopAccountCart(input: {
     deliveryCheck: confirmation?.deliveryCheck,
     paymentCheck: confirmation?.paymentCheck,
     deliveryInfo,
+    addressSync,
+    cartCleared,
   };
 }
