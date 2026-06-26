@@ -1769,7 +1769,7 @@ export default function Home() {
                   {userAddr || t("Vị trí của bạn")}
                 </span>
                 <div className="flex items-center gap-1">
-                  {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1, 3, 5, 10].map((r) => (
+                  {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
                     <button
                       key={r}
                       type="button"
