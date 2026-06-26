@@ -187,9 +187,12 @@ function terminalToStore(terminal: CoopTerminal | undefined, terminalCode: strin
 
 export async function getCoopTerminalsByAddress(location: CoopLocationParams): Promise<CoopTerminal[]> {
   const url = new URL(`${CONSUMER_BFF_URL}/api/v1/terminals-by-address`);
-  url.searchParams.set("fullAddress", location.address?.trim() || `${location.lat},${location.lng}`);
-  url.searchParams.set("lat", String(location.lat));
-  url.searchParams.set("long", String(location.lng));
+  const hasLatLng = Number.isFinite(location.lat) && Number.isFinite(location.lng);
+  url.searchParams.set("fullAddress", location.address?.trim() || (hasLatLng ? `${location.lat},${location.lng}` : ""));
+  if (hasLatLng) {
+    url.searchParams.set("lat", String(location.lat));
+    url.searchParams.set("long", String(location.lng));
+  }
   url.searchParams.set("platformId", COOP_PLATFORM_ID);
 
   const res = await fetch(url, {

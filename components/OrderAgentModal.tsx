@@ -75,6 +75,12 @@ type CoopOrderResult = {
     }>;
     message?: string;
   };
+  addressSync?: {
+    action?: "created" | "updated" | "existing" | "missing";
+    addressId?: string;
+    isDefault?: boolean;
+  };
+  cartCleared?: boolean;
   order?: {
     code?: string;
     orderId?: string;
@@ -100,6 +106,23 @@ type CoopTerminalChoice = {
   [key: string]: unknown;
 };
 
+type CoopLocationOption = {
+  id?: string;
+  code: string;
+  name: string;
+  govCode?: string;
+};
+
+type CoopAddressParts = {
+  addressLine: string;
+  provinceCode: string;
+  provinceName: string;
+  districtCode: string;
+  districtName: string;
+  wardCode: string;
+  wardName: string;
+};
+
 const SLOTS = [
   "Trong hôm nay (2–4 giờ)",
   "Tối nay (18:00–21:00)",
@@ -115,6 +138,98 @@ const COOP_TIME_SLOTS: Array<{ from: string; to: string; disabled?: boolean }> =
   { from: "18:00", to: "20:00" },
 ];
 const COOP_DELIVERY_LEAD_MINUTES = 180;
+const HCM_PROVINCE = { code: "79", name: "Thành phố Hồ Chí Minh" };
+const KNOWN_COOP_LOCATION_CODES: Array<Pick<CoopAddressParts, "provinceCode" | "provinceName" | "districtCode" | "districtName" | "wardCode" | "wardName">> = [
+  { provinceCode: "79", provinceName: "Thành phố Hồ Chí Minh", districtCode: "7907", districtName: "Quận Tân Bình", wardCode: "790701", wardName: "Phường 02" },
+  { provinceCode: "79", provinceName: "Thành phố Hồ Chí Minh", districtCode: "7908", districtName: "Quận Tân Phú", wardCode: "790801", wardName: "Phường Tân Sơn Nhì" },
+];
+
+function normalizeCoopText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCoopProvince(value: string) {
+  const normalized = normalizeCoopText(value);
+  if (normalized === "tphcm" || normalized === "tp.hcm" || normalized === "tp hcm" || normalized.includes("ho chi minh")) {
+    return HCM_PROVINCE.name;
+  }
+  return value.trim();
+}
+
+function normalizeCoopWard(value: string) {
+  const normalized = normalizeCoopText(value);
+  if (normalized.includes("tan son hoa")) return "Phường 02";
+  return value.trim();
+}
+
+function inferCoopDistrictFromWard(wardName: string) {
+  const ward = normalizeCoopText(wardName);
+  if (ward.includes("tan son hoa") || ward === "phuong 2" || ward === "phuong 02") return "Quận Tân Bình";
+  if (ward.includes("tan son nhi")) return "Quận Tân Phú";
+  return "";
+}
+
+function applyKnownCoopLocationCodes(parts: CoopAddressParts): CoopAddressParts {
+  const province = normalizeCoopText(parts.provinceName);
+  const district = normalizeCoopText(parts.districtName);
+  const ward = normalizeCoopText(parts.wardName);
+  const known = KNOWN_COOP_LOCATION_CODES.find(
+    (item) =>
+      normalizeCoopText(item.provinceName) === province &&
+      normalizeCoopText(item.districtName) === district &&
+      normalizeCoopText(item.wardName) === ward,
+  );
+  return known ? { ...parts, ...known } : parts;
+}
+
+function parseCoopAddressParts(fullAddress: string): CoopAddressParts {
+  const parts = fullAddress.split(",").map((item) => item.trim()).filter(Boolean);
+  const provinceName = normalizeCoopProvince(parts.at(-1) || HCM_PROVINCE.name);
+  let districtName = parts.length >= 4 ? parts.at(-2) || "" : "";
+  let wardName = parts.length >= 3 ? normalizeCoopWard(parts.at(-3) || "") : "";
+  let addressLine = parts.length >= 4 ? parts.slice(0, -3).join(", ") : parts[0] || "";
+  if (parts.length === 3) {
+    const middle = normalizeCoopWard(parts[1] || "");
+    wardName = middle;
+    districtName = inferCoopDistrictFromWard(middle);
+    addressLine = parts[0] || "";
+  }
+  if (!districtName && wardName) districtName = inferCoopDistrictFromWard(wardName);
+  const withProvinceCode = normalizeCoopText(provinceName).includes("ho chi minh") ? HCM_PROVINCE.code : "";
+  return applyKnownCoopLocationCodes({
+    addressLine,
+    provinceCode: withProvinceCode,
+    provinceName,
+    districtCode: "",
+    districtName,
+    wardCode: "",
+    wardName,
+  });
+}
+
+function composeCoopFullAddress(parts: CoopAddressParts) {
+  return [parts.addressLine, parts.wardName, parts.districtName, parts.provinceName].map((item) => item.trim()).filter(Boolean).join(", ");
+}
+
+function findCoopLocationByName(items: CoopLocationOption[], name: string) {
+  const normalized = normalizeCoopText(name);
+  return items.find((item) => normalizeCoopText(item.name) === normalized || normalizeCoopText(item.name).includes(normalized));
+}
+
+async function fetchCoopLocations(level: "provinces" | "districts" | "wards", params: Record<string, string> = {}) {
+  const search = new URLSearchParams({ level, ...params });
+  const res = await fetch(`/api/coop/locations?${search.toString()}`, { cache: "no-store" });
+  const data = (await res.json().catch(() => ({}))) as { items?: CoopLocationOption[]; error?: string };
+  if (!res.ok || data.error) throw new Error(data.error || "Không tải được danh mục địa chỉ Co.op.");
+  return data.items || [];
+}
 
 export default function OrderAgentModal({
   offer,
@@ -155,9 +270,17 @@ export default function OrderAgentModal({
   const saved = useMemo(() => getProfile(), []);
   const oldCoopAddress = defaultAddress || saved.address;
   const initialAddress = oldCoopAddress;
+  const initialCoopAddressParts = useMemo(() => parseCoopAddressParts(initialAddress), [initialAddress]);
   const [name, setName] = useState(defaultName || saved.name);
   const [phone, setPhone] = useState(defaultPhone || saved.phone);
-  const [address, setAddress] = useState(initialAddress);
+  const [coopAddressLine, setCoopAddressLine] = useState(initialCoopAddressParts.addressLine);
+  const [coopProvinceCode, setCoopProvinceCode] = useState(initialCoopAddressParts.provinceCode);
+  const [coopProvinceName, setCoopProvinceName] = useState(initialCoopAddressParts.provinceName);
+  const [coopDistrictCode, setCoopDistrictCode] = useState(initialCoopAddressParts.districtCode);
+  const [coopDistrictName, setCoopDistrictName] = useState(initialCoopAddressParts.districtName);
+  const [coopWardCode, setCoopWardCode] = useState(initialCoopAddressParts.wardCode);
+  const [coopWardName, setCoopWardName] = useState(initialCoopAddressParts.wardName);
+  const [address, setAddress] = useState(composeCoopFullAddress(initialCoopAddressParts) || initialAddress);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [qty, setQty] = useState(defaultQty && defaultQty > 0 ? Math.floor(defaultQty) : 1);
@@ -196,6 +319,10 @@ export default function OrderAgentModal({
   const [coopBrowserSize, setCoopBrowserSize] = useState({ width: 1024, height: 768 });
   const [coopAddressBusy, setCoopAddressBusy] = useState(false);
   const [coopAddressChecked, setCoopAddressChecked] = useState(false);
+  const [coopLocationsBusy, setCoopLocationsBusy] = useState(false);
+  const [coopProvinces, setCoopProvinces] = useState<CoopLocationOption[]>([]);
+  const [coopDistricts, setCoopDistricts] = useState<CoopLocationOption[]>([]);
+  const [coopWards, setCoopWards] = useState<CoopLocationOption[]>([]);
   const [coopTerminals, setCoopTerminals] = useState<CoopTerminalChoice[]>([]);
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
@@ -293,6 +420,29 @@ export default function OrderAgentModal({
     lastCoopLookupAddressRef.current = "";
   };
 
+  const coopAddressParts = applyKnownCoopLocationCodes({
+    addressLine: coopAddressLine.trim(),
+    provinceCode: coopProvinceCode,
+    provinceName: coopProvinceName,
+    districtCode: coopDistrictCode,
+    districtName: coopDistrictName,
+    wardCode: coopWardCode,
+    wardName: coopWardName,
+  });
+
+  const updateCoopAddress = (patch: Partial<CoopAddressParts>) => {
+    const next = applyKnownCoopLocationCodes({ ...coopAddressParts, ...patch });
+    setCoopAddressLine(next.addressLine);
+    setCoopProvinceCode(next.provinceCode);
+    setCoopProvinceName(next.provinceName);
+    setCoopDistrictCode(next.districtCode);
+    setCoopDistrictName(next.districtName);
+    setCoopWardCode(next.wardCode);
+    setCoopWardName(next.wardName);
+    setAddress(composeCoopFullAddress(next));
+    resetCoopAddressLookup();
+  };
+
   // Kiểm tra SĐT di động VN: 10 số, đầu 0, số thứ 2 thuộc {3,5,7,8,9}.
   // Chấp nhận cả tiền tố +84 / 84 và khoảng trắng/dấu chấm/gạch.
   const phoneDigits = phone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
@@ -303,16 +453,17 @@ export default function OrderAgentModal({
   const emailError = cfg.needEmail && email.trim().length > 0 && !emailValid;
   const passwordError = isCoopReal && password.length > 0 && password.length < 6;
   const coopDeliveryReady = !!coopDeliveryDate && !!coopSlotFrom && !!coopSlotTo;
-  const coopPaymentReady = Boolean(
-    coopResult?.paymentCheck?.selectedMethodCode ||
-    coopResult?.paymentCheck?.selectedMethodName ||
-    coopResult?.paymentCheck?.codSelected
+  const coopStructuredAddressReady = Boolean(
+    coopAddressParts.addressLine &&
+    coopAddressParts.provinceCode &&
+    coopAddressParts.districtCode &&
+    coopAddressParts.wardCode,
   );
   const coopCanStart =
     !!name.trim() &&
     phoneValid &&
     password.length >= 6 &&
-    !!address.trim() &&
+    coopStructuredAddressReady &&
     coopAddressChecked &&
     !!coopTerminalCode &&
     !coopBelowMinimum &&
@@ -344,8 +495,16 @@ export default function OrderAgentModal({
     password,
     name,
     address,
+    addressLine: coopAddressParts.addressLine,
+    provinceId: coopAddressParts.provinceCode,
+    provinceName: coopAddressParts.provinceName,
+    districtId: coopAddressParts.districtCode,
+    districtName: coopAddressParts.districtName,
+    wardId: coopAddressParts.wardCode,
+    wardName: coopAddressParts.wardName,
     quantity: qty,
     price: activeOffer.price,
+    sku: activeOffer.productId,
     productId: activeOffer.product.id,
     productName: activeOffer.product.name,
     productUrl: activeOffer.productUrl,
@@ -414,7 +573,7 @@ export default function OrderAgentModal({
     setPhase("running");
     setStepIndex(0);
     try {
-      const data = await postCoopOrder({ action: "login", ...coopPayload() });
+      const data = await postCoopOrder({ action: "register", ...coopPayload() });
       setCoopResult(data);
       if (data.phase === "otp" && data.flowId) {
         setCoopResult(data);
@@ -495,16 +654,6 @@ export default function OrderAgentModal({
     }
   };
 
-  const confirmCoopPayment = () => {
-    if (!coopPaymentReady) {
-      setCoopError(t("Co.op chưa có phương thức thanh toán. Vui lòng cập nhật lại hoặc chọn trực tiếp trên màn hình stream."));
-      return;
-    }
-    setCoopError("");
-    setCoopStep("review");
-    setStepIndex(4);
-  };
-
   const placeCoopOrder = async () => {
     if (!coopResult?.checkoutFlowId || !coopCheckoutPrepared) return;
     setCoopBusy(true);
@@ -561,6 +710,13 @@ export default function OrderAgentModal({
               name,
               email,
               address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
               terminalCode: coopTerminalCode,
               terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
               terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
@@ -580,6 +736,13 @@ export default function OrderAgentModal({
               slotFrom: preparedSlotFrom,
               slotTo: preparedSlotTo,
               address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
               name,
               email,
               phone: phoneDigits,
@@ -747,15 +910,14 @@ export default function OrderAgentModal({
     setCoopAddressChecked(false);
     setCoopError("");
     try {
-      const loc = await geocode(address);
-      if (!loc) {
-        throw new Error(t("Chưa định vị được địa chỉ này. Vui lòng nhập rõ số nhà, đường, phường/quận."));
-      }
+      const loc = await safeGeocode(address);
       const params = new URLSearchParams({
-        lat: String(loc.lat),
-        lng: String(loc.lng),
         address: address.trim(),
       });
+      if (loc) {
+        params.set("lat", String(loc.lat));
+        params.set("lng", String(loc.lng));
+      }
       const res = await fetch(`/api/coop/terminals?${params.toString()}`, { cache: "no-store" });
       const data = (await res.json().catch(() => ({}))) as {
         selectedTerminalCode?: string;
@@ -781,6 +943,91 @@ export default function OrderAgentModal({
       setCoopAddressBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!isCoopReal) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("provinces")
+      .then((items) => {
+        if (!alive) return;
+        setCoopProvinces(items);
+        const selected = coopProvinceCode ? items.find((item) => item.code === coopProvinceCode) : findCoopLocationByName(items, coopProvinceName || HCM_PROVINCE.name);
+        if (selected) {
+          setCoopProvinceCode(selected.code);
+          setCoopProvinceName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal]);
+
+  useEffect(() => {
+    if (!isCoopReal || !coopProvinceCode) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("districts", { provinceCode: coopProvinceCode })
+      .then((items) => {
+        if (!alive) return;
+        setCoopDistricts(items);
+        const selected = coopDistrictCode ? items.find((item) => item.code === coopDistrictCode) : findCoopLocationByName(items, coopDistrictName);
+        if (selected) {
+          setCoopDistrictCode(selected.code);
+          setCoopDistrictName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal, coopProvinceCode]);
+
+  useEffect(() => {
+    if (!isCoopReal || !coopDistrictCode) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("wards", { districtCode: coopDistrictCode })
+      .then((items) => {
+        if (!alive) return;
+        setCoopWards(items);
+        const selected = coopWardCode ? items.find((item) => item.code === coopWardCode) : findCoopLocationByName(items, coopWardName);
+        if (selected) {
+          setCoopWardCode(selected.code);
+          setCoopWardName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal, coopDistrictCode]);
+
+  useEffect(() => {
+    if (!isCoopReal) return;
+    const nextAddress = composeCoopFullAddress(coopAddressParts);
+    if (nextAddress && nextAddress !== address) setAddress(nextAddress);
+  }, [
+    isCoopReal,
+    coopAddressParts.addressLine,
+    coopAddressParts.provinceCode,
+    coopAddressParts.provinceName,
+    coopAddressParts.districtCode,
+    coopAddressParts.districtName,
+    coopAddressParts.wardCode,
+    coopAddressParts.wardName,
+    address,
+  ]);
 
   useEffect(() => {
     const lookupAddress = address.trim();
@@ -819,7 +1066,7 @@ export default function OrderAgentModal({
     let alive = true;
     setGeocoding(true);
     const t = setTimeout(async () => {
-      const loc = await geocode(address);
+      const loc = await safeGeocode(address);
       if (!alive) return;
       setDeliveryLoc(loc);
       setGeocoding(false);
@@ -949,7 +1196,6 @@ export default function OrderAgentModal({
         className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
         role="dialog"
         aria-modal="true"
-        onClick={onClose}
       >
         <div
           className="flex min-h-0 w-full flex-col rounded-t-2xl bg-white sm:rounded-2xl"
@@ -1052,17 +1298,81 @@ export default function OrderAgentModal({
                     {passwordError && <span className="mt-1 block text-xs text-rose-600">{t("Mật khẩu Co.op cần tối thiểu 6 ký tự.")}</span>}
                   </Field>
 
-                  <Field label={t("Địa chỉ giao")}>
-                    <input
-                      value={address}
-                      onChange={(e) => {
-                        setAddress(e.target.value);
-                        resetCoopAddressLookup();
-                      }}
-                      placeholder={t("Số nhà, đường, phường, quận, TP.HCM")}
-                      className="input"
-                    />
-                  </Field>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Field label={t("Tỉnh/Thành phố")}>
+                      <select
+                        value={coopProvinceCode}
+                        onChange={(e) => {
+                          const selected = coopProvinces.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            provinceCode: selected?.code || "",
+                            provinceName: selected?.name || "",
+                            districtCode: "",
+                            districtName: "",
+                            wardCode: "",
+                            wardName: "",
+                          });
+                          setCoopDistricts([]);
+                          setCoopWards([]);
+                        }}
+                        className="input"
+                      >
+                        <option value="">{coopLocationsBusy ? t("Đang tải…") : t("Chọn tỉnh/thành phố")}</option>
+                        {coopProvinces.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Quận/Huyện")}>
+                      <select
+                        value={coopDistrictCode}
+                        onChange={(e) => {
+                          const selected = coopDistricts.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            districtCode: selected?.code || "",
+                            districtName: selected?.name || "",
+                            wardCode: "",
+                            wardName: "",
+                          });
+                          setCoopWards([]);
+                        }}
+                        disabled={!coopProvinceCode}
+                        className="input"
+                      >
+                        <option value="">{coopProvinceCode ? t("Chọn quận/huyện") : t("Chọn tỉnh trước")}</option>
+                        {coopDistricts.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Phường/Xã")}>
+                      <select
+                        value={coopWardCode}
+                        onChange={(e) => {
+                          const selected = coopWards.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            wardCode: selected?.code || "",
+                            wardName: selected?.name || "",
+                          });
+                        }}
+                        disabled={!coopDistrictCode}
+                        className="input"
+                      >
+                        <option value="">{coopDistrictCode ? t("Chọn phường/xã") : t("Chọn quận trước")}</option>
+                        {coopWards.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Số nhà, tên đường")}>
+                      <input
+                        value={coopAddressLine}
+                        onChange={(e) => updateCoopAddress({ addressLine: e.target.value })}
+                        placeholder={t("VD: 17 Đống Đa")}
+                        className="input"
+                      />
+                    </Field>
+                  </div>
 
                   <button
                     type="button"
@@ -1162,7 +1472,7 @@ export default function OrderAgentModal({
                         setCoopError("");
                       }}
                       inputMode="numeric"
-                      placeholder={t("6 số OTP")}
+                      placeholder={t("6 SỐ OTP")}
                       className="input flex-1 text-center text-lg font-semibold tracking-[0.35em]"
                       autoComplete="one-time-code"
                       autoFocus
@@ -1264,24 +1574,6 @@ export default function OrderAgentModal({
                     {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
                   </button>
 
-                  {coopCheckoutPrepared && (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => openCoopBrowserAssist()}
-                        className="rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                      >
-                        {t(coopBrowserVisible ? "Mở lại màn hình thao tác" : "Mở màn hình để thao tác")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={confirmCoopPayment}
-                        className="rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-                      >
-                        {t("Tiếp tục xác nhận")}
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1438,7 +1730,6 @@ export default function OrderAgentModal({
   return (
     <div
       className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
-      onClick={onClose}
     >
       <div
         className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
@@ -1800,7 +2091,7 @@ export default function OrderAgentModal({
                             setCoopError("");
                           }}
                           inputMode="numeric"
-                          placeholder={t("6 số OTP")}
+                          placeholder={t("6 SỐ OTP")}
                           className="input flex-1"
                           autoFocus
                         />
@@ -2266,6 +2557,14 @@ function getUnknownText(value: unknown) {
 
 function getCoopTerminalCode(terminal: CoopTerminalChoice | null | undefined) {
   return getUnknownText(terminal?.terminalCode) || getUnknownText(terminal?.code);
+}
+
+async function safeGeocode(address: string) {
+  try {
+    return await geocode(address);
+  } catch {
+    return null;
+  }
 }
 
 function getCoopTerminalName(terminal: CoopTerminalChoice | null | undefined) {
