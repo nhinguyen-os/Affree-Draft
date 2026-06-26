@@ -79,7 +79,6 @@ export function parseStoresCsv(csv: string): Store[] {
     lng: col("lng", "lon"),
     website: col("website", "url", "web"),
     currency: col("currency", "tiền tệ", "tien te", "tiente"),
-    phone: col("phone", "sdt", "sđt", "số điện thoại", "so dien thoai", "tel", "điện thoại"),
   };
   if (ci.id < 0) return [];
 
@@ -99,7 +98,6 @@ export function parseStoresCsv(csv: string): Store[] {
       lng: ci.lng >= 0 ? parseCoord(r[ci.lng]) : undefined,
       website: (ci.website >= 0 ? r[ci.website] : "").trim(),
       currency: ci.currency >= 0 ? (r[ci.currency] || "").trim().toUpperCase() || undefined : undefined,
-      phone: ci.phone >= 0 ? (r[ci.phone] || "").trim() || undefined : undefined,
     });
   }
   return out;

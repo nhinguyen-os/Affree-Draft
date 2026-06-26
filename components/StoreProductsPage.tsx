@@ -15,6 +15,8 @@ interface Props {
   userLoc: { lat: number; lng: number } | null;
   lang: Lang;
   headerH?: number;
+  /** Emoji theo nhãn danh mục lấy từ Google Sheet (tab "tệp") — ưu tiên hơn GROUP_TILE. */
+  groupEmoji?: Record<string, string>;
   onClose: () => void;
   onBuy: (offer: RankedOffer) => void;
 }
@@ -36,8 +38,11 @@ function Thumb({ product }: { product: Product }) {
   return <span className="flex h-full w-full items-center justify-center text-3xl">🛒</span>;
 }
 
-export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, onClose, onBuy }: Props) {
+export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, onClose, onBuy }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
+  // Emoji của 1 danh mục: ưu tiên sheet (tab "tệp") → GROUP_TILE → emoji mặc định theo index.
+  const emojiFor = (name: string, idx: number) =>
+    groupEmoji[name] || GROUP_TILE[name]?.emoji || DEFAULT_TILE_EMOJIS[idx % DEFAULT_TILE_EMOJIS.length];
 
   const items = useMemo(
     () =>
@@ -77,15 +82,16 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
 
   const activeSectionData = activeSection ? sections.find((s) => s.name === activeSection) : null;
   const activeSectionIdx = activeSection ? sections.findIndex((s) => s.name === activeSection) : -1;
-  const activeTile = activeSectionData ? GROUP_TILE[activeSectionData.name] : null;
-  const activeEmoji = activeTile?.emoji ?? (activeSectionIdx >= 0 ? DEFAULT_TILE_EMOJIS[activeSectionIdx % DEFAULT_TILE_EMOJIS.length] : "🛒");
+  const activeEmoji = activeSectionData ? emojiFor(activeSectionData.name, activeSectionIdx) : "🛒";
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-[2050] flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50" style={{ top: headerH || 64 }}>
       <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: "touch" }}>
-        {/* Header — sticky trong scroll container để sticks đúng */}
-        <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 backdrop-blur-sm">
-          <div className="flex items-center gap-2 px-3 py-3">
+        {/* Section header CỐ ĐỊNH (sticky top-0 trong overlay): luôn thấy tên cửa hàng +
+            số sản phẩm/khoảng cách/địa chỉ khi cuộn. Nền mờ đặc để sản phẩm cuộn dưới
+            không lộ qua; overlay đã bắt đầu dưới app header nên không bị che. */}
+        <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80">
+          <div className="flex items-center gap-2 px-3 pt-4 pb-3">
             <button
               onClick={onClose}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 active:bg-slate-200"
@@ -97,10 +103,12 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
             </button>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <ChainBadge chain={store.chain} />
+                {/* Ẩn ChainBadge ở brand mode (synthetic store id `__brand__...`) — không có
+                    logo chuỗi để hiển thị, badge "•" trống đè lên tên brand. */}
+                {!store.id.startsWith("__brand__") && <ChainBadge chain={store.chain} />}
                 <h1 className="truncate text-base font-bold text-slate-900">{store.name}</h1>
               </div>
-              <p className="mt-0.5 truncate text-xs text-slate-500">
+              <p className="mt-0.5 text-xs leading-snug text-slate-500">
                 {items.length} {t("sản phẩm")}
                 {dist != null && <> · {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}</>}
                 {store.address && <> · {store.address}</>}
@@ -135,7 +143,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     <Thumb product={p} />
                   </div>
                   <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
-                  <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${p.unit}` : ""}</span>
+                  <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${t(p.unit)}` : ""}</span>
                   {o.inStock ? (
                     <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-emerald-600">
                       {formatMoney(o.price, storeCurrency(o.storeId))}
@@ -168,8 +176,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
               </p>
             ) : (
               sections.map(({ name, items: secItems }, sIdx) => {
-                const tile = GROUP_TILE[name];
-                const emoji = tile?.emoji ?? DEFAULT_TILE_EMOJIS[sIdx % DEFAULT_TILE_EMOJIS.length];
+                const emoji = emojiFor(name, sIdx);
                 return (
                   <section key={name} className="mb-5">
                     <div className="mb-2.5 flex items-center justify-between">
@@ -193,7 +200,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                               <Thumb product={p} />
                             </div>
                             <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
-                            <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${p.unit}` : ""}</span>
+                            <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${t(p.unit)}` : ""}</span>
                             {o.inStock ? (
                               <span className="mt-1.5 text-sm font-bold text-emerald-600">
                                 {formatMoney(o.price, storeCurrency(o.storeId))}

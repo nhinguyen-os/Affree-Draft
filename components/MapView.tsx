@@ -119,6 +119,27 @@ export default function MapView({
   const mapRef = useRef<MapRef>(null);
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [portalPos, setPortalPos] = useState<{ x: number; y: number; anchor: "bottom" | "top" } | null>(null);
+
+  // Tính lại vị trí popup pin (portalPos) dựa trên toạ độ store hiện tại của marker đã chọn.
+  // Anchor "top" = popup ở DƯỚI marker, "bottom" = popup ở TRÊN marker. Chọn hướng có chỗ
+  // trống đủ chứa popup trong map; nếu cả hai đều đủ, theo heuristic 0.45.
+  const computePortalPos = useCallback((store: Store) => {
+    if (!mapRef.current) return null;
+    if (store.lat == null || store.lng == null) return null;
+    const map = mapRef.current;
+    const pt = map.project([store.lng as number, store.lat as number]);
+    const rect = map.getContainer().getBoundingClientRect();
+    const POPUP_H = 140;          // ước lượng chiều cao popup
+    const OFFSET_BELOW = 20;       // khoảng cách marker → popup khi popup ở dưới
+    const OFFSET_ABOVE = 46;       // khi popup ở trên (gồm arrow tip)
+    const fitsBelow = pt.y + OFFSET_BELOW + POPUP_H <= rect.height;
+    const fitsAbove = pt.y - OFFSET_ABOVE - POPUP_H >= 0;
+    let anchor: "bottom" | "top";
+    if (fitsAbove && !fitsBelow) anchor = "bottom";
+    else if (fitsBelow && !fitsAbove) anchor = "top";
+    else anchor = pt.y < rect.height * 0.45 ? "top" : "bottom";
+    return { x: rect.left + pt.x, y: rect.top + pt.y, anchor };
+  }, []);
   const [poiPopup, setPoiPopup] = useState<PoiPopup | null>(null);
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [legendOpen, setLegendOpen] = useState(true);
@@ -148,6 +169,22 @@ export default function MapView({
       duration: 600,
     });
   }, [centerLat, centerLng, radiusKm, styleLoaded]);
+
+  // Popup pin dùng position:fixed portal vào body → set 1 lần lúc click sẽ không theo map khi
+  // user pan/zoom/scroll page → popup "ra khỏi" map. Đăng ký listener để recompute liên tục.
+  useEffect(() => {
+    if (!selectedStore || !mapRef.current) return;
+    const map = mapRef.current.getMap();
+    const update = () => setPortalPos(computePortalPos(selectedStore.store));
+    map.on("move", update);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      map.off("move", update);
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [selectedStore, computePortalPos]);
 
   // Filter POI layers: chỉ địa điểm nổi tiếng (rank ≤ 5) + tuỳ chọn radius
   useEffect(() => {
@@ -318,12 +355,7 @@ export default function MapView({
               anchor="bottom"
               onClick={(e) => {
                 e.originalEvent.stopPropagation();
-                if (mapRef.current) {
-                  const pt = mapRef.current.project([m.store.lng as number, m.store.lat as number]);
-                  const rect = mapRef.current.getContainer().getBoundingClientRect();
-                  const anchor = pt.y < rect.height * 0.45 ? "top" : "bottom";
-                  setPortalPos({ x: rect.left + pt.x, y: rect.top + pt.y, anchor });
-                }
+                setPortalPos(computePortalPos(m.store));
                 setSelectedStore(m);
                 setPoiPopup(null);
               }}
@@ -380,25 +412,6 @@ export default function MapView({
                   </button>
                 )}
               </div>
-              {/* SĐT cửa hàng — nút Gọi (mobile + bàn) + Zalo (chỉ mobile VN) cho cửa hàng KHÔNG order online */}
-              {selectedStore.store.phone && (() => {
-                const raw = selectedStore.store.phone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
-                const isMobileVN = /^0[35789]\d{8}$/.test(raw);
-                return (
-                  <div style={{ marginTop: 5, display: "flex", gap: 5 }}>
-                    <a href={`tel:${raw}`} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#fff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72a2 2 0 0 1 1.72 2z"/></svg>
-                      {t("Gọi")}
-                    </a>
-                    {isMobileVN && (
-                      <a href={`https://zalo.me/${raw}`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#0068ff", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        {t("Zalo")}
-                      </a>
-                    )}
-                  </div>
-                );
-              })()}
             </div>
           </div>,
           document.body
@@ -494,6 +507,12 @@ export default function MapView({
           lineHeight: 1.5,
           color: "#334155",
           pointerEvents: "auto",
+          // Nhiều chuỗi → giới hạn chiều cao trong khung map; nội dung cuộn trong div bên trong,
+          // giữ nút ✕ cố định.
+          maxHeight: "calc(100% - 24px)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
         }}
       >
         <button
@@ -520,6 +539,10 @@ export default function MapView({
         >
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
+        <div
+          style={{ overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain", minHeight: 0, paddingRight: 2 }}
+          onWheel={(e) => e.stopPropagation()}
+        >
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 9, height: 9, borderRadius: 999, background: "#3b82f6", display: "inline-block" }} />
           {t("Vị trí của bạn")}
@@ -579,6 +602,7 @@ export default function MapView({
             {t("GẦN NHẤT")}
           </span>
           {t("Cửa hàng gần bạn nhất")}
+        </div>
         </div>
       </div>
       ) : (

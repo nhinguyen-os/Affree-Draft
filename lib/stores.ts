@@ -10,6 +10,8 @@ interface SourceMeta {
   /** Trang chủ / nơi mua online (dùng cho nguồn online không có cửa hàng vật lý). */
   home: string;
   online?: boolean;
+  /** Logo thật của chuỗi (URL). Trống → tự lấy favicon từ `home`. */
+  logo?: string;
   /** Tiền tệ mặc định của nguồn (fallback khi tab "stores" chưa khai báo cột currency). */
   currency?: string;
 }
@@ -20,21 +22,27 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   coop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn" },
   aeon: { label: "AEON", color: "#8e0d3c", home: "https://aeoneshop.com" },
   shopee: { label: "Shopee", color: "#ee4d2d", home: "https://shopee.vn", online: true },
+  spe: { label: "Shopee", color: "#ee4d2d", home: "https://shopee.vn", online: true },
   grab: { label: "GrabMart", color: "#00b14f", home: "https://food.grab.com", online: true },
+  gf: { label: "GrabFood", color: "#00b14f", home: "https://food.grab.com", online: true },
+  thxl: { label: "Tạp Hóa Xe Lam", color: "#16a34a", home: "https://taphoaxelam.com", online: true },
+  tdat: { label: "Thiên Đường Ẩm Thực", color: "#f59e0b", home: "https://foodparadise.vn", online: true },
+  cop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn" },
   pnj: { label: "PNJ", color: "#c9a227", home: "https://www.pnj.com.vn", online: true },
   dalathasfarm: { label: "Dalat Hasfarm", color: "#2e7d32", home: "https://dalathasfarm.com", online: true },
   ichiban: { label: "Ichiban Market", color: "#d32f2f", home: "https://ichibanmarket.com.vn", online: true },
   lotte: { label: "LOTTE Mart", color: "#ed1c24", home: "https://www.lottemart.vn", online: true },
   krmart: { label: "Korea Mart", color: "#003478", home: "https://xinchaokoreamart.com", online: true },
   astrabean: { label: "Astrabean", color: "#6f4e37", home: "https://day-sales.com/store/astrabean/product", currency: "USD" },
+  khuccham: { label: "Khúc Chạm Store", color: "#f97316", home: "https://music.youtube.com/@KhucChamChannel", online: true },
   other: { label: "Khác", color: "#64748b", home: "", online: true },
 };
 
 const DEFAULT_COLOR = "#64748b";
 
-/** Tên hiển thị của nguồn, có fallback cho nguồn lạ. */
+/** Tên hiển thị của nguồn, có fallback cho nguồn lạ. Tra cứu không phân biệt hoa/thường (vd THXL, TDAT). */
 export function chainLabel(chain: Chain): string {
-  return SOURCE_META[chain]?.label ?? chain;
+  return (SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()])?.label ?? chain;
 }
 
 /** Slugify đơn giản (không dấu, [a-z0-9]) — dùng cục bộ ở đây để tránh phụ thuộc lib/slug. */
@@ -57,9 +65,28 @@ export function findChainBySlug(slug: string): Chain | null {
   return null;
 }
 
-/** Màu nhận diện của nguồn, có fallback xám. */
+/** Màu nhận diện của nguồn, có fallback xám. Tra cứu không phân biệt hoa/thường. */
 export function chainColor(chain: Chain): string {
-  return SOURCE_META[chain]?.color ?? DEFAULT_COLOR;
+  return (SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()])?.color ?? DEFAULT_COLOR;
+}
+
+/**
+ * Logo thật của chuỗi — ưu tiên `logo` khai báo sẵn; nếu không có thì lấy favicon
+ * từ domain `home` (dịch vụ favicon Google, luôn trả ảnh thật, không 404).
+ * Trả undefined khi không có domain → caller hiện chữ viết tắt thay thế.
+ */
+export function chainLogo(chain: Chain): string | undefined {
+  const meta = SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()];
+  if (meta?.logo) return meta.logo;
+  if (meta?.home) {
+    try {
+      const host = new URL(meta.home).hostname;
+      return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+    } catch {
+      // home không phải URL hợp lệ → bỏ qua
+    }
+  }
+  return undefined;
 }
 
 /** Giữ tương thích với code cũ (truy cập kiểu CHAIN_LABEL[chain]). */

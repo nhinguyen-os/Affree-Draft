@@ -72,12 +72,14 @@ async function fetchCatalogTab(): Promise<Catalog | null> {
 export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
+  // Stores/discount: 120s (thay đổi vừa phải). Groups/similar/tui: 300s (hiếm thay đổi).
+  // Catalog chính vẫn dùng revalidate=30 để giá luôn gần nhất.
   const [, sheetGroups, similarGroups, discountMap, tui] = await Promise.all([
-    fetchSheetStores(revalidate).then(setDynamicStores),
-    fetchSheetGroups(revalidate),
-    fetchSimilarGroups(revalidate),
-    fetchDiscountMap(revalidate),
-    fetchTui(revalidate),
+    fetchSheetStores(120).then(setDynamicStores),
+    fetchSheetGroups(300),
+    fetchSimilarGroups(300),
+    fetchDiscountMap(120),
+    fetchTui(300),
   ]);
 
   /**
@@ -121,6 +123,7 @@ export async function GET() {
     sponsors: catalog.sponsors?.length ? catalog.sponsors : sheetGroups.sponsors,
     similarGroups: similarGroups.length ? similarGroups : catalog.similarGroups,
     tui: tui.length ? tui : catalog.tui,
+    mealTitles: catalog.mealTitles?.length ? catalog.mealTitles : sheetGroups.mealTitles,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi

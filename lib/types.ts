@@ -17,8 +17,6 @@ export interface Store {
   online?: boolean;
   /** Mã tiền tệ của cửa hàng (vd "USD"). Trống → mặc định "VND". Giá sản phẩm hiển thị theo tiền tệ này. */
   currency?: string;
-  /** SĐT cửa hàng (cột phone/sdt trong sheet stores). Dùng cho cửa hàng KHÔNG order online — show nút Gọi + Zalo. */
-  phone?: string;
 }
 
 export interface Product {
@@ -144,6 +142,18 @@ export interface Catalog {
   similarGroups?: SimilarGroup[];
   /** Túi ghép/đôi/đa dạng (tab "Tui" 1sZTv hoặc seed). Trống → không hiện mục Túi. */
   tui?: Tui[];
+  /** Tên section "Đồ ăn" theo buổi ăn (tab 1sZTv gid=743152394). Trống → dùng tên base trong code. */
+  mealTitles?: MealTitle[];
+}
+
+/**
+ * Một mốc tên buổi ăn cho section "Đồ ăn" (tab "Tên Đồ ăn theo giờ").
+ * `fromHour` = giờ bắt đầu áp tên này; áp tới trước fromHour kế tiếp (giờ trước mốc đầu → bao vòng về mốc cuối).
+ */
+export interface MealTitle {
+  fromHour: number;
+  vi: string;
+  en: string;
 }
 
 export interface PurchaseRecord {

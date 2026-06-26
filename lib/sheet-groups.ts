@@ -1,4 +1,4 @@
-import type { ProductGroup, PriorityProfile, Sponsor } from "./types";
+import type { ProductGroup, PriorityProfile, Sponsor, MealTitle } from "./types";
 
 /**
  * Đọc 2 tab cấu hình hiển thị trong cùng spreadsheet master:
@@ -47,6 +47,12 @@ export const SPONSOR_SHEET_CSV_URL =
 export const SANPHAM_OVERRIDE_CSV_URL =
   process.env.SANPHAM_OVERRIDE_CSV_URL ||
   "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=0";
+
+// Tab "Tên Đồ ăn theo giờ" (gid=743152394) trong sheet 1sZTv — tên section "Đồ ăn" đổi theo buổi ăn.
+// Cột: Từ giờ · Tên hiển thị · Tên tiếng Anh. Đổi tên buổi ăn ngay trên sheet, không cần sửa code.
+export const MEAL_TITLES_CSV_URL =
+  process.env.MEAL_TITLES_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/export?format=csv&gid=743152394";
 
 /** Tách CSV → mảng hàng × cột (hỗ trợ field có dấu " và xuống dòng bên trong). */
 function splitCsv(csv: string): string[][] {
@@ -274,6 +280,40 @@ export function parseSanPhamOverrideCsv(csv: string): Map<string, string[]> {
   return out;
 }
 
+/** Parse CSV tab "Tên Đồ ăn theo giờ" → MealTitle[]. Cột: Từ giờ · Tên hiển thị · Tên tiếng Anh. */
+export function parseMealTitlesCsv(csv: string): MealTitle[] {
+  const rows = splitCsv(csv).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length < 2) return [];
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (...keys: string[]) => {
+    for (let i = 0; i < header.length; i++) {
+      if (keys.some((k) => header[i].includes(k))) return i;
+    }
+    return -1;
+  };
+  const ci = {
+    hour: col("từ giờ", "tu gio", "giờ", "gio", "hour", "from"),
+    vi: col("tên hiển thị", "ten hien thi", "hiển thị", "tên việt", "vi", "name"),
+    en: col("tiếng anh", "tieng anh", "english", "en"),
+  };
+  const hourIdx = ci.hour >= 0 ? ci.hour : 0;
+  const viIdx = ci.vi >= 0 ? ci.vi : 1;
+  const enIdx = ci.en >= 0 ? ci.en : 2;
+
+  const out: MealTitle[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const hourRaw = (r[hourIdx] || "").trim();
+    const fromHour = Number(hourRaw);
+    const vi = (r[viIdx] || "").trim();
+    if (!vi || !Number.isFinite(fromHour)) continue;
+    const en = (enIdx >= 0 ? (r[enIdx] || "").trim() : "") || vi; // thiếu EN → dùng VI
+    out.push({ fromHour: ((fromHour % 24) + 24) % 24, vi, en });
+  }
+  return out;
+}
+
 /**
  * Tải + parse các tab cấu hình hiển thị. Trả về object có thể rỗng cho từng phần
  * (groups/priorities/sponsors/sanPhamGroupOverrides/danhMucGroups = undefined nếu lỗi/rỗng).
@@ -283,7 +323,7 @@ export function parseSanPhamOverrideCsv(csv: string): Map<string, string[]> {
  */
 export async function fetchSheetGroups(
   revalidate = 300,
-): Promise<{ groups?: ProductGroup[]; danhMucGroups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[]; sanPhamGroupOverrides?: Map<string, string[]> }> {
+): Promise<{ groups?: ProductGroup[]; danhMucGroups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[]; sanPhamGroupOverrides?: Map<string, string[]>; mealTitles?: MealTitle[] }> {
   const fetchCsv = async (url: string): Promise<string | null> => {
     try {
       // revalidate=0 → tắt cache Next.js (force-dynamic ở route). Thêm cache-buster `_=<ms>`
@@ -301,12 +341,13 @@ export async function fetchSheetGroups(
     }
   };
 
-  const [tepCsv, danhMucCsv, prioCsv, sponsorCsv, sanphamCsv] = await Promise.all([
+  const [tepCsv, danhMucCsv, prioCsv, sponsorCsv, sanphamCsv, mealCsv] = await Promise.all([
     fetchCsv(TEP_SHEET_CSV_URL),
     fetchCsv(DANHMUC_SHEET_CSV_URL),
     fetchCsv(PRIORITY_SHEET_CSV_URL),
     fetchCsv(SPONSOR_SHEET_CSV_URL),
     fetchCsv(SANPHAM_OVERRIDE_CSV_URL),
+    fetchCsv(MEAL_TITLES_CSV_URL),
   ]);
 
   const groups = tepCsv ? parseTepCsv(tepCsv) : [];
@@ -314,6 +355,7 @@ export async function fetchSheetGroups(
   const priorities = prioCsv ? parsePriorityCsv(prioCsv) : [];
   const sponsors = sponsorCsv ? parseSponsorCsv(sponsorCsv) : [];
   const sanPhamGroupOverrides = sanphamCsv ? parseSanPhamOverrideCsv(sanphamCsv) : new Map();
+  const mealTitles = mealCsv ? parseMealTitlesCsv(mealCsv) : [];
 
   return {
     groups: groups.length ? groups : undefined,
@@ -321,5 +363,6 @@ export async function fetchSheetGroups(
     priorities: priorities.length ? priorities : undefined,
     sponsors: sponsors.length ? sponsors : undefined,
     sanPhamGroupOverrides: sanPhamGroupOverrides.size ? sanPhamGroupOverrides : undefined,
+    mealTitles: mealTitles.length ? mealTitles : undefined,
   };
 }

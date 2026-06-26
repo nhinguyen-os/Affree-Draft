@@ -44,7 +44,7 @@ export const GROUP_TILE: Record<string, { emoji: string; tint: string; label?: s
   "Thực phẩm": { emoji: "🍜", tint: "bg-amber-100 text-amber-700", label: "Đồ ăn" },
   "Sữa": { emoji: "🥛", tint: "bg-sky-100 text-sky-700" },
   "Đồ uống": { emoji: "🥤", tint: "bg-cyan-100 text-cyan-700" },
-  "Chăm sóc cá nhân": { emoji: "💄", tint: "bg-pink-100 text-pink-600", label: "Mỹ phẩm" },
+  "Chăm sóc cá nhân": { emoji: "🧼", tint: "bg-teal-100 text-teal-700", label: "Chăm sóc" },
   "Nhà cửa & vệ sinh": { emoji: "🧴", tint: "bg-lime-100 text-lime-700", label: "Nhà cửa" },
   "Trang sức": { emoji: "💍", tint: "bg-violet-100 text-violet-700" },
   "Mẹ & bé": { emoji: "🍼", tint: "bg-rose-100 text-rose-600" },

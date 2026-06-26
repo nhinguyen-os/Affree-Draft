@@ -47,7 +47,6 @@ export const VERSION_HISTORY: VersionEntry[] = [
         "Tag 'TÀI TRỢ / PHỔ BIẾN' chuyển lên đỉnh thẻ logo, không còn che lên tên/biểu tượng",
         "Logo nhãn tự nhận màu nền theo bộ nhận diện brand, phủ đều cả thẻ (Mencode vàng, Vinamilk xanh, Beauty Republic gold…)",
         "Trang 'Phiên bản' chia 2 cấp cha–con: bản 1.3 chứa các bản con 1.3.1, 1.3.2…; mục đánh số dọc, dễ đọc trên máy tính",
-        "Tìm địa chỉ ngoài Việt Nam chính xác hơn — gõ tên bang/nước (vd 'California') không còn trả gợi ý lạc đề ở TP.HCM",
         "Đổi vị trí trên thanh đầu: giỏ hàng & lịch sử lên trên, ô địa chỉ xuống dưới để bố cục cân đối hơn",
         "Bản đồ: bấm xem sản phẩm của cửa hàng → mở trang riêng có tên cửa hàng làm tiêu đề, danh mục cuộn ngang, sản phẩm xếp dọc như trang chủ",
         "Khu vực sự kiện (vd Worldcup) đẩy lên đầu để dễ thấy",
@@ -196,6 +195,16 @@ export const ROADMAP: RoadmapSection[] = [
     items: [
       "Tinh chỉnh viền các thẻ nhãn cho sát nhau hơn, đồng nhất với 'Dịch vụ quanh đây'",
       "Khi có sự kiện lớn (vd. giải bóng đá), hiện biểu tượng ngôi sao nổi bật, vào nhanh nhóm sản phẩm liên quan; bật/tắt được theo thời điểm",
+      "Tên khu vực ở trang chủ to và nổi bật hơn, bỏ con số đếm cạnh tên để tiêu đề gọn — đỡ rối mắt",
+    ],
+  },
+  {
+    group: "Cá nhân hoá theo thời điểm & người dùng",
+    emoji: "🌅",
+    items: [
+      "Tên khu vực tự đổi theo thời điểm trong ngày — sáng sớm gợi 'Đi chợ sớm', trưa 'Bữa trưa quanh đây', chiều 'Sửa soạn bữa tối', đêm 'Đặt sẵn cho mai'",
+      "Mở app vào thời điểm nào → tự ưu tiên những khu vực phù hợp lên đầu (vd trưa: bữa trưa, đồ uống mát; tối: đồ tươi cho mai)",
+      "Ghi nhớ thói quen mua sắm của bạn để gợi ý khu vực và sản phẩm sát sở thích hơn theo thời gian",
     ],
   },
   {

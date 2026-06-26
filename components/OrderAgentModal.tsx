@@ -7,6 +7,7 @@ import { distanceKm, formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { geocode } from "@/lib/geocode";
 import { getOrderConfig } from "@/lib/orderConfig";
+import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
 
 /**
@@ -160,10 +161,12 @@ export default function OrderAgentModal({
 
   const total = activeOffer.price * qty;
 
-  // Kiểm tra SĐT di động VN: 10 số, đầu 0, số thứ 2 thuộc {3,5,7,8,9}.
-  // Chấp nhận cả tiền tố +84 / 84 và khoảng trắng/dấu chấm/gạch.
-  const phoneDigits = phone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
-  const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
+  // Kiểm tra SĐT theo quốc gia của cửa hàng (suy từ tiền tệ): VN / US / quốc tế.
+  const rule = useMemo(
+    () => phoneRule(storeCurrency(activeOffer.store.id)),
+    [activeOffer.store.id]
+  );
+  const phoneValid = rule.test(phone);
   const phoneError = phone.trim().length > 0 && !phoneValid;
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -259,10 +262,13 @@ export default function OrderAgentModal({
         className="relative flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl"
         onClick={(e) => e.stopPropagation()}
         style={{
-          backdropFilter: "blur(64px) saturate(180%)",
-          WebkitBackdropFilter: "blur(64px) saturate(180%)",
-          backgroundColor: "rgba(255,255,255,0.28)",
-          boxShadow: "0 0 0 1px rgba(255,255,255,0.35), 0 0 0 0.5px rgba(255,255,255,0.2), 0 16px 48px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.6)",
+          // Liquid glass kiểu "trắng sữa trong" (giống popup filter bản đồ): bg trắng
+          // ~88% để content trong popup (form, label, text) RÕ NÉT, không bị backdrop
+          // tối làm mờ. Blur giữ ở 24px (đủ thấy mờ-nền sau popup, không cần quá nặng).
+          backdropFilter: "blur(24px) saturate(160%)",
+          WebkitBackdropFilter: "blur(24px) saturate(160%)",
+          backgroundColor: "rgba(255,255,255,0.88)",
+          boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
         }}
       >
         {/* Glass top highlight — specular reflection */}
@@ -289,7 +295,7 @@ export default function OrderAgentModal({
           </button>
         </div>
 
-        <div className="overflow-y-auto overscroll-contain px-4 py-4">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
           {/* Banner: bản mô phỏng */}
           <div className="mb-4 rounded-lg border border-amber-300/40 bg-amber-100/30 px-3 py-2 text-xs text-amber-900">
             ⚙️ {t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
@@ -299,12 +305,12 @@ export default function OrderAgentModal({
           {phase === "form" && (
             <div className="space-y-3">
               {/* Sản phẩm đang đặt — qty control nằm bên phải */}
-              <div className="flex items-center gap-3 rounded-xl border border-white/30 bg-white/20 p-3">
+              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 {activeOffer.product.image ? (
                   <img
                     src={activeOffer.product.image}
                     alt={activeOffer.product.name}
-                    className="h-14 w-14 shrink-0 rounded-lg object-contain bg-white/30"
+                    className="h-14 w-14 shrink-0 rounded-lg object-contain bg-white"
                   />
                 ) : (
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-2xl">
@@ -331,14 +337,14 @@ export default function OrderAgentModal({
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => setQty((q) => Math.max(1, q - 1))}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/40 bg-white/25 text-base font-medium hover:bg-white/40"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100"
                     >
                       −
                     </button>
                     <span className="w-6 text-center text-sm font-semibold">{qty}</span>
                     <button
                       onClick={() => setQty((q) => q + 1)}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/40 bg-white/25 text-base font-medium hover:bg-white/40"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100"
                     >
                       +
                     </button>
@@ -364,7 +370,7 @@ export default function OrderAgentModal({
               )}
 
               {/* Mỗi nguồn yêu cầu khác nhau */}
-              <div className="rounded-lg border border-white/25 bg-white/15 px-3 py-2.5">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <p className="text-xs font-semibold text-slate-800">
                   {t("{chain} yêu cầu để đặt món này:", { chain })}
                 </p>
@@ -395,14 +401,14 @@ export default function OrderAgentModal({
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   inputMode="tel"
-                  placeholder={t("VD: 0901234567")}
+                  placeholder={t(rule.placeholderVi)}
                   aria-invalid={phoneError}
                   className="input"
                   style={phoneError ? { borderColor: "#ef4444" } : undefined}
                 />
                 {phoneError && (
                   <span className="mt-1 block text-xs text-rose-600">
-                    {t("Số điện thoại không hợp lệ — cần 10 số, bắt đầu bằng 03/05/07/08/09.")}
+                    {t(rule.errorVi)}
                   </span>
                 )}
               </Field>
@@ -526,7 +532,7 @@ export default function OrderAgentModal({
                 </div>
               )}
 
-              <div className="rounded-lg bg-white/20 px-3 py-2.5 text-sm">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-slate-800">{t("Thanh toán")}</span>
                   <span className="font-semibold text-slate-800">{t("COD (tiền mặt khi nhận)")}</span>
@@ -536,30 +542,6 @@ export default function OrderAgentModal({
                 </p>
               </div>
 
-              <div className="flex items-center justify-between border-t border-white/25 pt-3">
-                <span className="text-sm font-medium text-slate-800">{t("Tạm tính")}</span>
-                <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
-              </div>
-
-              <button
-                disabled={!canStart}
-                onClick={() => {
-                  flushProfile({ name, phone, address });
-                  setStepIndex(0);
-                  setOtp("");
-                  setOtpError(false);
-                  setSimOtp("");
-                  setPhase("running");
-                }}
-                className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {t("Để trợ lý đặt giúp →")}
-              </button>
-              {!canStart && (
-                <p className="text-center text-xs text-slate-400">
-                  {t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
-                </p>
-              )}
             </div>
           )}
 
@@ -696,7 +678,7 @@ export default function OrderAgentModal({
                             </div>
                             <button
                               onClick={() => setStepIndex((x) => x + 1)}
-                              className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                              className="mt-2 w-full rounded-lg border border-slate-200 bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
                             >
                               {t("Xác nhận đặt hàng")}
                             </button>
@@ -736,13 +718,44 @@ export default function OrderAgentModal({
 
               <button
                 onClick={onClose}
-                className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                className="mt-4 w-full rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
               >
                 {t("Xong")}
               </button>
             </div>
           )}
         </div>
+
+        {/* Footer sticky — Tạm tính + nút "Để trợ lý đặt giúp" luôn hiển thị (kể cả khi
+            content trong popup dài tràn). Trước đây nút nằm trong vùng scroll → user
+            phải cuộn xuống mới thấy, dễ tưởng popup bị cắt. */}
+        {phase === "form" && (
+          <div className="border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-800">{t("Tạm tính")}</span>
+              <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
+            </div>
+            <button
+              disabled={!canStart}
+              onClick={() => {
+                flushProfile({ name, phone, address });
+                setStepIndex(0);
+                setOtp("");
+                setOtpError(false);
+                setSimOtp("");
+                setPhase("running");
+              }}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-150 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
+            >
+              {t("Để trợ lý đặt giúp →")}
+            </button>
+            {!canStart && (
+              <p className="mt-1.5 text-center text-xs text-slate-400">
+                {t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* tiện ích style cho input/select/textarea dùng chung */}
