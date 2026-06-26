@@ -84,10 +84,8 @@ function Recenter({ center, zoom }: { center: [number, number]; zoom?: number })
 
 function zoomForRadius(km?: number | null): number | undefined {
   if (!km) return undefined;
-  if (km <= 1) return 14;
-  if (km <= 3) return 13;
-  if (km <= 5) return 12;
-  return 11;
+  const z = Math.log2(156543 / (km * 20));
+  return Math.max(10, Math.min(18, Math.round(z)));
 }
 
 function AutoResize() {
