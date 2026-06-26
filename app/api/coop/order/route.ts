@@ -57,6 +57,7 @@ type CartSession = {
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
   lineTotal: number;
+  browserSession?: CoopBrowserSession;
   prepared?: boolean;
   deliveryDate?: string;
   slotFrom?: string;
@@ -105,6 +106,7 @@ function saveCartSession(input: {
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
   lineTotal: number;
+  browserSession?: CoopBrowserSession;
 }) {
   const id = randomId();
   cartSessions.set(id, {
@@ -116,6 +118,7 @@ function saveCartSession(input: {
     deliveryInfo: input.deliveryInfo,
     productName: input.productName,
     lineTotal: input.lineTotal,
+    browserSession: input.browserSession,
   });
   return id;
 }
@@ -221,9 +224,13 @@ function buildDeliveryInfo(body: Record<string, unknown>, phone: string): CoopDe
     phone,
     email: readString(body.email) || undefined,
     addressId: readString(body.addressId) || undefined,
+    addressLine: readString(body.addressLine) || readString(body.streetAddress) || undefined,
     wardId: readString(body.wardId) || undefined,
+    wardName: readString(body.wardName) || undefined,
     districtId: readString(body.districtId) || undefined,
+    districtName: readString(body.districtName) || undefined,
     provinceId: readString(body.provinceId) || undefined,
+    provinceName: readString(body.provinceName) || undefined,
     fullAddress,
     siteId: readNumber(body.siteId),
   };
@@ -327,6 +334,12 @@ async function addCartWithCoopToken(input: {
     item: input.item,
     deliveryInfo: input.deliveryInfo,
   });
+  const browserSession = buildBrowserSession({
+    token: input.token,
+    terminalCode: input.terminalCode,
+    deliveryInfo: cartResult.deliveryInfo ?? input.deliveryInfo,
+    ...input.browserSessionMeta,
+  });
   const checkoutFlowId = saveCartSession({
     token: input.token,
     terminalCode: input.terminalCode,
@@ -334,6 +347,7 @@ async function addCartWithCoopToken(input: {
     deliveryInfo: cartResult.deliveryInfo ?? input.deliveryInfo,
     productName: input.productName,
     lineTotal: input.lineTotal,
+    browserSession,
   });
   return {
     ok: true,
@@ -350,12 +364,7 @@ async function addCartWithCoopToken(input: {
     deliveryInfo: cartResult.deliveryInfo,
     deliveryCheck: cartResult.deliveryCheck,
     paymentCheck: cartResult.paymentCheck,
-    browserSession: buildBrowserSession({
-      token: input.token,
-      terminalCode: input.terminalCode,
-      deliveryInfo: cartResult.deliveryInfo ?? input.deliveryInfo,
-      ...input.browserSessionMeta,
-    }),
+    browserSession,
     cartUrl: "https://cooponline.vn/cart",
     checkoutUrl: "https://cooponline.vn/checkout",
   };
@@ -505,6 +514,11 @@ export async function POST(req: NextRequest) {
         item: pending.item,
         deliveryInfo: pending.deliveryInfo,
       });
+      const browserSession = buildBrowserSession({
+        token,
+        terminalCode: pending.terminalCode,
+        deliveryInfo: cartResult.deliveryInfo ?? pending.deliveryInfo,
+      });
       const checkoutFlowId = saveCartSession({
         token,
         terminalCode: pending.terminalCode,
@@ -512,6 +526,7 @@ export async function POST(req: NextRequest) {
         deliveryInfo: cartResult.deliveryInfo ?? pending.deliveryInfo,
         productName: pending.productName,
         lineTotal: pending.lineTotal,
+        browserSession,
       });
       flows.delete(flowId);
 
@@ -528,11 +543,7 @@ export async function POST(req: NextRequest) {
         deliveryInfo: cartResult.deliveryInfo,
         deliveryCheck: cartResult.deliveryCheck,
         paymentCheck: cartResult.paymentCheck,
-        browserSession: buildBrowserSession({
-          token,
-          terminalCode: pending.terminalCode,
-          deliveryInfo: cartResult.deliveryInfo ?? pending.deliveryInfo,
-        }),
+        browserSession,
         cartUrl: "https://cooponline.vn/cart",
         checkoutUrl: "https://cooponline.vn/checkout",
       });
@@ -567,9 +578,9 @@ export async function POST(req: NextRequest) {
       session.cartToken = prepared.cartToken;
       session.createdAt = Date.now();
       session.prepared = true;
-      session.deliveryDate = deliveryDate;
-      session.slotFrom = slotFrom;
-      session.slotTo = slotTo;
+      session.deliveryDate = prepared.deliveryCheck.selectedDate ?? deliveryDate;
+      session.slotFrom = prepared.deliveryCheck.selectedSlotFrom ?? slotFrom;
+      session.slotTo = prepared.deliveryCheck.selectedSlotTo ?? slotTo;
       return NextResponse.json({
         ok: true,
         phase: "cart",
@@ -583,6 +594,9 @@ export async function POST(req: NextRequest) {
         confirmationCart: prepared.confirmationCart,
         deliveryCheck: prepared.deliveryCheck,
         paymentCheck: prepared.paymentCheck,
+        browserSession: session.browserSession
+          ? { ...session.browserSession, cartToken: prepared.cartToken }
+          : undefined,
         cartUrl: "https://cooponline.vn/cart",
         checkoutUrl: "https://cooponline.vn/checkout",
       });

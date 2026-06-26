@@ -111,7 +111,7 @@ wss.on("connection", async (ws) => {
     // Bước 1: Mở trang giữ chỗ để có DOM trước
     await page.setContent(`
       <html><body style="margin:0;background:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#64748b;font-size:14px;">
-        <div>Đang chờ lệnh từ Co.op…</div>
+        <div>Đang chờ lệnh từ Affree...</div>
       </body></html>
     `);
 
