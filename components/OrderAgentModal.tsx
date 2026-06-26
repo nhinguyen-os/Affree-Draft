@@ -1312,21 +1312,11 @@ export default function OrderAgentModal({
               overflow-y: scroll;
               scrollbar-gutter: stable;
             }
-            .coop-left-pane::after {
-              content: "";
-              position: absolute;
-              bottom: 0;
-              left: 0;
-              right: 10px;
-              height: 18px;
-              pointer-events: none;
-              background: linear-gradient(to bottom, rgba(255, 255, 255, 0), #ffffff);
+            .coop-stream-pane {
+              height: 100%;
+              max-width: 1060px;
+              overflow: hidden;
             }
-	            .coop-stream-pane {
-	              height: 100%;
-	              max-width: 1060px;
-	              overflow: hidden;
-	            }
             @media (max-width: 900px) {
               .coop-modal-body--split {
                 grid-template-columns: 1fr;
