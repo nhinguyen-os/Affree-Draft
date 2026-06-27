@@ -224,8 +224,6 @@ const GLASS_FADE_RIGHT =
   "pointer-events-none absolute inset-y-0 right-0 z-[5] w-9 sm:w-16 bg-gradient-to-l from-white/60 via-white/20 to-transparent backdrop-blur-[3px] sm:backdrop-blur-[6px] [mask-image:linear-gradient(to_left,#000,transparent)] [-webkit-mask-image:linear-gradient(to_left,#000,transparent)]";
 // Lớp phủ BLUR kính cho mép hàng thẻ sản phẩm — KHÔNG veil trắng (vì nền trang không trắng),
 // chỉ làm mờ hậu cảnh giảm dần qua mask → thẻ "nhòe kính" khi trôi tới mép. Cần cha `relative`.
-const EDGE_BLUR_LEFT =
-  "pointer-events-none absolute inset-y-0 left-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_right,#000,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000,transparent)]";
 const EDGE_BLUR_RIGHT =
   "pointer-events-none absolute inset-y-0 right-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_left,#000,transparent)] [-webkit-mask-image:linear-gradient(to_left,#000,transparent)]";
 // Ô (tile) kiểu iOS/macOS 26-27 "liquid glass": bo góc mượt + ring mảnh + bóng MỀM 2 lớp
@@ -256,7 +254,8 @@ function EdgeFadeRow({ className, children }: { className: string; children: Rea
   }, [update]);
   return (
     <div className="relative">
-      {edges.left && <div className={EDGE_BLUR_LEFT} />}
+      {/* Chỉ đổ bóng mép PHẢI (gợi ý còn cuộn →). KHÔNG blur mép trái để thẻ ngoài cùng
+          không bị mờ góc trái — nhất là trên mobile thẻ to. */}
       {edges.right && <div className={EDGE_BLUR_RIGHT} />}
       <div ref={ref} onScroll={update} className={className}>
         {children}
@@ -3265,7 +3264,7 @@ export default function Home() {
                 <div
                   ref={dealScrollRef}
                   onScroll={updateDealArrows}
-                  className={`flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${areaDeals.length === 0 ? "hidden" : ""}`}
+                  className={`flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${areaDeals.length === 0 ? "hidden" : ""}`}
                 >
                   {areaDeals.map((d) => (
                     <div
@@ -3638,7 +3637,7 @@ export default function Home() {
                           {t("Xem tất cả →")}
                         </button>
                       </div>
-                      <EdgeFadeRow className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <EdgeFadeRow className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         {tuis.map((tu) => (
                           <div
                             key={tu.chuyenTrang + tu.maTui + tu.tenTui}
@@ -3854,7 +3853,7 @@ export default function Home() {
                         })}
                       </ul>
                     ) : (
-                      <EdgeFadeRow className="flex gap-3 overflow-x-auto pt-1 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                      <EdgeFadeRow className="flex gap-3 overflow-x-auto py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         {products.slice(0, 12).map((p) => {
                           const st = priceStats.get(p.id);
                           const tags = recoTags.get(p.id) ?? [];

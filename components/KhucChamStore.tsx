@@ -32,8 +32,6 @@ export type MusicBuyItem = {
 
 // Đổ bóng mép kính cho carousel album (đồng bộ thẻ sản phẩm ở trang chủ): blur mỏng/nhẹ trên
 // mobile, dày/đậm hơn ở sm+. Không veil trắng vì thẻ nằm trên nền section.
-const EDGE_BLUR_LEFT =
-  "pointer-events-none absolute inset-y-0 left-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_right,#000,transparent)] [-webkit-mask-image:linear-gradient(to_right,#000,transparent)]";
 const EDGE_BLUR_RIGHT =
   "pointer-events-none absolute inset-y-0 right-0 z-[5] w-6 sm:w-12 backdrop-blur-[2px] sm:backdrop-blur-[5px] [mask-image:linear-gradient(to_left,#000,transparent)] [-webkit-mask-image:linear-gradient(to_left,#000,transparent)]";
 
@@ -113,14 +111,14 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
   // nằm CHUNG 1 container nên hiển thị cùng 1 hàng.
   const containerCls = showAll
     ? "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
-    : "flex gap-3 overflow-x-auto scroll-smooth px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+    : "flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
   const cardW = showAll ? "w-full" : "w-44 shrink-0 sm:w-48";
 
   return (
     <>
       {/* ALBUM + BÀI HÁT — cùng 1 hàng (carousel) hoặc lưới khi "Xem tất cả" */}
       <div className="relative">
-        {!showAll && edges.left && <div className={EDGE_BLUR_LEFT} />}
+        {/* Chỉ blur mép PHẢI (gợi ý cuộn →); không blur mép trái để thẻ đầu không mờ góc. */}
         {!showAll && edges.right && <div className={EDGE_BLUR_RIGHT} />}
         <div ref={rowRef} onScroll={showAll ? undefined : updateEdges} className={containerCls}>
         {albums.map((al) => {
