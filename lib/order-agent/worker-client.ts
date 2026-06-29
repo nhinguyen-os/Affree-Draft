@@ -6,6 +6,7 @@ import { getOrderSessionStore, type InMemoryOrderSessionStore } from "./session-
 import type {
   OrderRequiredInput,
   OrderSessionEvent,
+  OrderSessionPopupState,
   OrderSessionPrivateState,
   OrderSessionUpdate,
 } from "./types";
@@ -19,8 +20,45 @@ export interface OrderWorkerClient {
 type AgentServerInboundMessage =
   | { type: "ready" }
   | { type: "log"; message?: string; status?: string }
-  | { type: "status"; phase?: string; orderUrl?: string; error?: string; reason?: string; requiredInput?: string }
-  | { type: "screencast"; data?: string };
+  | {
+      type: "status";
+      phase?: string;
+      orderUrl?: string;
+      orderCode?: string;
+      successMessage?: string;
+      error?: string;
+      reason?: string;
+      requiredInput?: string;
+      qrImageBase64?: string;
+      qrContentType?: string;
+    }
+  | {
+      type: "screencast";
+      data?: string;
+      width?: number;
+      height?: number;
+      sourceX?: number;
+      sourceY?: number;
+      sourceWidth?: number;
+      sourceHeight?: number;
+      mode?: string;
+    }
+  | {
+      type: "popup_state";
+      open?: boolean;
+      popup?: {
+        kind?: string;
+        title?: string;
+        text?: string;
+        actions?: string[];
+        bounds?: {
+          x?: number;
+          y?: number;
+          width?: number;
+          height?: number;
+        };
+      };
+    };
 
 interface WorkerConnection {
   sessionId: string;
@@ -29,6 +67,7 @@ interface WorkerConnection {
   runOrderSent?: boolean;
   readyReceived?: boolean;
   fallbackRunOrderTimer?: ReturnType<typeof setTimeout>;
+  fallbackResponseWatchdogTimer?: ReturnType<typeof setTimeout>;
 }
 
 function sendJson(socket: WebSocket, payload: unknown, onError?: (message: string) => void) {
@@ -125,6 +164,64 @@ function statusPatchFromRequiredInput(requiredInput?: OrderRequiredInput): Order
   }
 }
 
+function normalizePopupState(message: Extract<AgentServerInboundMessage, { type: "popup_state" }>): OrderSessionPopupState | undefined {
+  if (!message.open || !message.popup?.bounds) return undefined;
+  const { x, y, width, height } = message.popup.bounds;
+  if (![x, y, width, height].every((value) => Number.isFinite(value))) return undefined;
+  if ((width ?? 0) <= 0 || (height ?? 0) <= 0) return undefined;
+  return {
+    open: true,
+    mode: "popup-focus",
+    kind: message.popup.kind || "dialog",
+    title: message.popup.title,
+    text: message.popup.text,
+    actions: Array.isArray(message.popup.actions) ? message.popup.actions.filter((item): item is string => typeof item === "string") : [],
+    bounds: {
+      x: Number(x),
+      y: Number(y),
+      width: Number(width),
+      height: Number(height),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function inferRunningStep(text: string | undefined, fallbackStep: string): string {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return fallbackStep;
+  if (normalized.includes("bridge fallback gửi run_order") || normalized.includes("gửi run_order") || normalized.includes("đã nhận lệnh run_order")) {
+    return "dispatch_run_order";
+  }
+  if (normalized.includes("đang mở trang sản phẩm") || normalized.includes("đã tải xong trang")) {
+    return "open_product_page";
+  }
+  if (normalized.includes("bootstrap")) {
+    return "bootstrap_provider";
+  }
+  if (normalized.includes("đang phân tích dom")) {
+    return "ai_dom_analysis";
+  }
+  if (normalized.includes("ai → wait")) {
+    return "ai_wait";
+  }
+  if (normalized.includes("ai → scroll")) {
+    return "ai_scroll";
+  }
+  if (normalized.includes("ai → click")) {
+    return "ai_click";
+  }
+  if (normalized.includes("ai → type") || normalized.includes("ai → input")) {
+    return "ai_type";
+  }
+  if (normalized.includes("css fallback") || normalized.includes("txnn css:")) {
+    return "css_fallback";
+  }
+  if (normalized.includes("thanh toán") || normalized.includes("qr")) {
+    return "qr_payment_flow";
+  }
+  return fallbackStep;
+}
+
 function buildAgentPayload(session: OrderSessionPrivateState) {
   return {
     sessionId: session.id,
@@ -151,21 +248,25 @@ export function createMockOrderWorkerClient(store: InMemoryOrderSessionStore = g
 
   return {
     startSession(sessionId) {
+      const session = store.get(sessionId);
+      if (!session) return;
       queueTransition(sessionId, 100, () => {
         store.update(sessionId, {
           status: "running",
           step: "agent_server_unavailable",
           progress: 10,
-          message: "Không nối được agent-server, đang dùng mock worker fallback",
+          message: "Không nối được agent-server, chưa thể chạy live tự động trên website thật",
         });
       });
       queueTransition(sessionId, 600, () => {
         store.update(sessionId, {
-          status: "waiting_for_final_confirmation",
-          step: "review_order",
-          progress: 85,
-          message: "Mock worker đã chuẩn bị xong. Cần bạn xác nhận trước khi hoàn tất thử nghiệm.",
-          requiredInput: "final_confirmation",
+          status: "failed",
+          step: "handoff",
+          progress: 10,
+          message: "Agent-server live không khả dụng. Mở website thật để tiếp tục thủ công.",
+          handoffUrl: session.offer.productUrl,
+          requiredInput: undefined,
+          error: "live agent-server unavailable",
         });
       });
     },
@@ -191,17 +292,6 @@ export function createMockOrderWorkerClient(store: InMemoryOrderSessionStore = g
           handoffUrl: session.offer.productUrl,
           requiredInput: undefined,
         });
-        return;
-      }
-      if (event.type === "confirm_final_action" && session.status === "waiting_for_final_confirmation") {
-        store.update(sessionId, {
-          status: "completed",
-          step: "completed",
-          progress: 100,
-          message: "Mock worker đã hoàn tất đơn thử nghiệm",
-          requiredInput: undefined,
-          orderCode: `#TXNN-${randomUUID().slice(0, 8).toUpperCase()}`,
-        });
       }
     },
     cancelSession(sessionId) {
@@ -222,6 +312,40 @@ class AgentServerBridgeClient implements OrderWorkerClient {
   private readonly store: InMemoryOrderSessionStore;
   private readonly fallback: OrderWorkerClient;
   private readonly connections = new Map<string, WorkerConnection>();
+
+  private clearConnectionTimers(connection: WorkerConnection) {
+    if (connection.fallbackRunOrderTimer) {
+      clearTimeout(connection.fallbackRunOrderTimer);
+      connection.fallbackRunOrderTimer = undefined;
+    }
+    if (connection.fallbackResponseWatchdogTimer) {
+      clearTimeout(connection.fallbackResponseWatchdogTimer);
+      connection.fallbackResponseWatchdogTimer = undefined;
+    }
+  }
+
+  private armFallbackResponseWatchdog(connection: WorkerConnection) {
+    if (connection.fallbackResponseWatchdogTimer) {
+      clearTimeout(connection.fallbackResponseWatchdogTimer);
+    }
+    connection.fallbackResponseWatchdogTimer = setTimeout(() => {
+      connection.fallbackResponseWatchdogTimer = undefined;
+      const current = this.store.get(connection.sessionId);
+      if (!current || ["completed", "failed", "cancelled", "expired"].includes(current.status)) return;
+      if (current.updatedAt !== current.createdAt && current.message !== "Không thấy ready, bridge fallback gửi run_order sang agent-server") return;
+      this.store.update(connection.sessionId, {
+        status: "failed",
+        step: "fallback_run_order_stalled",
+        progress: Math.max(current.progress, 12),
+        message: "Fallback đã gửi run_order nhưng agent-server không phản hồi bước tiếp theo",
+        error: "agent-server produced no follow-up after fallback run_order",
+        handoffUrl: current.handoffUrl || current.offer.productUrl,
+      });
+      try {
+        connection.socket.close();
+      } catch {}
+    }, 4000);
+  }
 
   constructor(store: InMemoryOrderSessionStore) {
     this.store = store;
@@ -271,7 +395,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       });
 
       socket.on("close", () => {
-        if (connection.fallbackRunOrderTimer) clearTimeout(connection.fallbackRunOrderTimer);
+        this.clearConnectionTimers(connection);
         this.connections.delete(sessionId);
         const current = this.store.get(sessionId);
         if (!current || ["completed", "failed", "cancelled", "expired"].includes(current.status)) return;
@@ -281,10 +405,12 @@ class AgentServerBridgeClient implements OrderWorkerClient {
           progress: current.progress,
           message: "Kết nối agent-server đã bị đóng trước khi hoàn tất đơn hàng",
           error: "agent-server connection closed",
+          handoffUrl: current.handoffUrl || current.offer.productUrl,
         });
       });
 
       socket.on("error", (error) => {
+        this.clearConnectionTimers(connection);
         this.connections.delete(sessionId);
         const current = this.store.get(sessionId);
         if (current && !["completed", "failed", "cancelled", "expired"].includes(current.status)) {
@@ -292,8 +418,9 @@ class AgentServerBridgeClient implements OrderWorkerClient {
             status: "failed",
             step: "agent_server_error",
             progress: current.progress,
-            message: "Không kết nối được agent-server, chuyển sang fallback mock worker",
+            message: "Không kết nối được agent-server live; chuyển sang mở website thật để tiếp tục thủ công",
             error: error.message,
+            handoffUrl: current.handoffUrl || current.offer.productUrl,
           });
         }
         this.fallback.startSession(sessionId);
@@ -324,6 +451,16 @@ class AgentServerBridgeClient implements OrderWorkerClient {
         });
         connection.socket.send(JSON.stringify({ type: "submit_otp", otp: event.otp }));
         break;
+      case "login_completed":
+        this.store.update(sessionId, {
+          status: "running",
+          step: "resume_after_login",
+          progress: Math.max(session.progress, 50),
+          message: "Đã báo đăng nhập xong, agent-server đang tiếp tục xử lý",
+          requiredInput: undefined,
+        });
+        connection.socket.send(JSON.stringify({ type: "login_completed" }));
+        break;
       case "captcha_completed":
         this.store.update(sessionId, {
           status: "running",
@@ -353,6 +490,15 @@ class AgentServerBridgeClient implements OrderWorkerClient {
           requiredInput: undefined,
         });
         connection.socket.send(JSON.stringify({ type: "payment_submitted" }));
+        break;
+      case "popup_click":
+        this.store.update(sessionId, {
+          status: session.status,
+          step: session.step,
+          progress: session.progress,
+          message: "Đã gửi thao tác click trên popup thanh toán cho worker",
+        });
+        connection.socket.send(JSON.stringify({ type: "popup_click", xRatio: event.xRatio, yRatio: event.yRatio }));
         break;
       case "choose_handoff":
         this.store.update(sessionId, {
@@ -397,10 +543,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
 
     if (message.type === "ready") {
       connection.readyReceived = true;
-      if (connection.fallbackRunOrderTimer) {
-        clearTimeout(connection.fallbackRunOrderTimer);
-        connection.fallbackRunOrderTimer = undefined;
-      }
+      this.clearConnectionTimers(connection);
       if (!connection.runOrderSent) {
         connection.runOrderSent = true;
         const latest = this.store.get(connection.sessionId);
@@ -414,11 +557,12 @@ class AgentServerBridgeClient implements OrderWorkerClient {
           setTimeout(() => {
             this.store.update(connection.sessionId, {
               status: "running",
-              step: "remote_ready",
+              step: "dispatch_run_order",
               progress: Math.max(session.progress, 12),
               message: "Bridge chuẩn bị gửi run_order sang agent-server",
             });
             sendJson(connection.socket, { type: "run_order", payload: buildAgentPayload(latest) }, (errorMessage) => {
+              this.clearConnectionTimers(connection);
               this.store.update(connection.sessionId, {
                 status: "failed",
                 step: "agent_server_send_failed",
@@ -427,14 +571,43 @@ class AgentServerBridgeClient implements OrderWorkerClient {
                 error: errorMessage,
               });
             });
+            this.armFallbackResponseWatchdog(connection);
           }, 0);
         }
       }
       return;
     }
 
+    if (message.type === "popup_state") {
+      const popupState = normalizePopupState(message);
+      if (popupState) {
+        this.store.savePopupState(connection.sessionId, popupState);
+      } else {
+        this.store.clearPopupState(connection.sessionId);
+      }
+      return;
+    }
+
+    if (message.type === "screencast") {
+      const hasPopupFrame = Boolean(
+        message.data &&
+          Number.isFinite(message.sourceX) &&
+          Number.isFinite(message.sourceY) &&
+          Number.isFinite(message.sourceWidth) &&
+          Number.isFinite(message.sourceHeight)
+      );
+      if (hasPopupFrame && message.data) {
+        this.store.savePopupFrame(connection.sessionId, message.data, "image/jpeg");
+      }
+      return;
+    }
+
     if (message.type === "log") {
       if (!message.message) return;
+      if (connection.fallbackResponseWatchdogTimer) {
+        clearTimeout(connection.fallbackResponseWatchdogTimer);
+        connection.fallbackResponseWatchdogTimer = undefined;
+      }
       connection.lastLogHint = message.message;
       if (!connection.runOrderSent && !connection.readyReceived && /khởi tạo trình duyệt thành công/i.test(message.message)) {
         this.store.update(connection.sessionId, {
@@ -452,11 +625,12 @@ class AgentServerBridgeClient implements OrderWorkerClient {
             if (!latest) return;
             this.store.update(connection.sessionId, {
               status: "running",
-              step: "remote_ready",
+              step: "fallback_dispatch_run_order",
               progress: Math.max(session.progress, 12),
               message: "Không thấy ready, bridge fallback gửi run_order sang agent-server",
             });
             sendJson(connection.socket, { type: "run_order", payload: buildAgentPayload(latest) }, (errorMessage) => {
+              this.clearConnectionTimers(connection);
               this.store.update(connection.sessionId, {
                 status: "failed",
                 step: "agent_server_send_failed",
@@ -465,6 +639,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
                 error: errorMessage,
               });
             });
+            this.armFallbackResponseWatchdog(connection);
           }, 750);
         }
         return;
@@ -479,7 +654,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       }
       this.store.update(connection.sessionId, {
         status: session.status === "created" ? "running" : session.status,
-        step: session.step,
+        step: inferRunningStep(message.message, session.step === "created" ? "remote_running" : session.step),
         progress: Math.max(session.progress, 12),
         message: message.message,
       });
@@ -487,14 +662,23 @@ class AgentServerBridgeClient implements OrderWorkerClient {
     }
 
     if (message.type === "status") {
+      if (connection.fallbackResponseWatchdogTimer) {
+        clearTimeout(connection.fallbackResponseWatchdogTimer);
+        connection.fallbackResponseWatchdogTimer = undefined;
+      }
+      if (message.qrImageBase64) {
+        this.store.saveQrCode(connection.sessionId, message.qrImageBase64, message.qrContentType || "image/png");
+      }
+
       const phase = message.phase;
       if (phase === "running") {
         const reason = message.reason?.startsWith("resume:")
           ? "Agent-server đang tiếp tục xử lý sau thao tác người dùng"
           : message.reason;
+        this.store.clearPopupState(connection.sessionId);
         this.store.update(connection.sessionId, {
           status: "running",
-          step: session.step === "created" ? "remote_running" : session.step,
+          step: inferRunningStep(reason || connection.lastLogHint || session.message, session.step === "created" ? "remote_running" : session.step),
           progress: Math.max(session.progress, 20),
           message: reason || session.message || "Agent-server đang xử lý đơn hàng",
           requiredInput: undefined,
@@ -503,7 +687,11 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       }
 
       if (phase === "waiting_user_input") {
-        const requiredInput = inferRequiredInput(message.reason || connection.lastLogHint || session.message);
+        const explicitRequiredInput = message.requiredInput as OrderRequiredInput | undefined;
+        const requiredInput = explicitRequiredInput || inferRequiredInput(message.reason || connection.lastLogHint || session.message);
+        if (requiredInput !== "qr_payment") {
+          this.store.clearPopupState(connection.sessionId);
+        }
         this.store.update(connection.sessionId, {
           ...statusPatchFromRequiredInput(requiredInput),
           handoffUrl: session.offer.productUrl,
@@ -513,20 +701,22 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       }
 
       if (phase === "completed") {
+        this.store.clearPopupState(connection.sessionId);
         this.store.update(connection.sessionId, {
           status: "completed",
           step: "completed",
           progress: 100,
-          message: "Agent-server báo đặt hàng thành công",
+          message: message.successMessage || "Agent-server báo đặt hàng thành công",
           requiredInput: undefined,
           handoffUrl: message.orderUrl || session.offer.productUrl,
-          orderCode: session.orderCode || `#TXNN-${randomUUID().slice(0, 8).toUpperCase()}`,
+          orderCode: message.orderCode || session.orderCode || `#TXNN-${randomUUID().slice(0, 8).toUpperCase()}`,
         });
         this.safeClose(connection.sessionId);
         return;
       }
 
       if (phase === "cancelled") {
+        this.store.clearPopupState(connection.sessionId);
         this.store.update(connection.sessionId, {
           status: "cancelled",
           step: "cancelled",
@@ -541,6 +731,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       }
 
       if (phase === "failed") {
+        this.store.clearPopupState(connection.sessionId);
         this.store.update(connection.sessionId, {
           status: "failed",
           step: "failed",
@@ -558,11 +749,10 @@ class AgentServerBridgeClient implements OrderWorkerClient {
   private safeClose(sessionId: string) {
     const connection = this.connections.get(sessionId);
     if (!connection) return;
+    this.clearConnectionTimers(connection);
     this.connections.delete(sessionId);
     try {
-      if (connection.socket.readyState === WebSocket.OPEN || connection.socket.readyState === WebSocket.CONNECTING) {
-        connection.socket.close();
-      }
+      connection.socket.close();
     } catch {
       // ignore
     }
