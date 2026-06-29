@@ -672,6 +672,7 @@ wss.on("connection", async (ws) => {
     page = await context.newPage();
     bindPaymentPageEvents(page);
     sendLog("Đã khởi tạo trình duyệt thành công.", "success");
+    sendStatus('ready')
 
     // Bước 1: Mở trang giữ chỗ để có DOM trước
     await page.setContent(`

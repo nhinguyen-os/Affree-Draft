@@ -689,10 +689,7 @@ export default function OrderAgentModal({
           width?: number;
           height?: number;
         };
-        if (message.type === "ready") {
-          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
-          sendBHXOrderRequest();
-        } else if (message.type === "screencast" && message.data) {
+        if (message.type === "screencast" && message.data) {
           if (bhxShowScreencastRef.current) {
             setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
             if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
@@ -700,7 +697,10 @@ export default function OrderAgentModal({
         } else if (message.type === "message" && message.content) {
           setBhxMessages((logs) => [...logs, { message: message.content || "", status: 'success' }]);
         } else if (message.type === "status") {
-          if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
+          if (message.phase === 'ready') {
+            setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
+            sendBHXOrderRequest();
+          } else if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
             setBhxBusy(false);
           }
         } else if (message.type === 'popup_delivery_time' && message.content) {
@@ -2428,7 +2428,7 @@ export default function OrderAgentModal({
                   </div>
                 </Field>
 
-                {cfg.needSlot && !isCoopReal && (
+                {cfg.needSlot && !isCoopReal && !isBHXReal && (
                   <Field label={t("Khung giờ giao")}>
                     <select
                       value={slot}
@@ -2449,7 +2449,7 @@ export default function OrderAgentModal({
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">{t("Thanh toán")}</span>
                   <span className="font-semibold text-slate-800">
-                    {isCoopReal ? t("Chọn ở bước checkout") : t("COD (tiền mặt khi nhận)")}
+                    {isCoopReal ? t("Chọn ở bước checkout") : (isBHXReal ? t("Chuyển khoản") : t("COD (tiền mặt khi nhận)"))}
                   </span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">
