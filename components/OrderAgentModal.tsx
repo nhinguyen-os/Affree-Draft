@@ -67,10 +67,17 @@ type CoopOrderResult = {
     codAvailable?: boolean;
     codSelected?: boolean;
     methods?: Array<{
+      icon?: string;
       methodCode?: string;
+      methodGroupCode?: string;
+      merchantMethodCode?: string;
       name?: string;
+      description?: string;
       isSelected?: boolean;
       isDisabled?: boolean;
+      warning?: unknown;
+      amount?: number | null;
+      maxTransactionAmount?: number;
       paymentMethodType?: string;
     }>;
     message?: string;
@@ -88,7 +95,9 @@ type CoopOrderResult = {
     grandTotal?: number;
     totalPaid?: number;
     paymentMethodCode?: string;
+    paymentUrl?: string;
   };
+  paymentUrl?: string;
 };
 
 type CoopStepId = "account" | "otp" | "delivery" | "payment" | "review" | "success";
@@ -235,6 +244,8 @@ export default function OrderAgentModal({
   offer,
   alternatives = [],
   geoAddr,
+  geoLat,
+  geoLng,
   defaultName,
   defaultPhone,
   defaultAddress,
@@ -248,6 +259,9 @@ export default function OrderAgentModal({
   alternatives?: RankedOffer[];
   /** Địa chỉ theo định vị — so với địa chỉ giao để biết có lệch không. */
   geoAddr?: string;
+  /** Toạ độ theo định vị của người dùng — dùng làm fallback khi geocode địa chỉ thất bại. */
+  geoLat?: number;
+  geoLng?: number;
   defaultName?: string;
   defaultPhone?: string;
   defaultAddress?: string;
@@ -265,7 +279,6 @@ export default function OrderAgentModal({
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
   const isCoopReal = activeOffer.store.chain === "coop";
-  const isBHXReal = activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
@@ -326,20 +339,13 @@ export default function OrderAgentModal({
   const [coopWards, setCoopWards] = useState<CoopLocationOption[]>([]);
   const [coopTerminals, setCoopTerminals] = useState<CoopTerminalChoice[]>([]);
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
-  const [bhxMessages, setBhxMessages] = useState<Array<{ message: string; status?: string }>>([]);
-  const [bhxBusy, setBhxBusy] = useState(false);
-  const [bhxDeliveryHtml, setBhxDeliveryHtml] = useState("");
-  const [bhxSelectedDeliveryText, setBhxSelectedDeliveryText] = useState("");
-  const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
-  const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
-  const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
-  const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
-  const [bhxOtp, setBhxOtp] = useState("");
+  const [coopSelectedPaymentCode, setCoopSelectedPaymentCode] = useState("COD");
+  const [coopGeo, setCoopGeo] = useState<{ lat: number; lng: number } | null>(null);
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
   const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
   const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
   const lastCoopLookupAddressRef = useRef("");
-  const bhxBrowserWsRef = useRef<WebSocket | null>(null);
+  const coopCompletionHandledRef = useRef(false);
 
   const steps: Step[] = useMemo(() => {
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
@@ -413,7 +419,18 @@ export default function OrderAgentModal({
     coopResult?.deliveryCheck?.availableTimeSlots ??
     [];
   const coopSavedAddress = coopResult?.deliveryCheck?.fullAddress || "";
-  const coopSelectedPaymentName = coopResult?.paymentCheck?.selectedMethodName || coopResult?.paymentCheck?.selectedMethodCode || "";
+  const coopPaymentMethods = (coopResult?.paymentCheck?.methods ?? []).filter((method) => method.methodCode);
+  const selectedCoopPaymentMethod =
+    coopPaymentMethods.find((method) => method.methodCode === coopSelectedPaymentCode) ??
+    coopPaymentMethods.find((method) => method.isSelected);
+  const coopSelectedPaymentName =
+    selectedCoopPaymentMethod?.name ||
+    coopResult?.paymentCheck?.selectedMethodName ||
+    coopSelectedPaymentCode ||
+    coopResult?.paymentCheck?.selectedMethodCode ||
+    "";
+  const coopSelectedPaymentIsOnline =
+    selectedCoopPaymentMethod?.paymentMethodType === "online" || Boolean(selectedCoopPaymentMethod?.methodCode && selectedCoopPaymentMethod.methodCode !== "COD");
   const effectiveCoopDeliverySlots = getEffectiveCoopDeliverySlots(
     coopDeliverySlots.length ? coopDeliverySlots : COOP_TIME_SLOTS,
     coopDeliveryDate,
@@ -427,6 +444,7 @@ export default function OrderAgentModal({
     setCoopAddressChecked(false);
     setCoopSelectedTerminalCode("");
     setCoopTerminals([]);
+    setCoopGeo(null);
     setCoopCheckoutPrepared(false);
     lastCoopLookupAddressRef.current = "";
   };
@@ -526,6 +544,8 @@ export default function OrderAgentModal({
     fullAddress: address,
     siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
     terminalId: selectedCoopTerminal?.terminalId,
+    lat: coopGeo?.lat,
+    lng: coopGeo?.lng,
   });
 
   const applyCoopDeliverySelection = (data: CoopOrderResult) => {
@@ -549,7 +569,9 @@ export default function OrderAgentModal({
           item.from === data.deliveryCheck?.selectedSlotFrom &&
           item.to === data.deliveryCheck?.selectedSlotTo &&
           !item.disabled,
-      ) ?? candidateSlots.find((item) => !item.disabled);
+      ) ??
+      candidateSlots.find((item) => !item.disabled) ??
+      candidateSlots[0];
     if (selectedSlot) {
       setCoopSlotFrom(selectedSlot.from);
       setCoopSlotTo(selectedSlot.to);
@@ -566,172 +588,8 @@ export default function OrderAgentModal({
     setCoopCheckoutPrepared(false);
     setCoopStep("delivery");
     setStepIndex(2);
+    setCoopSelectedPaymentCode(data.paymentCheck?.selectedMethodCode || "COD");
     applyCoopDeliverySelection(data);
-  };
-  
-  const startBHXOrder = async () => {
-    if (bhxBrowserWsRef.current) {
-      bhxBrowserWsRef.current.close();
-    }
-
-    setStepIndex(0);
-    setOtp("");
-    setOtpError(false);
-    setSimOtp("");
-    setPhase("running");
-    setBhxBusy(true);
-    setBhxMessages([{ message: t("Đang kết nối agent-server…")}]);
-    setBhxDeliveryHtml("");
-    setBhxSelectedDeliveryText("");
-    setBhxBrowserFrame("");
-    setBhxBrowserSize({ width: 1024, height: 768 });
-    setBhxShowScreencast(false);
-    setBhxOtpVisible(false);
-    setBhxOtp("");
-
-    const ws = new WebSocket('ws://localhost:8080');
-    bhxBrowserWsRef.current = ws;
-
-    const sendBHXOrderRequest = () => {
-      try {
-        ws.send(
-          JSON.stringify({
-            type: "run_order",
-            payload: {
-              url: activeOffer.productUrl,
-              productName: activeOffer.product.name,
-              qty,
-              buyerName: name,
-              buyerPhone: phone,
-              buyerAddress: address,
-              chain: activeOffer.store.chain
-            },
-          })
-        );
-      } catch (err) {
-        setBhxBusy(false);
-        setBhxMessages((logs) => [
-          ...logs,
-          { message: err instanceof Error ? err.message : String(err), status: "error" },
-        ]);
-      }
-    };
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(String(event.data)) as {
-          type?: string;
-          message?: string;
-          status?: string;
-          phase?: string;
-          content?: string;
-          data?: string;
-          width?: number;
-          height?: number;
-        };
-        if (message.type === "ready") {
-          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy BHX."), status: "success" }]);
-          sendBHXOrderRequest();
-        } else if (message.type === "screencast" && message.data) {
-          setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
-          if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
-        } else if (message.type === "message" && message.content) {
-          setBhxMessages((logs) => [...logs, { message: message.content || "" }]);
-        } else if (message.type === "status") {
-          if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
-            setBhxBusy(false);
-          }
-        } else if (message.type === 'popup_delivery_time' && message.content) {
-            console.log("Received HTML content from BHX agent:", message.content);
-            setBhxDeliveryHtml(message.content);
-        } else if (message.type === 'order_success' && message.content) {
-            setBhxBusy(false);
-            setBhxShowScreencast(true);
-            setBhxDeliveryHtml("");
-            setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
-        } else if (message.type === 'input_otp') {
-          setBhxOtpVisible(true);
-          setBhxOtp("");
-          setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
-        }
-      } catch (err) {
-        console.error("Error handling BHX agent message:", err);
-      }
-    };
-    ws.onerror = () => {
-      setBhxBusy(false);
-      setBhxMessages((logs) => [...logs, { message: t("Không kết nối được agent-server BHX."), status: "error" }]);
-    };
-    ws.onclose = () => {
-      setBhxBusy(false);
-      setBhxMessages((logs) => [...logs, { message: t("Kết nối agent-server đã đóng."), status: "info" }]);
-    };
-  }
-
-  const handleBHXDeliveryChoice = (event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target instanceof HTMLElement ? event.target : null;
-    if (!target) return;
-
-    const dateEl = target.closest<HTMLElement>("[data-delivery-date]");
-    const labelEl = target.closest<HTMLElement>("label.radio-wrapper");
-    const optionEl = labelEl || dateEl;
-    if (!optionEl) return;
-
-    const selectedText =
-      labelEl?.querySelector<HTMLElement>(".line-clamp-1")?.textContent?.trim() ||
-      dateEl?.textContent?.trim() ||
-      optionEl.textContent?.trim() ||
-      "";
-    const price = labelEl?.querySelector<HTMLElement>(".text-right")?.textContent?.trim() || "";
-    const deliveryDate = dateEl?.dataset.deliveryDate || "";
-    const kind = dateEl ? "date" : "time";
-    const compactText = selectedText.replace(/\s+/g, " ").trim();
-
-    if (!compactText) return;
-    setBhxSelectedDeliveryText(price ? `${compactText} - ${price}` : compactText);
-
-    if (kind === "time") {
-      const radio = labelEl?.querySelector<HTMLInputElement>('input[type="radio"]');
-      if (radio) radio.checked = true;
-      console.log("Selected BHX delivery option:", { kind, compactText, price, deliveryDate });
-
-      setBhxMessages((logs) => [
-        ...logs,
-        { message: price ? t("Bạn đã chọn: {choice} - {price}", { choice: compactText, price }) : t("Bạn đã chọn: {choice}", { choice: compactText }), status: "success" },
-      ]);
-    }
-
-    const ws = bhxBrowserWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi lựa chọn giao hàng."), status: "error" }]);
-      return;
-    }
-    ws.send(
-      JSON.stringify({
-        type: "delivery_time_selected",
-        kind,
-        selectedText: compactText,
-        price,
-        deliveryDate,
-      }),
-    );
-    if (kind === "time") {
-      setBhxDeliveryHtml('');
-    }
-  };
-
-  const submitBHXOtp = () => {
-    const code = bhxOtp.trim();
-    if (!code) return;
-
-    const ws = bhxBrowserWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi OTP."), status: "error" }]);
-      return;
-    }
-
-    ws.send(JSON.stringify({ type: "submit_otp", otp: code }));
-    setBhxOtpVisible(false);
-    setBhxMessages((logs) => [...logs, { message: t("Đã gửi OTP tới agent-server."), status: "success" }]);
   };
 
   const startCoopOrder = async () => {
@@ -744,6 +602,7 @@ export default function OrderAgentModal({
     setCoopBrowserVisible(false);
     setCoopBrowserFrame("");
     setCoopBrowserStatus("");
+    coopCompletionHandledRef.current = false;
     setOtp("");
     setOrderCode("");
     setPhase("running");
@@ -815,14 +674,21 @@ export default function OrderAgentModal({
         deliveryDate: coopDeliveryDate,
         slotFrom: coopSlotFrom,
         slotTo: coopSlotTo,
+        paymentMethodCode: coopSelectedPaymentCode || "COD",
       });
       const nextResult = { ...(coopResult ?? {}), ...data };
       setCoopResult(nextResult);
       applyCoopDeliverySelection(nextResult);
+      setCoopSelectedPaymentCode(nextResult.paymentCheck?.selectedMethodCode || coopSelectedPaymentCode || "COD");
       setCoopCheckoutPrepared(true);
-      setCoopStep("payment");
-      setCoopBrowserStatus(t("Đã cập nhật lịch giao. Đang mở màn hình để bạn kiểm tra/chọn phương thức thanh toán."));
-      openCoopBrowserAssist(nextResult);
+      setCoopStep("review");
+      setCoopBrowserStatus("");
+      const preparedPaymentCode = nextResult.paymentCheck?.selectedMethodCode || coopSelectedPaymentCode || "COD";
+      const shouldOpenCheckoutStream = preparedPaymentCode === "COD";
+      if (shouldOpenCheckoutStream) {
+        setCoopBrowserStatus(t("Đã cập nhật lịch giao và COD. Đang mở checkout Co.op để bạn đặt hàng..."));
+        openCoopBrowserAssist(nextResult, "checkout");
+      }
     } catch (err) {
       setCoopError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -832,6 +698,13 @@ export default function OrderAgentModal({
 
   const placeCoopOrder = async () => {
     if (!coopResult?.checkoutFlowId || !coopCheckoutPrepared) return;
+    if (!coopSelectedPaymentIsOnline) {
+      setCoopError("");
+      setCoopStep("review");
+      setCoopBrowserStatus(t("Đang mở màn hình checkout Co.op để bạn đặt hàng..."));
+      openCoopBrowserAssist(coopResult, "checkout");
+      return;
+    }
     setCoopBusy(true);
     setCoopError("");
     try {
@@ -842,6 +715,17 @@ export default function OrderAgentModal({
       });
       setCoopResult((current) => ({ ...(current ?? {}), ...data }));
       const code = data.order?.code || data.order?.orderId || `COOP-${Date.now().toString().slice(-6)}`;
+      const paymentUrl = data.paymentUrl || data.order?.paymentUrl;
+      if (paymentUrl) {
+        setOrderCode(code);
+        setCoopStep("review");
+        setCoopBrowserStatus(t("Đang mở màn hình thanh toán để bạn hoàn tất giao dịch..."));
+        openCoopBrowserAssist({ ...(coopResult ?? {}), ...data, paymentUrl }, "paymentScreen");
+        return;
+      }
+      if (coopSelectedPaymentIsOnline) {
+        throw new Error(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng gửi log response để kiểm tra tiếp."));
+      }
       setOrderCode(code);
       setCoopStep("success");
       setPhase("done");
@@ -860,178 +744,219 @@ export default function OrderAgentModal({
     }
   };
 
-  const openCoopBrowserAssist = (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" = "checkout") => {
+  const openCoopBrowserAssist = (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" | "paymentScreen" = "checkout") => {
     const result = nextResult ?? coopResult;
     setCoopBrowserVisible(true);
     setCoopBrowserStatus(t("Đang mở màn hình thao tác Co.op…"));
     setCoopBrowserFrame("");
     try {
       coopBrowserWsRef.current?.close();
-    } catch (e) {}
-
-    const wsSessionId = `coop-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    const baseUrl = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080";
-    const separator = baseUrl.includes("?") ? "&" : "?";
-
-    fetch(`/api/agent/token?sessionId=${wsSessionId}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("API token fetch error");
-        return res.json();
-      })
-      .then((data) => {
-        let wsUrl = `${baseUrl}${separator}sessionId=${wsSessionId}`;
-        if (data.token) {
-          wsUrl += `&timestamp=${data.timestamp}&token=${data.token}`;
-        }
-
-        const ws = new WebSocket(wsUrl);
-        coopBrowserWsRef.current = ws;
-        let opened = false;
-        let receivedFrame = false;
-        let commandAcknowledged = false;
-        let commandAttempts = 0;
-        let lastCommandAt = 0;
-        const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
-        const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
-        const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
-        const buildOpenMessage = () =>
-          mode === "profileSetup"
+      const ws = new WebSocket("ws://localhost:8080");
+      coopBrowserWsRef.current = ws;
+      let opened = false;
+      let receivedFrame = false;
+      let commandAcknowledged = false;
+      let commandAttempts = 0;
+      let lastCommandAt = 0;
+      const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
+      const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
+      const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
+      const buildOpenMessage = () =>
+        mode === "paymentScreen"
+          ? {
+              type: "coop_payment_screen",
+              paymentUrl: result?.paymentUrl || result?.order?.paymentUrl,
+              orderCode: result?.order?.code || result?.order?.orderId || orderCode,
+              paymentMethodCode: result?.order?.paymentMethodCode || coopSelectedPaymentCode,
+              paymentMethodName: coopSelectedPaymentName,
+            }
+          : mode === "profileSetup"
+          ? {
+              type: "coop_profile_setup",
+              phone: phoneDigits,
+              password,
+              name,
+              email,
+              address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
+              terminalCode: coopTerminalCode,
+              terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
+              terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
+              terminalId: selectedCoopTerminal?.terminalId,
+              siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
+            }
+          : result?.cartToken
             ? {
-                type: "coop_profile_setup",
-                phone: phoneDigits,
-                password,
-                name,
-                email,
-                address,
-                addressLine: coopAddressParts.addressLine,
-                provinceCode: coopAddressParts.provinceCode,
-                provinceName: coopAddressParts.provinceName,
-                districtCode: coopAddressParts.districtCode,
-                districtName: coopAddressParts.districtName,
-                wardCode: coopAddressParts.wardCode,
-                wardName: coopAddressParts.wardName,
-                terminalCode: coopTerminalCode,
-                terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
-                terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
-                terminalId: selectedCoopTerminal?.terminalId,
-                siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
-              }
-            : result?.cartToken
-              ? {
-                  type: "coop_show_cart",
-                cartToken: result.cartToken,
-                terminalCode: result.terminalCode || coopTerminalCode,
-                terminalName: result.browserSession?.terminalName,
-                terminalAddress: result.browserSession?.terminalAddress,
-                terminalId: result.browserSession?.terminalId,
-                siteId: result.browserSession?.siteId,
-                deliveryDate: preparedDeliveryDate,
-                slotFrom: preparedSlotFrom,
-                slotTo: preparedSlotTo,
-                address,
-                addressLine: coopAddressParts.addressLine,
-                provinceCode: coopAddressParts.provinceCode,
-                provinceName: coopAddressParts.provinceName,
-                districtCode: coopAddressParts.districtCode,
-                districtName: coopAddressParts.districtName,
-                wardCode: coopAddressParts.wardCode,
-                wardName: coopAddressParts.wardName,
-                name,
-                email,
-                phone: phoneDigits,
-                password,
-                checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
-                browserSession: result.browserSession,
-              }
-            : { type: "navigate", url: result?.checkoutUrl || result?.cartUrl || "https://cooponline.vn" };
-        const sendOpenCommand = () => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          commandAttempts += 1;
-          lastCommandAt = Date.now();
-          ws.send(JSON.stringify(buildOpenMessage()));
-        };
-        const connectionTimeout = window.setTimeout(() => {
-          if (ws.readyState !== WebSocket.OPEN) {
-            setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
-            ws.close();
-          }
-        }, 2500);
-        const commandRetry = window.setInterval(() => {
-          if (!opened || commandAcknowledged || ws.readyState !== WebSocket.OPEN) return;
-          if (commandAttempts >= 5) {
-            setCoopBrowserStatus(t("Đã kết nối agent-server nhưng Co.op chưa nhận lệnh mở màn hình. Vui lòng bấm Đóng màn hình rồi mở lại."));
-            window.clearInterval(commandRetry);
-            return;
-          }
-          if (commandAttempts === 0 || Date.now() - lastCommandAt > 3000) {
-            sendOpenCommand();
-          }
-        }, 1000);
-        const frameTimeout = window.setTimeout(() => {
-          if (opened && !receivedFrame) {
-            setCoopBrowserStatus(t("Đã kết nối agent-server nhưng chưa nhận được ảnh. Đang thử nạp lại màn hình Co.op…"));
-            sendOpenCommand();
-          }
-        }, 7000);
-        ws.onopen = () => {
-          opened = true;
-          window.clearTimeout(connectionTimeout);
-          setCoopBrowserStatus(t("Đã kết nối agent-server, đang chờ trình duyệt sẵn sàng…"));
-        };
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(String(event.data)) as {
-              type?: string;
-              data?: string;
-              message?: string;
-              status?: string;
-              phase?: string;
-              width?: number;
-              height?: number;
-            };
-            if (message.type === "screencast" && message.data) {
-              receivedFrame = true;
-              window.clearTimeout(frameTimeout);
-              setCoopBrowserFrame(`data:image/jpeg;base64,${message.data}`);
-              if (message.width && message.height) setCoopBrowserSize({ width: message.width, height: message.height });
+                type: "coop_show_cart",
+              cartToken: result.cartToken,
+              terminalCode: result.terminalCode || coopTerminalCode,
+              terminalName: result.browserSession?.terminalName,
+              terminalAddress: result.browserSession?.terminalAddress,
+              terminalId: result.browserSession?.terminalId,
+              siteId: result.browserSession?.siteId,
+              deliveryDate: preparedDeliveryDate,
+              slotFrom: preparedSlotFrom,
+              slotTo: preparedSlotTo,
+              address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
+              name,
+              email,
+              phone: phoneDigits,
+              password,
+              checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
+              browserSession: result.browserSession,
             }
-            if (message.type === "log" && message.message) {
-              setCoopBrowserStatus(message.message);
-              if (/khởi tạo trình duyệt thành công/i.test(message.message) && commandAttempts === 0) {
-                window.setTimeout(sendOpenCommand, 100);
-              }
-              if (/Co\.opmart|Co\.op/i.test(message.message)) {
-                commandAcknowledged = true;
-                window.clearInterval(commandRetry);
-              }
+          : { type: "navigate", url: result?.checkoutUrl || result?.cartUrl || "https://cooponline.vn" };
+      const sendOpenCommand = () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const message = buildOpenMessage();
+        if (mode === "paymentScreen" && !message.paymentUrl) {
+          setCoopBrowserStatus(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán để mở QR."));
+          setCoopError(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng thử bấm Thanh toán ngay trong trang Co.op."));
+          window.clearInterval(commandRetry);
+          return;
+        }
+        commandAttempts += 1;
+        lastCommandAt = Date.now();
+        ws.send(JSON.stringify(message));
+      };
+      const connectionTimeout = window.setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
+          ws.close();
+        }
+      }, 2500);
+      const commandRetry = window.setInterval(() => {
+        if (!opened || commandAcknowledged || ws.readyState !== WebSocket.OPEN) return;
+        if (commandAttempts >= 12) {
+          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng Co.op chưa nhận lệnh mở màn hình. Vui lòng bấm Đóng màn hình rồi mở lại."));
+          window.clearInterval(commandRetry);
+          return;
+        }
+        if (commandAttempts === 0 || Date.now() - lastCommandAt > 1500) {
+          sendOpenCommand();
+        }
+      }, 1000);
+      const frameTimeout = window.setTimeout(() => {
+        if (opened && !receivedFrame) {
+          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng chưa nhận được ảnh. Đang thử nạp lại màn hình Co.op…"));
+          sendOpenCommand();
+        }
+      }, 7000);
+      ws.onopen = () => {
+        opened = true;
+        window.clearTimeout(connectionTimeout);
+        setCoopBrowserStatus(t("Đã kết nối agent-server, đang chờ trình duyệt sẵn sàng…"));
+        window.setTimeout(sendOpenCommand, 250);
+      };
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data)) as {
+            type?: string;
+            data?: string;
+            message?: string;
+            status?: string;
+            phase?: string;
+            error?: string;
+            width?: number;
+            height?: number;
+            orderCode?: string;
+            orderUrl?: string;
+            totalText?: string;
+          };
+          if (message.type === "screencast" && message.data) {
+            receivedFrame = true;
+            window.clearTimeout(frameTimeout);
+            setCoopBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+            if (message.width && message.height) setCoopBrowserSize({ width: message.width, height: message.height });
+          }
+          if (message.type === "log" && message.message) {
+            setCoopBrowserStatus(message.message);
+            if (/khởi tạo trình duyệt|khoi tao trinh duyet|browser/i.test(message.message)) {
+              window.setTimeout(sendOpenCommand, 100);
             }
-            if (message.type === "status" && message.phase?.startsWith("coop_assist_")) {
+            if (/Co\.opmart|Co\.op/i.test(message.message)) {
               commandAcknowledged = true;
               window.clearInterval(commandRetry);
-              if (message.phase === "coop_assist_ready") {
-                setCoopBrowserStatus(t("Màn hình Co.op đã sẵn sàng, bạn có thể click/gõ trực tiếp tại đây."));
-              }
-              if (message.phase === "coop_assist_manual") {
-                setCoopBrowserStatus(t("Co.op cần bạn thao tác tiếp trên màn hình đang mở."));
-              }
             }
-          } catch {
-            // Ignore malformed frames from local agent server.
           }
-        };
-        ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
-        ws.onclose = () => {
-          window.clearTimeout(connectionTimeout);
-          window.clearTimeout(frameTimeout);
-          window.clearInterval(commandRetry);
-          if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
-          coopBrowserWsRef.current = null;
-        };
-      })
-      .catch((err) => {
-        console.error("Lỗi khởi tạo token:", err);
-        setCoopBrowserStatus(t("Lỗi bảo mật khi mở kết nối trình duyệt Co.op."));
-      });
+          if (message.type === "status" && message.phase === "failed") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            const reason = message.error ? String(message.error) : t("Không mở được màn hình thanh toán Co.op.");
+            setCoopBrowserStatus(reason === "missing_payment_url" ? t("Co.op đã tạo đơn nhưng chưa trả link thanh toán để mở QR.") : reason);
+            setCoopError(reason === "missing_payment_url" ? t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng thử bấm Thanh toán ngay trong trang Co.op.") : reason);
+          }
+          if (message.type === "status" && message.phase?.startsWith("coop_assist_")) {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            if (message.phase === "coop_assist_ready") {
+              setCoopBrowserStatus(t("Màn hình Co.op đã sẵn sàng, bạn có thể click/gõ trực tiếp tại đây."));
+            }
+            if (message.phase === "coop_assist_manual") {
+              setCoopBrowserStatus(t("Co.op cần bạn thao tác tiếp trên màn hình đang mở."));
+            }
+          }
+          if (message.type === "status" && message.phase === "coop_payment_ready") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            setCoopBrowserStatus(t("Màn hình thanh toán đã sẵn sàng. Affree sẽ tự ghi nhận khi giao dịch thành công."));
+          }
+          if (message.type === "status" && message.phase === "coop_payment_failed") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            setCoopBrowserStatus(t("Giao dịch chưa thành công hoặc đã hủy. Bạn có thể thử lại trên màn hình, hoặc đóng để chọn phương thức khác."));
+            setCoopError(t("Thanh toán Co.op chưa hoàn tất. Vui lòng thử lại hoặc chọn phương thức thanh toán khác."));
+          }
+          if (message.type === "status" && message.phase === "completed" && !coopCompletionHandledRef.current) {
+            coopCompletionHandledRef.current = true;
+            const code = message.orderCode || orderCode || `COOP-${Date.now().toString().slice(-6)}`;
+            setOrderCode(code);
+            setCoopBrowserVisible(false);
+            setCoopBrowserFrame("");
+            setCoopBrowserStatus("");
+            setCoopStep("success");
+            setPhase("done");
+            setCoopResult((current) => ({
+              ...(current ?? {}),
+              phase: "ordered",
+              order: {
+                ...(current?.order ?? {}),
+                code,
+                orderId: code,
+                paymentUrl: message.orderUrl,
+              },
+            }));
+            onPlaced(code, activeOffer);
+            ws.close();
+          }
+        } catch {
+          // Ignore malformed frames from local agent server.
+        }
+      };
+      ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
+      ws.onclose = () => {
+        window.clearTimeout(connectionTimeout);
+        window.clearTimeout(frameTimeout);
+        window.clearInterval(commandRetry);
+        if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
+        coopBrowserWsRef.current = null;
+      };
+    } catch {
+      setCoopBrowserStatus(t("Không mở được màn hình Co.op."));
+    }
   };
 
   const getCoopBrowserPoint = (event: { currentTarget: HTMLElement; clientX: number; clientY: number }) => {
@@ -1105,7 +1030,12 @@ export default function OrderAgentModal({
     setCoopAddressChecked(false);
     setCoopError("");
     try {
-      const loc = await safeGeocode(address);
+      const loc =
+        (await safeGeocode(address)) ??
+        (Number.isFinite(geoLat) && Number.isFinite(geoLng) && (geoLat !== 0 || geoLng !== 0)
+          ? { lat: geoLat as number, lng: geoLng as number }
+          : null);
+      setCoopGeo(loc ? { lat: loc.lat, lng: loc.lng } : null);
       const params = new URLSearchParams({
         address: address.trim(),
       });
@@ -1327,14 +1257,14 @@ export default function OrderAgentModal({
 
   useEffect(() => {
     if (!coopDeliveryDate || !effectiveCoopDeliverySlots.length) return;
-    const selectedSlot = effectiveCoopDeliverySlots.find(
-      (item) => item.from === coopSlotFrom && item.to === coopSlotTo,
-    );
-    if (selectedSlot && !selectedSlot.disabled) return;
+    // Đã có slot đang chọn (do user chọn hoặc prepareCheckout set) → giữ nguyên,
+    // KHÔNG tự xoá và KHÔNG reset coopCheckoutPrepared (tránh disable nút đặt hàng).
+    if (coopSlotFrom && coopSlotTo) return;
     const nextSlot = effectiveCoopDeliverySlots.find((item) => !item.disabled);
-    setCoopSlotFrom(nextSlot?.from ?? "");
-    setCoopSlotTo(nextSlot?.to ?? "");
-    setCoopCheckoutPrepared(false);
+    if (nextSlot) {
+      setCoopSlotFrom(nextSlot.from);
+      setCoopSlotTo(nextSlot.to);
+    }
   }, [coopDeliveryDate, effectiveCoopDeliverySlots, coopSlotFrom, coopSlotTo]);
 
   if (isCoopReal) {
@@ -1753,9 +1683,62 @@ export default function OrderAgentModal({
                     </div>
                   )}
 
+                  {coopPaymentMethods.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-slate-500">{t("Phương thức thanh toán")}</p>
+                      <div className="grid gap-2">
+                        {coopPaymentMethods.map((method) => {
+                          const selected = method.methodCode === coopSelectedPaymentCode;
+                          const disabled = Boolean(method.isDisabled);
+                          return (
+                            <button
+                              key={method.methodCode}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => {
+                                setCoopSelectedPaymentCode(method.methodCode || "COD");
+                                setCoopCheckoutPrepared(false);
+                                setCoopStep("payment");
+                              }}
+                              className={`flex min-h-[58px] items-center gap-3 rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                                selected
+                                  ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"
+                                  : "border-slate-200 bg-white hover:border-slate-300"
+                              }`}
+                            >
+                              {method.icon ? (
+                                <img src={method.icon} alt="" className="h-7 w-7 shrink-0 rounded object-contain" />
+                              ) : (
+                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">
+                                  {method.methodCode === "COD" ? "COD" : "PAY"}
+                                </span>
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-semibold text-slate-800">{method.name || method.methodCode}</span>
+                                {method.description && (
+                                  <span className="mt-0.5 block text-xs text-slate-500">{method.description}</span>
+                                )}
+                                {method.maxTransactionAmount ? (
+                                  <span className="mt-0.5 block text-[11px] text-slate-400">
+                                    {t("Tối đa")} {formatMoney(method.maxTransactionAmount, storeCurrency(activeOffer.store.id))}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span
+                                className={`h-4 w-4 shrink-0 rounded-full border ${
+                                  selected ? "border-emerald-500 bg-emerald-500 shadow-[inset_0_0_0_3px_white]" : "border-slate-300"
+                                }`}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {coopCheckoutPrepared && (
                     <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                      {t("Đã cập nhật lịch giao. Màn hình Co.op đã mở để kiểm tra/chọn phương thức thanh toán.")}
+                      {t("Đã cập nhật lịch giao và phương thức thanh toán. Chưa gửi đơn thật sang Co.op.")}
                     </div>
                   )}
                   {coopError && <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">{coopError}</p>}
@@ -1773,7 +1756,14 @@ export default function OrderAgentModal({
               )}
 
               {phase === "running" && coopStep === "review" && (
-                <PauseBox tone="emerald" hint={t("Bấm nút dưới đây mới gửi đơn thật sang Co.op.")}>
+                <PauseBox
+                  tone="emerald"
+                  hint={
+                    coopSelectedPaymentIsOnline
+                      ? t("Bấm nút dưới đây mới tạo đơn và mở màn hình thanh toán online.")
+                      : t("Bấm nút dưới đây để mở checkout Co.op; bạn sẽ đặt hàng trực tiếp trên màn hình bên phải.")
+                  }
+                >
                   <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
                     <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
                     <Row k={t("Giao tới")} v={coopSavedAddress || address} />
@@ -1788,7 +1778,11 @@ export default function OrderAgentModal({
                     onClick={() => void placeCoopOrder()}
                     className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    {coopBusy ? t("Đang đặt hàng…") : t("Đặt hàng trên Co.op")}
+                    {coopBusy
+                      ? t("Đang gửi sang Co.op…")
+                      : coopSelectedPaymentIsOnline
+                        ? t("Tạo đơn & mở màn hình thanh toán")
+                        : t("Mở checkout Co.op")}
                   </button>
                 </PauseBox>
               )}
@@ -2195,10 +2189,14 @@ export default function OrderAgentModal({
               <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">{t("Thanh toán")}</span>
-                  <span className="font-semibold text-slate-800">{t("COD (tiền mặt khi nhận)")}</span>
+                  <span className="font-semibold text-slate-800">
+                    {isCoopReal ? t("Chọn ở bước checkout") : t("COD (tiền mặt khi nhận)")}
+                  </span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  {t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
+                  {isCoopReal
+                    ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
+                    : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
                 </p>
               </div>
 
@@ -2225,11 +2223,6 @@ export default function OrderAgentModal({
                   flushProfile({ name, phone, address });
                   if (isCoopReal) {
                     void startCoopOrder();
-                  } else if (isBHXReal) {
-                    startBHXOrder().catch((err) => {
-                      console.error("Bach Hoa Xanh order error:", err);
-                      alert(err instanceof Error ? err.message : String(err));
-                    });
                   } else {
                     setStepIndex(0);
                     setOtp("");
@@ -2329,115 +2322,7 @@ export default function OrderAgentModal({
             </div>
           )}
 
-          {phase === "running" && isBHXReal && (
-            <div className="space-y-3">
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  {bhxBusy ? <Spinner /> : <CheckIcon />}
-                  <p className="text-sm font-semibold text-slate-900">
-                    {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
-                  </p>
-                </div>
-                <p className="mt-1 text-xs text-slate-600">
-                  {t("Log từ agent-server sẽ hiển thị bên dưới.")}
-                </p>
-              </div>
-
-              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                {bhxMessages.map((log, i) => {
-                  const tone =
-                    log.status === "error"
-                      ? "border-rose-200 bg-rose-50 text-rose-700"
-                      : log.status === "warning"
-                        ? "border-amber-200 bg-amber-50 text-amber-800"
-                        : log.status === "success"
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : "border-slate-200 bg-white text-slate-700";
-                  return (
-                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
-                      <div className="flex items-start gap-2">
-                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
-                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-
-              {bhxOtpVisible && (
-                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                  <p className="mb-2 text-sm font-semibold text-blue-800">
-                    {t("Nhập OTP Bách Hóa Xanh")}
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      value={bhxOtp}
-                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") submitBHXOtp();
-                      }}
-                      inputMode="numeric"
-                      placeholder={t("Nhập mã OTP")}
-                      className="input flex-1 bg-white"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      disabled={!bhxOtp.trim()}
-                      onClick={submitBHXOtp}
-                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {t("Gửi")}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {bhxShowScreencast && (
-                <div className="rounded-xl border border-emerald-200 bg-white p-2">
-                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                    {t("Màn hình sau khi đặt hàng")}
-                  </p>
-                  <div
-                    className="overflow-hidden rounded-lg bg-slate-950"
-                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
-                  >
-                    {bhxBrowserFrame ? (
-                      <img
-                        src={bhxBrowserFrame}
-                        alt={t("Màn hình Bách Hóa Xanh")}
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
-                        {t("Đang chờ ảnh màn hình...")}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {bhxDeliveryHtml && (
-                <div className="rounded-xl border border-slate-200 bg-white p-2">
-                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                    {t("Chọn thời gian giao hàng")}
-                  </p>
-                  <div
-                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
-                    onClick={handleBHXDeliveryChoice}
-                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
-                  />
-                  {bhxSelectedDeliveryText && (
-                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {phase === "running" && !isCoopReal && !isBHXReal && (
+          {phase === "running" && !isCoopReal && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
                 {steps.slice(0, stepIndex + 1).map((s, i) => {
@@ -2738,7 +2623,7 @@ export default function OrderAgentModal({
 
                   {coopCheckoutPrepared && (
                     <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                      {t("Đã cập nhật lịch giao và COD vào giỏ Co.op. Chưa gửi đặt hàng thật sang Co.op.")}
+                      {t("Đã cập nhật lịch giao và phương thức thanh toán vào giỏ Co.op. Chưa gửi đặt hàng thật sang Co.op.")}
                     </div>
                   )}
 
@@ -2754,7 +2639,7 @@ export default function OrderAgentModal({
                     onClick={prepareCoopCheckout}
                     className="mt-3 w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & COD")}
+                    {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
                   </button>
                 </div>
               )}
@@ -2789,186 +2674,6 @@ export default function OrderAgentModal({
 
       {/* tiện ích style cho input/select/textarea dùng chung */}
       <style jsx global>{`
-        .bhx-delivery-html {
-          color: #020617;
-          font-size: 0.875rem;
-        }
-        .bhx-delivery-html > div {
-          position: static !important;
-          z-index: auto !important;
-          margin-top: 0 !important;
-          max-height: none !important;
-          overflow: visible !important;
-          border-radius: 0.5rem;
-          background: #ffffff;
-        }
-        .bhx-delivery-html > * {
-          max-width: 100%;
-        }
-        .bhx-delivery-html div,
-        .bhx-delivery-html label {
-          box-sizing: border-box;
-        }
-        .bhx-delivery-html .flex {
-          display: flex;
-        }
-        .bhx-delivery-html .flex-col {
-          flex-direction: column;
-        }
-        .bhx-delivery-html .flex-wrap {
-          flex-wrap: wrap;
-        }
-        .bhx-delivery-html .flex-nowrap {
-          flex-wrap: nowrap;
-        }
-        .bhx-delivery-html .items-center {
-          align-items: center;
-        }
-        .bhx-delivery-html .justify-between {
-          justify-content: space-between;
-        }
-        .bhx-delivery-html .justify-start {
-          justify-content: flex-start;
-        }
-        .bhx-delivery-html .gap-1 {
-          gap: 0.25rem;
-        }
-        .bhx-delivery-html .gap-2 {
-          gap: 0.5rem;
-        }
-        .bhx-delivery-html .w-full {
-          width: 100%;
-        }
-        .bhx-delivery-html .overflow-hidden {
-          overflow: hidden;
-        }
-        .bhx-delivery-html .overflow-auto {
-          overflow: auto;
-        }
-        .bhx-delivery-html .whitespace-nowrap {
-          white-space: nowrap;
-        }
-        .bhx-delivery-html .select-none {
-          user-select: none;
-        }
-        .bhx-delivery-html .text-right {
-          text-align: right;
-        }
-        .bhx-delivery-html .font-bold,
-        .bhx-delivery-html b {
-          font-weight: 700;
-        }
-        .bhx-delivery-html .relative {
-          position: relative;
-        }
-        .bhx-delivery-html .inline-block {
-          display: inline-block;
-        }
-        .bhx-delivery-html .bg-basic-100 {
-          background: #f4f6f8;
-        }
-        .bhx-delivery-html .bg-white {
-          background: #ffffff;
-        }
-        .bhx-delivery-html .text-basic-800,
-        .bhx-delivery-html .text-\\[\\#222B45\\] {
-          color: #0f172a;
-        }
-        .bhx-delivery-html .text-primary-400,
-        .bhx-delivery-html .\\!text-\\[\\#FF7B01\\] {
-          color: #059669;
-        }
-        .bhx-delivery-html .border,
-        .bhx-delivery-html .border-basic-400 {
-          border: 1px solid #e2e8f0;
-        }
-        .bhx-delivery-html .rounded-md,
-        .bhx-delivery-html .rounded-\\[8px\\] {
-          border-radius: 0.5rem;
-        }
-        .bhx-delivery-html .p-2 {
-          padding: 0.5rem;
-        }
-        .bhx-delivery-html .py-\\[10px\\] {
-          padding-top: 10px;
-          padding-bottom: 10px;
-        }
-        .bhx-delivery-html .px-3 {
-          padding-left: 0.75rem;
-          padding-right: 0.75rem;
-        }
-        .bhx-delivery-html .mx-2 {
-          margin-left: 0.5rem;
-          margin-right: 0.5rem;
-        }
-        .bhx-delivery-html .mr-2 {
-          margin-right: 0.5rem;
-        }
-        .bhx-delivery-html .line-clamp-1,
-        .bhx-delivery-html .line-clamp-2 {
-          overflow: hidden;
-          display: -webkit-box;
-          -webkit-box-orient: vertical;
-        }
-        .bhx-delivery-html .line-clamp-1 {
-          -webkit-line-clamp: 1;
-        }
-        .bhx-delivery-html .line-clamp-2 {
-          -webkit-line-clamp: 2;
-        }
-        .bhx-delivery-html .radio-wrapper {
-          position: relative;
-          display: block;
-          min-height: 48px;
-          padding: 0.75rem 0.75rem 0.75rem 2.5rem !important;
-          border-radius: 0.5rem;
-          background: #ffffff;
-        }
-        .bhx-delivery-html .radio-wrapper input[type="radio"] {
-          position: absolute;
-          left: 0.75rem;
-          top: 50%;
-          width: 18px;
-          height: 18px;
-          transform: translateY(-50%);
-        }
-        .bhx-delivery-html .radio-wrapper .checkmark {
-          display: none;
-        }
-        .bhx-delivery-html .no-scrollbar {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 0.5rem;
-          overflow: visible;
-          padding-bottom: 0.5rem;
-        }
-        .bhx-delivery-html [data-delivery-date] {
-          border: 1px solid #e2e8f0;
-          border-radius: 0.5rem;
-          background: #ffffff;
-          padding: 0.75rem;
-          text-align: center;
-          color: #0f172a;
-        }
-        .bhx-delivery-html [data-delivery-date]:first-child,
-        .bhx-delivery-html .\\!border-primary-400 {
-          border-color: #10b981;
-          color: #059669;
-        }
-        .bhx-delivery-html label,
-        .bhx-delivery-html [role="button"],
-        .bhx-delivery-html button,
-        .bhx-delivery-html input[type="radio"] {
-          cursor: pointer;
-        }
-        .bhx-delivery-html input[type="radio"] {
-          accent-color: #059669;
-        }
-        .bhx-delivery-html img,
-        .bhx-delivery-html svg {
-          max-width: 100%;
-          height: auto;
-        }
         .input {
           width: 100%;
           border-radius: 0.5rem;

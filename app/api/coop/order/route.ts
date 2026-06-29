@@ -45,6 +45,7 @@ type PendingFlow = {
   deliveryDate?: string;
   slotFrom?: string;
   slotTo?: string;
+  selectedPaymentMethodCode?: string;
   orderCode?: string;
 };
 
@@ -62,6 +63,7 @@ type CartSession = {
   deliveryDate?: string;
   slotFrom?: string;
   slotTo?: string;
+  selectedPaymentMethodCode?: string;
   orderCode?: string;
 };
 
@@ -158,6 +160,15 @@ function readNumber(value: unknown) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Toạ độ hợp lệ: số hữu hạn và KHÁC 0 (0/rỗng/thiếu → undefined, tránh gửi "0" vô nghĩa
+// khiến Co.op không tính được khung giờ giao).
+function readCoord(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n === 0) return undefined;
+  return String(n);
+}
+
 function allowPasswordLogin(body: Record<string, unknown>) {
   return body.allowPasswordLogin === true || readString(body.allowPasswordLogin) === "true";
 }
@@ -233,6 +244,8 @@ function buildDeliveryInfo(body: Record<string, unknown>, phone: string): CoopDe
     provinceName: readString(body.provinceName) || undefined,
     fullAddress,
     siteId: readNumber(body.siteId),
+    latitude: readCoord(body.lat),
+    longitude: readCoord(body.lng),
   };
 }
 
@@ -411,12 +424,6 @@ export async function POST(req: NextRequest) {
           }),
         );
       }
-      if (shouldSkipCoopLogin() && !allowPasswordLogin(body)) {
-        throw new CoopOrderError("Đang bật skip login Co.op nhưng token cache không có hoặc đã hết hạn.", {
-          status: 409,
-          code: "COOP_TOKEN_CACHE_MISSING",
-        });
-      }
       if (password.length < 6) {
         throw new CoopOrderError("Mật khẩu Co.op cần tối thiểu 6 ký tự.", {
           status: 400,
@@ -559,6 +566,7 @@ export async function POST(req: NextRequest) {
       const deliveryDate = readString(body.deliveryDate);
       const slotFrom = readString(body.slotFrom);
       const slotTo = readString(body.slotTo);
+      const paymentMethodCode = readString(body.paymentMethodCode) || "COD";
       const session = cartSessions.get(checkoutFlowId);
       if (!session) {
         throw new CoopOrderError("Phiên checkout Co.op đã hết hạn, vui lòng thêm lại giỏ.", {
@@ -579,6 +587,7 @@ export async function POST(req: NextRequest) {
         deliveryDate,
         slotFrom,
         slotTo,
+        paymentMethodCode,
       });
       session.cartToken = prepared.cartToken;
       session.createdAt = Date.now();
@@ -586,6 +595,7 @@ export async function POST(req: NextRequest) {
       session.deliveryDate = prepared.deliveryCheck.selectedDate ?? deliveryDate;
       session.slotFrom = prepared.deliveryCheck.selectedSlotFrom ?? slotFrom;
       session.slotTo = prepared.deliveryCheck.selectedSlotTo ?? slotTo;
+      session.selectedPaymentMethodCode = prepared.paymentCheck.selectedMethodCode ?? paymentMethodCode;
       return NextResponse.json({
         ok: true,
         phase: "cart",
@@ -624,7 +634,7 @@ export async function POST(req: NextRequest) {
         });
       }
       if (!session.prepared) {
-        throw new CoopOrderError("Vui lòng chọn lịch giao và COD trước khi đặt hàng.", {
+        throw new CoopOrderError("Vui lòng chọn lịch giao và phương thức thanh toán trước khi đặt hàng.", {
           status: 400,
           code: "COOP_CHECKOUT_NOT_PREPARED",
         });
@@ -633,6 +643,9 @@ export async function POST(req: NextRequest) {
         accessToken: session.accessToken,
         terminalCode: session.terminalCode,
         cartToken: session.cartToken,
+        deliveryDate: session.deliveryDate,
+        slotFrom: session.slotFrom,
+        slotTo: session.slotTo,
       });
       session.cartToken = placed.cartToken;
       session.createdAt = Date.now();
@@ -647,6 +660,7 @@ export async function POST(req: NextRequest) {
         terminalCode: session.terminalCode,
         cartToken: placed.cartToken,
         order: placed.checkoutResult,
+        paymentUrl: placed.checkoutResult.paymentUrl,
         cartUrl: "https://cooponline.vn/cart",
         checkoutUrl: "https://cooponline.vn/checkout",
       });
