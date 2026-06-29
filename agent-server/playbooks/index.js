@@ -32,7 +32,7 @@ function resolvePlaybook(payload = {}) {
           return { key, playbook, source: "url", hostname };
         }
       }
-    } catch {}
+    } catch { }
   }
 
   return null;
@@ -44,7 +44,7 @@ function resolvePlaybook(payload = {}) {
  * trả về { done: false } nếu chỉ bootstrap và cần AI tiếp.
  * Trả về null nếu không có playbook nào phù hợp.
  */
-async function runPlaybook(page, payload, sendLog, sendStatus, sendMessage = null) {
+async function runPlaybook(page, payload, sendLog, sendStatus, sendMessage = null, sendScreenshotFrame = null) {
   const resolved = resolvePlaybook(payload);
   if (!resolved) {
     return null; // Không có playbook → dùng AI DOM thuần
@@ -56,7 +56,7 @@ async function runPlaybook(page, payload, sendLog, sendStatus, sendMessage = nul
     sendLog(`Tìm thấy Playbook cho domain: ${resolved.hostname}`, "info");
   }
 
-  return resolved.playbook.run(page, payload, sendLog, sendStatus, sendMessage);
+  return resolved.playbook.run(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
 }
 
 module.exports = { runPlaybook, resolvePlaybook };

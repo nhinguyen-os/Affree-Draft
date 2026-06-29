@@ -765,15 +765,25 @@ async function searchAndAddToCart(page, payload, sendLog) {
 /**
  * Entry point của playbook Co.opmart
  */
-async function run(page, payload, sendLog, sendStatus) {
+async function run(page, payload, sendLog, sendStatus, sendMessage = null, sendScreenshotFrame = null) {
   sendLog("Co.opmart Playbook: Bắt đầu...", "success");
+
+  // Đảm bảo trang đã điều hướng tới URL sản phẩm
+  if (payload.url) {
+    sendLog(`Co.opmart: Đang mở trang sản phẩm ${payload.url}...`, "info");
+    await page.goto(payload.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(1000);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
+  }
 
   // Bước 1: Xử lý popup địa chỉ nếu có
   await handleAddressPopup(page, sendLog);
   await page.waitForTimeout(1000);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   // Bước 2: Thử thêm vào giỏ hàng trực tiếp
   await searchAndAddToCart(page, payload, sendLog);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   // Bước 3: Kiểm tra đã có sản phẩm trong giỏ chưa, nếu chưa thì trả về AI xử lý
   sendLog("Co.opmart Playbook: Hoàn thành bootstrap. Chuyển sang AI DOM Agent...", "success");

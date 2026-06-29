@@ -85,12 +85,12 @@ async function closeCommonOverlays(page, sendLog) {
           await page.waitForTimeout(300);
         }
       }
-    } catch {}
+    } catch { }
   }
 
   try {
     await page.keyboard.press("Escape");
-  } catch {}
+  } catch { }
 }
 
 async function ensureCatalogMode(page, sendLog) {
@@ -104,7 +104,7 @@ async function ensureCatalogMode(page, sendLog) {
         await page.waitForTimeout(500);
         return;
       }
-    } catch {}
+    } catch { }
   }
 }
 
@@ -138,7 +138,7 @@ async function openProductCardByName(page, productName, sendLog) {
           await page.waitForTimeout(900);
           return true;
         }
-      } catch {}
+      } catch { }
     }
 
     try {
@@ -167,7 +167,7 @@ async function openProductCardByName(page, productName, sendLog) {
         await page.waitForTimeout(900);
         return true;
       }
-    } catch {}
+    } catch { }
 
     await page.mouse.wheel(0, 700);
     await page.waitForTimeout(500);
@@ -194,7 +194,7 @@ async function activateTuiDonGhep(page, sendLog) {
           sendLog('TXNN CSS: đã chuyển sang tab "Túi Đơn Ghép".', "success");
           return true;
         }
-      } catch {}
+      } catch { }
     }
 
     const pageReady = await page.evaluate(() => {
@@ -269,7 +269,7 @@ async function openOrderConfirmationModal(page, sendLog) {
           return true;
         }
       }
-    } catch {}
+    } catch { }
   }
 
   sendLog('TXNN CSS: không mở được popup bước 1 "Xác Nhận Đơn Hàng".', "warning");
@@ -307,7 +307,7 @@ async function openBuyerInfoPopup(page, sendLog) {
           }
         }
       }
-    } catch {}
+    } catch { }
   }
 
   sendLog('TXNN CSS: không mở được popup bước 2 sau nút "Xác nhận thanh toán".', "warning");
@@ -325,7 +325,7 @@ async function fillVisibleFieldIfPresent(page, selectors, value, sendLog, fieldL
         sendLog(`TXNN CSS: đã điền ${fieldLabel} trong popup.`, "success");
         return true;
       }
-    } catch {}
+    } catch { }
   }
   sendLog(`TXNN CSS: popup hiện tại không có ô ${fieldLabel}; bỏ qua bước điền.`, "info");
   return false;
@@ -387,15 +387,18 @@ async function run(page, payload, sendLog) {
   if (url) {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1200);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
   }
 
   await closeCommonOverlays(page, sendLog);
   await ensureCatalogMode(page, sendLog);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   const currentUrl = page.url();
   const onHome = /tuoixanhnhanhngon\.timdaythay\.com\/?(?:#.*)?$/i.test(currentUrl);
   if (onHome) {
     await openProductCardByName(page, productName, sendLog);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
   }
 
   sendLog("TXNN: bootstrap xong, nhường lại cho DOM-first loop.", "success");

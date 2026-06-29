@@ -591,7 +591,7 @@ async function checkout(page, payload, sendLog, sendStatus, sendMessage) {
 /**
  * Entry point của playbook Bach Hoa Xanh
  */
-async function run(page, payload, sendLog, sendStatus, sendMessage = null) {
+async function run(page, payload, sendLog, sendStatus, sendMessage = null, sendScreenshotFrame = null) {
   // Bước 1: Login
   if (payload?.step === 'otp') {
     try {
@@ -604,23 +604,28 @@ async function run(page, payload, sendLog, sendStatus, sendMessage = null) {
         sendLog(`Bach Hoa Xanh: Đã nhập otp: "${payload.otp}".`, "success");
         sendMessage(`Đã nhập OTP ${payload.otp}`)
         await page.waitForTimeout(2000);
+        if (sendScreenshotFrame) await sendScreenshotFrame();
       }
     } catch { }
   } else {
-    return await login(page, payload, sendLog, sendMessage)
+    const loginRes = await login(page, payload, sendLog, sendMessage);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
+    return loginRes;
   }
 
   // Bước 2: Xử lý popup địa chỉ giao hàng
   await handleAddressPopup(page, payload, sendLog, sendMessage);
   await page.waitForTimeout(1000);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   // Bước 3: Thêm sản phẩm vào giỏ hàng
   await searchAndAddToCart(page, payload, sendLog, sendMessage);
   await page.waitForTimeout(1000);
-
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   // Bước 4: Tiến hành checkout
   await checkout(page, payload, sendLog, sendStatus, sendMessage);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   sendLog("Bach Hoa Xanh Playbook: Hoàn thành bootstrap. Chuyển sang AI DOM Agent...", "success");
   return { done: true }; // Để AI DOM loop tiếp tục phần checkout
