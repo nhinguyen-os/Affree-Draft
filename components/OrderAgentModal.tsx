@@ -2787,7 +2787,7 @@ export default function OrderAgentModal({
                   {submitting ? t("Đang tạo phiên đặt hàng…") : t("Để trợ lý đặt giúp →")}
               </button>)
               }
-              {isCoopReal && ( 
+              {(isCoopReal || isBHXReal) && ( 
               <button
                 disabled={!canStart || coopBusy}
                 onClick={() => {
