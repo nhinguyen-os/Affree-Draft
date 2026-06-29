@@ -63,6 +63,7 @@ wss.on("connection", async (ws) => {
   let lastPaymentOrderCode = null;
   let lastGatewayPaymentResult = null;
   let browserReady = false;
+  let isBachHoaXanhFlow = false;
   const queuedClientMessages = [];
   const boundPaymentPages = new WeakSet();
 
@@ -81,6 +82,16 @@ wss.on("connection", async (ws) => {
     try {
       ws.send(JSON.stringify({ type: "status", phase, ...details }));
     } catch (e) {}
+  }
+
+  // Gửi message tự do về client (BHX dùng để gửi popup chọn giờ/OTP).
+  function sendMessage(content, type = "message") {
+    try {
+      ws.send(JSON.stringify({ type, content }));
+      if (type === "message") sendLog(content);
+    } catch (e) {
+      // client disconnected
+    }
   }
 
   async function handleClientMessage(messageStr) {
@@ -191,7 +202,39 @@ wss.on("connection", async (ws) => {
           }
           sendLog(`Đã nhận lệnh đặt hàng cho: ${msg.payload?.productName || msg.productName || "unknown product"}`, "info");
           lastOrderPayload = msg.payload || msg;
+          isBachHoaXanhFlow = lastOrderPayload?.chain === "bhx";
           runAutomatedOrder(lastOrderPayload);
+          break;
+
+        case "delivery_time_selected":
+          sendLog(
+            `Bach Hoa Xanh: Người dùng chọn thời gian giao hàng: ${msg.deliveryDate} ${msg.selectedText || "không rõ"}`,
+            "success",
+          );
+          try {
+            if (msg.kind === "date" && msg.deliveryDate) {
+              const dateOption = page.locator(`[data-delivery-date="${msg.deliveryDate}"]`).first();
+              await dateOption.click({ timeout: 3000 });
+              await page.waitForTimeout(2000);
+
+              const div = page.locator("div.w-full.bg-white.rounded-lg").first();
+              await div.waitFor({ state: "visible", timeout: 10000 });
+
+              const html = await div.evaluate((el) => el.outerHTML);
+              sendMessage(html, "popup_delivery_time");
+            } else if (msg.selectedText) {
+              const optionText = String(msg.selectedText).replace(/\s+/g, " ").trim();
+              const option = page.locator("label.radio-wrapper").filter({ hasText: optionText }).first();
+              await option.click({ timeout: 3000 });
+
+              sendLog(`Bach Hoa Xanh: Đã click lựa chọn giao hàng: ${optionText}`, "success");
+              await page.mouse.click(0, 0);
+              await resumeAgenticLoopBHX("submit");
+            }
+            sendLog("Bach Hoa Xanh: Đã click lựa chọn giao hàng trên trang thật.", "success");
+          } catch (err) {
+            sendLog(`Bach Hoa Xanh: Không click được lựa chọn giao hàng trên trang thật: ${err.message}`, "warning");
+          }
           break;
 
         case "user_confirmed":
@@ -199,13 +242,17 @@ wss.on("connection", async (ws) => {
           break;
 
         case "submit_otp":
-          await resumeAgenticLoop("otp", async () => {
-            if (msg.otp) {
-              await page.keyboard.type(String(msg.otp), { delay: 30 });
-              await page.keyboard.press("Enter");
-              sendLog("Đã nhận OTP từ orchestrator và điền vào trang.", "success");
-            }
-          });
+          if (isBachHoaXanhFlow) {
+            await resumeAgenticLoopBHX("otp", msg.otp);
+          } else {
+            await resumeAgenticLoop("otp", async () => {
+              if (msg.otp) {
+                await page.keyboard.type(String(msg.otp), { delay: 30 });
+                await page.keyboard.press("Enter");
+                sendLog("Đã nhận OTP từ orchestrator và điền vào trang.", "success");
+              }
+            });
+          }
           break;
 
         case "captcha_completed":
@@ -662,6 +709,53 @@ wss.on("connection", async (ws) => {
     }
   }
 
+  async function resumeAgenticLoopBHX(reason, content = null) {
+    try {
+      if (reason === "otp") {
+        lastOrderPayload.step = "otp";
+        lastOrderPayload.otp = content;
+        sendLog(`Đã nhận được OTP ${content}`);
+        const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
+        if (aiHandled) {
+          isAutomating = false;
+          return;
+        }
+      } else {
+        const buySelectors = [
+          ".icon__cart-footer",
+          'span:has-text("Đặt hàng")',
+        ];
+
+        for (const sel of buySelectors) {
+          try {
+            let result = false;
+            const btn = page.locator(sel).first();
+            try {
+              await btn.waitFor({ state: "visible", timeout: 3000 });
+              result = true;
+            } catch {}
+
+            if (result) {
+              await btn.scrollIntoViewIfNeeded();
+              await btn.click();
+              sendLog("Bach Hoa Xanh: Click lại nút Đặt hàng sau khi chọn giờ giao.", "success");
+              sendMessage("Đã đặt hàng thành công.", "order_success");
+              break;
+            }
+          } catch (err) {
+            sendLog(`Lỗi khi kiểm tra selector ${sel}: ${err.message}`, "error");
+          }
+        }
+      }
+    } catch (err) {
+      sendLog(`Lỗi khi tiếp tục quy trình: ${err.message}`, "error");
+      sendStatus("failed", { error: err.message });
+    } finally {
+      sendLog("Bach Hoa Xanh: Kết thúc quy trình tự động hóa.", "info");
+      isAutomating = false;
+    }
+  }
+
   try {
     ws.send(JSON.stringify({ type: "ready" }));
   } catch (e) {}
@@ -671,14 +765,30 @@ wss.on("connection", async (ws) => {
     isAutomating = true;
     try {
       sendStatus("running");
-      const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
-      if (aiHandled) { isAutomating = false; return; }
+      if (payload.chain === "bhx") {
+        isBachHoaXanhFlow = true;
+        sendMessage("Mở website Bách Hóa Xanh.");
+        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
+        if (aiHandled) {
+          isAutomating = false;
+          return;
+        }
+      } else {
+        isBachHoaXanhFlow = false;
+        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
+        if (aiHandled) {
+          isAutomating = false;
+          return;
+        }
+      }
 
       const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
-      sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
-      sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
-      await page.goto(url, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(1500);
+      if (chain !== "bhx") {
+        sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
+        sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(1500);
+      }
 
       const buySelectors = [
         "text=Mua ngay", "text=MUA NGAY", "text=Thêm vào giỏ hàng", "text=THÊM VÀO GIỎ",

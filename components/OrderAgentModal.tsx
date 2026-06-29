@@ -279,6 +279,7 @@ export default function OrderAgentModal({
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
   const isCoopReal = activeOffer.store.chain === "coop";
+  const isBHXReal = activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
@@ -341,11 +342,21 @@ export default function OrderAgentModal({
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
   const [coopSelectedPaymentCode, setCoopSelectedPaymentCode] = useState("COD");
   const [coopGeo, setCoopGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [bhxMessages, setBhxMessages] = useState<Array<{ message: string; status?: string }>>([]);
+  const [bhxBusy, setBhxBusy] = useState(false);
+  const [bhxDeliveryHtml, setBhxDeliveryHtml] = useState("");
+  const [bhxSelectedDeliveryText, setBhxSelectedDeliveryText] = useState("");
+  const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
+  const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
+  const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
+  const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
+  const [bhxOtp, setBhxOtp] = useState("");
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
   const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
   const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
   const lastCoopLookupAddressRef = useRef("");
   const coopCompletionHandledRef = useRef(false);
+  const bhxBrowserWsRef = useRef<WebSocket | null>(null);
 
   const steps: Step[] = useMemo(() => {
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
@@ -590,6 +601,174 @@ export default function OrderAgentModal({
     setStepIndex(2);
     setCoopSelectedPaymentCode(data.paymentCheck?.selectedMethodCode || "COD");
     applyCoopDeliverySelection(data);
+  };
+
+  const startBHXOrder = async () => {
+    if (bhxBrowserWsRef.current) {
+      bhxBrowserWsRef.current.close();
+    }
+
+    setStepIndex(0);
+    setOtp("");
+    setOtpError(false);
+    setSimOtp("");
+    setPhase("running");
+    setBhxBusy(true);
+    setBhxMessages([{ message: t("Đang kết nối agent-server…") }]);
+    setBhxDeliveryHtml("");
+    setBhxSelectedDeliveryText("");
+    setBhxBrowserFrame("");
+    setBhxBrowserSize({ width: 1024, height: 768 });
+    setBhxShowScreencast(false);
+    setBhxOtpVisible(false);
+    setBhxOtp("");
+
+    const ws = new WebSocket("ws://localhost:8080");
+    bhxBrowserWsRef.current = ws;
+
+    const sendBHXOrderRequest = () => {
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "run_order",
+            payload: {
+              url: activeOffer.productUrl,
+              productName: activeOffer.product.name,
+              qty,
+              buyerName: name,
+              buyerPhone: phone,
+              buyerAddress: address,
+              chain: activeOffer.store.chain,
+            },
+          }),
+        );
+      } catch (err) {
+        setBhxBusy(false);
+        setBhxMessages((logs) => [
+          ...logs,
+          { message: err instanceof Error ? err.message : String(err), status: "error" },
+        ]);
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(String(event.data)) as {
+          type?: string;
+          message?: string;
+          status?: string;
+          phase?: string;
+          content?: string;
+          data?: string;
+          width?: number;
+          height?: number;
+        };
+        if (message.type === "ready") {
+          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy BHX."), status: "success" }]);
+          sendBHXOrderRequest();
+        } else if (message.type === "screencast" && message.data) {
+          setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+          if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
+        } else if (message.type === "message" && message.content) {
+          setBhxMessages((logs) => [...logs, { message: message.content || "" }]);
+        } else if (message.type === "status") {
+          if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
+            setBhxBusy(false);
+          }
+        } else if (message.type === "popup_delivery_time" && message.content) {
+          setBhxDeliveryHtml(message.content);
+        } else if (message.type === "order_success" && message.content) {
+          setBhxBusy(false);
+          setBhxShowScreencast(true);
+          setBhxDeliveryHtml("");
+          setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
+        } else if (message.type === "input_otp") {
+          setBhxOtpVisible(true);
+          setBhxOtp("");
+          setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
+        }
+      } catch (err) {
+        console.error("Error handling BHX agent message:", err);
+      }
+    };
+    ws.onerror = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Không kết nối được agent-server BHX."), status: "error" }]);
+    };
+    ws.onclose = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Kết nối agent-server đã đóng."), status: "info" }]);
+    };
+  };
+
+  const handleBHXDeliveryChoice = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+
+    const dateEl = target.closest<HTMLElement>("[data-delivery-date]");
+    const labelEl = target.closest<HTMLElement>("label.radio-wrapper");
+    const optionEl = labelEl || dateEl;
+    if (!optionEl) return;
+
+    const selectedText =
+      labelEl?.querySelector<HTMLElement>(".line-clamp-1")?.textContent?.trim() ||
+      dateEl?.textContent?.trim() ||
+      optionEl.textContent?.trim() ||
+      "";
+    const price = labelEl?.querySelector<HTMLElement>(".text-right")?.textContent?.trim() || "";
+    const deliveryDate = dateEl?.dataset.deliveryDate || "";
+    const kind = dateEl ? "date" : "time";
+    const compactText = selectedText.replace(/\s+/g, " ").trim();
+
+    if (!compactText) return;
+    setBhxSelectedDeliveryText(price ? `${compactText} - ${price}` : compactText);
+
+    if (kind === "time") {
+      const radio = labelEl?.querySelector<HTMLInputElement>('input[type="radio"]');
+      if (radio) radio.checked = true;
+      setBhxMessages((logs) => [
+        ...logs,
+        {
+          message: price
+            ? t("Bạn đã chọn: {choice} - {price}", { choice: compactText, price })
+            : t("Bạn đã chọn: {choice}", { choice: compactText }),
+          status: "success",
+        },
+      ]);
+    }
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi lựa chọn giao hàng."), status: "error" }]);
+      return;
+    }
+    ws.send(
+      JSON.stringify({
+        type: "delivery_time_selected",
+        kind,
+        selectedText: compactText,
+        price,
+        deliveryDate,
+      }),
+    );
+    if (kind === "time") {
+      setBhxDeliveryHtml("");
+    }
+  };
+
+  const submitBHXOtp = () => {
+    const code = bhxOtp.trim();
+    if (!code) return;
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi OTP."), status: "error" }]);
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: "submit_otp", otp: code }));
+    setBhxOtpVisible(false);
+    setBhxMessages((logs) => [...logs, { message: t("Đã gửi OTP tới agent-server."), status: "success" }]);
   };
 
   const startCoopOrder = async () => {
@@ -2223,6 +2402,11 @@ export default function OrderAgentModal({
                   flushProfile({ name, phone, address });
                   if (isCoopReal) {
                     void startCoopOrder();
+                  } else if (isBHXReal) {
+                    startBHXOrder().catch((err) => {
+                      console.error("Bach Hoa Xanh order error:", err);
+                      alert(err instanceof Error ? err.message : String(err));
+                    });
                   } else {
                     setStepIndex(0);
                     setOtp("");
@@ -2322,7 +2506,115 @@ export default function OrderAgentModal({
             </div>
           )}
 
-          {phase === "running" && !isCoopReal && (
+          {phase === "running" && isBHXReal && (
+            <div className="space-y-3">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  {bhxBusy ? <Spinner /> : <CheckIcon />}
+                  <p className="text-sm font-semibold text-slate-900">
+                    {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {t("Log từ agent-server sẽ hiển thị bên dưới.")}
+                </p>
+              </div>
+
+              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {bhxMessages.map((log, i) => {
+                  const tone =
+                    log.status === "error"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : log.status === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : log.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-white text-slate-700";
+                  return (
+                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
+                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {bhxOtpVisible && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="mb-2 text-sm font-semibold text-blue-800">
+                    {t("Nhập OTP Bách Hóa Xanh")}
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={bhxOtp}
+                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitBHXOtp();
+                      }}
+                      inputMode="numeric"
+                      placeholder={t("Nhập mã OTP")}
+                      className="input flex-1 bg-white"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      disabled={!bhxOtp.trim()}
+                      onClick={submitBHXOtp}
+                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t("Gửi")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bhxShowScreencast && (
+                <div className="rounded-xl border border-emerald-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Màn hình sau khi đặt hàng")}
+                  </p>
+                  <div
+                    className="overflow-hidden rounded-lg bg-slate-950"
+                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
+                  >
+                    {bhxBrowserFrame ? (
+                      <img
+                        src={bhxBrowserFrame}
+                        alt={t("Màn hình Bách Hóa Xanh")}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
+                        {t("Đang chờ ảnh màn hình...")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {bhxDeliveryHtml && (
+                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Chọn thời gian giao hàng")}
+                  </p>
+                  <div
+                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
+                    onClick={handleBHXDeliveryChoice}
+                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
+                  />
+                  {bhxSelectedDeliveryText && (
+                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {phase === "running" && !isCoopReal && !isBHXReal && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
                 {steps.slice(0, stepIndex + 1).map((s, i) => {
@@ -2674,6 +2966,186 @@ export default function OrderAgentModal({
 
       {/* tiện ích style cho input/select/textarea dùng chung */}
       <style jsx global>{`
+        .bhx-delivery-html {
+          color: #020617;
+          font-size: 0.875rem;
+        }
+        .bhx-delivery-html > div {
+          position: static !important;
+          z-index: auto !important;
+          margin-top: 0 !important;
+          max-height: none !important;
+          overflow: visible !important;
+          border-radius: 0.5rem;
+          background: #ffffff;
+        }
+        .bhx-delivery-html > * {
+          max-width: 100%;
+        }
+        .bhx-delivery-html div,
+        .bhx-delivery-html label {
+          box-sizing: border-box;
+        }
+        .bhx-delivery-html .flex {
+          display: flex;
+        }
+        .bhx-delivery-html .flex-col {
+          flex-direction: column;
+        }
+        .bhx-delivery-html .flex-wrap {
+          flex-wrap: wrap;
+        }
+        .bhx-delivery-html .flex-nowrap {
+          flex-wrap: nowrap;
+        }
+        .bhx-delivery-html .items-center {
+          align-items: center;
+        }
+        .bhx-delivery-html .justify-between {
+          justify-content: space-between;
+        }
+        .bhx-delivery-html .justify-start {
+          justify-content: flex-start;
+        }
+        .bhx-delivery-html .gap-1 {
+          gap: 0.25rem;
+        }
+        .bhx-delivery-html .gap-2 {
+          gap: 0.5rem;
+        }
+        .bhx-delivery-html .w-full {
+          width: 100%;
+        }
+        .bhx-delivery-html .overflow-hidden {
+          overflow: hidden;
+        }
+        .bhx-delivery-html .overflow-auto {
+          overflow: auto;
+        }
+        .bhx-delivery-html .whitespace-nowrap {
+          white-space: nowrap;
+        }
+        .bhx-delivery-html .select-none {
+          user-select: none;
+        }
+        .bhx-delivery-html .text-right {
+          text-align: right;
+        }
+        .bhx-delivery-html .font-bold,
+        .bhx-delivery-html b {
+          font-weight: 700;
+        }
+        .bhx-delivery-html .relative {
+          position: relative;
+        }
+        .bhx-delivery-html .inline-block {
+          display: inline-block;
+        }
+        .bhx-delivery-html .bg-basic-100 {
+          background: #f4f6f8;
+        }
+        .bhx-delivery-html .bg-white {
+          background: #ffffff;
+        }
+        .bhx-delivery-html .text-basic-800,
+        .bhx-delivery-html .text-\\[\\#222B45\\] {
+          color: #0f172a;
+        }
+        .bhx-delivery-html .text-primary-400,
+        .bhx-delivery-html .\\!text-\\[\\#FF7B01\\] {
+          color: #059669;
+        }
+        .bhx-delivery-html .border,
+        .bhx-delivery-html .border-basic-400 {
+          border: 1px solid #e2e8f0;
+        }
+        .bhx-delivery-html .rounded-md,
+        .bhx-delivery-html .rounded-\\[8px\\] {
+          border-radius: 0.5rem;
+        }
+        .bhx-delivery-html .p-2 {
+          padding: 0.5rem;
+        }
+        .bhx-delivery-html .py-\\[10px\\] {
+          padding-top: 10px;
+          padding-bottom: 10px;
+        }
+        .bhx-delivery-html .px-3 {
+          padding-left: 0.75rem;
+          padding-right: 0.75rem;
+        }
+        .bhx-delivery-html .mx-2 {
+          margin-left: 0.5rem;
+          margin-right: 0.5rem;
+        }
+        .bhx-delivery-html .mr-2 {
+          margin-right: 0.5rem;
+        }
+        .bhx-delivery-html .line-clamp-1,
+        .bhx-delivery-html .line-clamp-2 {
+          overflow: hidden;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+        }
+        .bhx-delivery-html .line-clamp-1 {
+          -webkit-line-clamp: 1;
+        }
+        .bhx-delivery-html .line-clamp-2 {
+          -webkit-line-clamp: 2;
+        }
+        .bhx-delivery-html .radio-wrapper {
+          position: relative;
+          display: block;
+          min-height: 48px;
+          padding: 0.75rem 0.75rem 0.75rem 2.5rem !important;
+          border-radius: 0.5rem;
+          background: #ffffff;
+        }
+        .bhx-delivery-html .radio-wrapper input[type="radio"] {
+          position: absolute;
+          left: 0.75rem;
+          top: 50%;
+          width: 18px;
+          height: 18px;
+          transform: translateY(-50%);
+        }
+        .bhx-delivery-html .radio-wrapper .checkmark {
+          display: none;
+        }
+        .bhx-delivery-html .no-scrollbar {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0.5rem;
+          overflow: visible;
+          padding-bottom: 0.5rem;
+        }
+        .bhx-delivery-html [data-delivery-date] {
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          background: #ffffff;
+          padding: 0.75rem;
+          text-align: center;
+          color: #0f172a;
+        }
+        .bhx-delivery-html [data-delivery-date]:first-child,
+        .bhx-delivery-html .\\!border-primary-400 {
+          border-color: #10b981;
+          color: #059669;
+        }
+        .bhx-delivery-html label,
+        .bhx-delivery-html [role="button"],
+        .bhx-delivery-html button,
+        .bhx-delivery-html input[type="radio"] {
+          cursor: pointer;
+        }
+        .bhx-delivery-html input[type="radio"] {
+          accent-color: #059669;
+        }
+        .bhx-delivery-html img,
+        .bhx-delivery-html svg {
+          max-width: 100%;
+          height: auto;
+        }
         .input {
           width: 100%;
           border-radius: 0.5rem;
