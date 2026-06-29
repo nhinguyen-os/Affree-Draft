@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCoopTerminalsByAddress, resolveCoopTerminal } from "@/integrations/coop/backend/client";
+import { getCoopTerminalsByAddress } from "@/integrations/coop/backend/client";
 
 export const dynamic = "force-dynamic";
+
+function terminalCodeOf(terminal: Record<string, unknown> | undefined) {
+  const terminalCode = terminal?.terminalCode;
+  const code = terminal?.code;
+  return (typeof terminalCode === "string" ? terminalCode : typeof code === "string" ? code : "").trim();
+}
+
+function terminalDistance(terminal: Record<string, unknown>) {
+  const raw = terminal.distanceKm ?? terminal.distance;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -24,12 +36,14 @@ export async function GET(req: NextRequest) {
 
   try {
     const terminals = await getCoopTerminalsByAddress(location);
-    const selected = await resolveCoopTerminal({ location });
+    const selectedTerminal = [...terminals]
+      .filter((item) => terminalCodeOf(item as Record<string, unknown>))
+      .sort((a, b) => terminalDistance(a as Record<string, unknown>) - terminalDistance(b as Record<string, unknown>))[0];
     return NextResponse.json({
       source: "cooponline",
       location,
-      selectedTerminalCode: selected.terminalCode,
-      selectedTerminal: selected.terminal,
+      selectedTerminalCode: terminalCodeOf(selectedTerminal as Record<string, unknown>) || "570_sgc",
+      selectedTerminal,
       count: terminals.length,
       terminals,
     });
