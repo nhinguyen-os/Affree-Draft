@@ -78,6 +78,16 @@ const CONFIG: Record<string, OrderSourceConfig> = {
       "Khung giờ giao",
     ],
   },
+  pnj: {
+    auth: "phone-otp",
+    needEmail: true,
+    needStorePick: false,
+    needSlot: false,
+    captcha: false,
+    payments: ["COD", "VNPAY", "Thẻ nội địa/Quốc tế"],
+    note: "PNJ hỗ trợ giao hàng nhanh trong 3 giờ tại nhiều khu vực.",
+    requirements: ["Số điện thoại (nhận OTP)", "Họ tên & Địa chỉ giao hàng", "Email nhận hóa đơn"],
+  },
 };
 
 export function getOrderConfig(chain: string): OrderSourceConfig {
