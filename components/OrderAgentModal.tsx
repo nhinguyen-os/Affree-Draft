@@ -366,6 +366,7 @@ export default function OrderAgentModal({
   const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
   const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
   const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
+  const bhxShowScreencastRef = useRef(false);
   const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
   const [bhxOtp, setBhxOtp] = useState("");
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
@@ -374,6 +375,10 @@ export default function OrderAgentModal({
   const lastCoopLookupAddressRef = useRef("");
   const coopCompletionHandledRef = useRef(false);
   const bhxBrowserWsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    bhxShowScreencastRef.current = bhxShowScreencast;
+  }, [bhxShowScreencast]);
 
   const steps: Step[] = useMemo(() => {
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
@@ -637,6 +642,7 @@ export default function OrderAgentModal({
     setBhxBrowserFrame("");
     setBhxBrowserSize({ width: 1024, height: 768 });
     setBhxShowScreencast(false);
+    bhxShowScreencastRef.current = false;
     setBhxOtpVisible(false);
     setBhxOtp("");
 
@@ -683,25 +689,29 @@ export default function OrderAgentModal({
           height?: number;
         };
         if (message.type === "ready") {
-          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy BHX."), status: "success" }]);
+          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
           sendBHXOrderRequest();
         } else if (message.type === "screencast" && message.data) {
-          setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
-          if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
+          if (bhxShowScreencastRef.current) {
+            setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+            if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
+          }
         } else if (message.type === "message" && message.content) {
-          setBhxMessages((logs) => [...logs, { message: message.content || "" }]);
+          setBhxMessages((logs) => [...logs, { message: message.content || "", status: 'success' }]);
         } else if (message.type === "status") {
           if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
             setBhxBusy(false);
           }
-        } else if (message.type === "popup_delivery_time" && message.content) {
-          setBhxDeliveryHtml(message.content);
-        } else if (message.type === "order_success" && message.content) {
-          setBhxBusy(false);
-          setBhxShowScreencast(true);
-          setBhxDeliveryHtml("");
-          setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
-        } else if (message.type === "input_otp") {
+        } else if (message.type === 'popup_delivery_time' && message.content) {
+            console.log("Received HTML content from BHX agent:", message.content);
+            setBhxDeliveryHtml(message.content);
+        } else if (message.type === 'order_success' && message.content) {
+            setBhxBusy(false);
+            bhxShowScreencastRef.current = true;
+            setBhxShowScreencast(true);
+            setBhxDeliveryHtml("");
+            setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
+        } else if (message.type === 'input_otp') {
           setBhxOtpVisible(true);
           setBhxOtp("");
           setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
@@ -2121,7 +2131,7 @@ export default function OrderAgentModal({
       className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
+        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

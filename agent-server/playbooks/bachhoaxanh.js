@@ -270,10 +270,6 @@ async function login(page, payload, sendLog, sendMessage) {
 }
 
 async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
-  await page.goto(payload.url, { waitUntil: "load", timeout: 30000 });
-  sendMessage("Đi tới trang sản phẩm");
-
-  await page.waitForTimeout(10000);
 
   sendMessage("Thêm sản phẩm vào giỏ hàng");
 
@@ -319,7 +315,21 @@ async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
     }
   }
 
-  sendMessage("Đã thêm sản phẩm vào giỏ hàng. Tiếp tục chọn địa chỉ giao hàng.");
+  await page.waitForTimeout(500);
+
+  if (payload.qty > 1) {
+    try {
+      const qtyInput = page.locator('input[type*="number"], input[value*="1"]').first();
+      if (await waitForVisible(qtyInput, 1500)) {
+        await qtyInput.click();
+        await qtyInput.fill(payload.qty.toString());
+        sendLog(`Bach Hoa Xanh: Đã nhập số lượng: "${payload.qty}".`, "success");
+        await page.waitForTimeout(400);
+      }
+    } catch { }
+  }
+
+  sendMessage(`Đã thêm sản phẩm ${payload.productName} với số lượng ${payload.qty} vào giỏ hàng.`);
 
   await page.waitForTimeout(1000);
 
@@ -328,6 +338,11 @@ async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
 
 async function handleAddressPopup(page, payload, sendLog, sendMessage) {
   const { buyerAddress } = payload;
+
+  await page.goto(payload.url, { waitUntil: "load", timeout: 30000 });
+  sendMessage("Đi tới trang sản phẩm");
+
+  await page.waitForTimeout(10000);
 
   const addressSelector = [
     'div:has-id("btn_choose_location")',
@@ -577,7 +592,7 @@ async function checkout(page, payload, sendLog, sendStatus, sendMessage) {
  * Entry point của playbook Bach Hoa Xanh
  */
 async function run(page, payload, sendLog, sendStatus, sendMessage = null) {
-  console.log(payload, sendMessage)
+  // Bước 1: Login
   if (payload?.step === 'otp') {
     try {
       const otpInput = page.locator('input#otp-input').first();
@@ -595,18 +610,18 @@ async function run(page, payload, sendLog, sendStatus, sendMessage = null) {
     return await login(page, payload, sendLog, sendMessage)
   }
 
-  // Bước 1: Thêm sản phẩm vào giỏ hàng
-  await searchAndAddToCart(page, payload, sendLog, sendMessage);
-  await page.waitForTimeout(1000);
-
   // Bước 2: Xử lý popup địa chỉ giao hàng
   await handleAddressPopup(page, payload, sendLog, sendMessage);
   await page.waitForTimeout(1000);
 
-  // Bước 3: Tiến hành checkout
+  // Bước 3: Thêm sản phẩm vào giỏ hàng
+  await searchAndAddToCart(page, payload, sendLog, sendMessage);
+  await page.waitForTimeout(1000);
+
+
+  // Bước 4: Tiến hành checkout
   await checkout(page, payload, sendLog, sendStatus, sendMessage);
 
-  // Bước 4: Kiểm tra đã có sản phẩm trong giỏ chưa, nếu chưa thì trả về AI xử lý
   sendLog("Bach Hoa Xanh Playbook: Hoàn thành bootstrap. Chuyển sang AI DOM Agent...", "success");
   return { done: true }; // Để AI DOM loop tiếp tục phần checkout
 }
