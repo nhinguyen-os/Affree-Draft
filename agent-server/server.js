@@ -57,12 +57,23 @@ wss.on("connection", async (ws) => {
   let isAutomating = false;
   let lastOrderPayload = null;
   let cancelledByUser = false;
+  let isBachHoaXanhFlow = false;
 
   // Gửi log về client
   function sendLog(message, status = "info") {
     console.log(`[LOG - ${status}] ${message}`);
     try {
       ws.send(JSON.stringify({ type: "log", message, status }));
+    } catch (e) {
+      // client disconnected
+    }
+  }
+
+  // Gửi message về client
+  function sendMessage(content, type = 'message') {
+    try {
+      ws.send(JSON.stringify({ type, content }));
+      if (type === 'message') sendLog(message);
     } catch (e) {
       // client disconnected
     }
@@ -150,6 +161,115 @@ wss.on("connection", async (ws) => {
     return;
   }
 
+  async function addCookiesFromJsonFile(cookiesFilePath, pageUrl) {
+    try {
+      const resolvedPath = path.isAbsolute(cookiesFilePath)
+        ? cookiesFilePath
+        : path.resolve(__dirname, cookiesFilePath);
+
+      if (!fs.existsSync(resolvedPath)) {
+        sendLog(`Không tìm thấy file cookie: ${resolvedPath}`, "warning");
+        return false;
+      }
+
+      const raw = fs.readFileSync(resolvedPath, "utf8");
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed)) {
+        sendLog(`File cookie phải là mảng JSON`, "warning");
+        return false;
+      }
+
+      const cookies = [];
+
+      for (const entry of parsed) {
+        const name = String(entry.name || "").trim();
+
+        if (!name) {
+          continue;
+        }
+
+        const cookie = {
+          name,
+          value: String(entry.value ?? ""),
+          path: entry.path || "/",
+          httpOnly: !!entry.httpOnly,
+          secure: !!entry.secure,
+        };
+
+        // domain/url
+        const domain = String(entry.domain || "").trim();
+        const url = String(entry.url || "").trim();
+
+        if (domain) {
+          cookie.domain = domain.startsWith(".")
+            ? domain.substring(1)
+            : domain;
+        } else if (url) {
+          cookie.url = url;
+        } else if (pageUrl) {
+          cookie.url = pageUrl;
+        }
+
+        // bỏ cookie không có domain/url
+        if (!cookie.domain && !cookie.url) {
+          console.log("Cookie bị bỏ qua:", entry);
+          continue;
+        }
+
+        // expires
+        if (
+          entry.expires !== undefined &&
+          entry.expires !== null
+        ) {
+          const expires = Number(entry.expires);
+
+          if (!Number.isNaN(expires) && expires > 0) {
+            cookie.expires = Math.floor(expires);
+          }
+        }
+
+        // sameSite
+        const sameSite = String(
+          entry.sameSite ||
+          entry.same_site ||
+          ""
+        ).toLowerCase();
+
+        if (sameSite === "lax") {
+          cookie.sameSite = "Lax";
+        } else if (sameSite === "strict") {
+          cookie.sameSite = "Strict";
+        } else if (sameSite === "none") {
+          cookie.sameSite = "None";
+        }
+
+        cookies.push(cookie);
+      }
+
+      if (!cookies.length) {
+        sendLog("Không có cookie hợp lệ", "warning");
+        return false;
+      }
+
+      await context.addCookies(cookies);
+
+      sendLog(
+        `Đã import ${cookies.length} cookie`,
+        "success"
+      );
+
+      return true;
+    } catch (err) {
+      console.error(err);
+      sendLog(
+        `Lỗi nạp cookie từ JSON: ${err.message}`,
+        "error"
+      );
+      return false;
+    }
+  }
+
   async function resumeAgenticLoop(reason, extraAction) {
     if (!lastOrderPayload) {
       sendLog("Không có payload đơn hàng trước đó để tiếp tục.", "warning");
@@ -168,7 +288,11 @@ wss.on("connection", async (ws) => {
       }
       sendLog(`Đang tiếp tục quy trình sau bước: ${reason}`, "info");
       sendStatus("running", { reason: `resume:${reason}` });
-      const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true });
+
+      if (isBachHoaXanhFlow && reason === 'otp') {
+        lastOrderPayload.step = reason
+      }
+      const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
       if (!aiHandled) {
         sendLog("AI loop không xử lý được tiếp; giữ nguyên màn hình để user tự thao tác.", "warning");
       }
@@ -176,6 +300,56 @@ wss.on("connection", async (ws) => {
       sendLog(`Lỗi khi tiếp tục quy trình: ${err.message}`, "error");
       sendStatus("failed", { error: err.message });
     } finally {
+      isAutomating = false;
+    }
+  }
+
+  async function resumeAgenticLoopBHX(reason, content = null) {
+    try {
+      if (reason === 'otp') {
+        lastOrderPayload.step = 'otp'
+        lastOrderPayload.otp = content
+        sendLog(`Đã nhận được OTP ${content}`)
+        const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
+        if (aiHandled) { isAutomating = false; return; }
+      } else {
+        const buySelectors = [
+          ".icon__cart-footer",
+          'span:has-text("Đặt hàng")',
+        ];
+
+        for (const sel of buySelectors) {
+          try {
+            var result = false
+            const btn = page.locator(sel).first();
+            try {
+              await btn.waitFor({ state: "visible", timeout: 3000 })
+              result = true
+            } catch { }
+
+            if (result) {
+              await btn.scrollIntoViewIfNeeded();
+              await btn.click();
+
+              sendLog(
+                "Bach Hoa Xanh: Click lại nút Đặt hàng sau khi chọn giờ giao.",
+                "success"
+              );
+
+              sendMessage('Đã đặt hàng thành công.', 'order_success')
+
+              break;
+            }
+          } catch (err) {
+            sendLog(`Lỗi khi kiểm tra selector ${sel}: ${err.message}`, "error");
+          }
+        }
+      }
+    } catch (err) {
+      sendLog(`Lỗi khi tiếp tục quy trình: ${err.message}`, "error");
+      sendStatus("failed", { error: err.message });
+    } finally {
+      sendLog("Bach Hoa Xanh: Kết thúc quy trình tự động hóa.", "info");
       isAutomating = false;
     }
   }
@@ -285,14 +459,55 @@ wss.on("connection", async (ws) => {
           runAutomatedOrder(msg.payload);
           break;
 
-        case "submit_otp":
-          await resumeAgenticLoop("otp", async () => {
-            if (msg.otp) {
-              await page.keyboard.type(String(msg.otp), { delay: 30 });
-              await page.keyboard.press("Enter");
-              sendLog("Đã nhận OTP từ orchestrator và điền vào trang.", "success");
+        case "delivery_time_selected":
+          sendLog(
+            `Bach Hoa Xanh: Người dùng chọn thời gian giao hàng: ${msg.deliveryDate} ${msg.selectedText || "không rõ"}`,
+            "success"
+          );
+          try {
+            if (msg.kind === "date" && msg.deliveryDate) {
+              const dateOption = page.locator(`[data-delivery-date="${msg.deliveryDate}"]`).first();
+              await dateOption.click({ timeout: 3000 });
+
+              await page.waitForTimeout(2000);
+
+              const div = page.locator('div.w-full.bg-white.rounded-lg').first();
+
+              await div.waitFor({
+                state: 'visible',
+                timeout: 10000
+              });
+
+              const html = await div.evaluate(el => el.outerHTML);
+              sendMessage(html, "popup_delivery_time");
+            } else if (msg.selectedText) {
+              const optionText = String(msg.selectedText).replace(/\s+/g, " ").trim();
+              const option = page.locator("label.radio-wrapper").filter({ hasText: optionText }).first();
+              await option.click({ timeout: 3000 });
+
+              sendLog(`Bach Hoa Xanh: Đã click lựa chọn giao hàng: ${optionText}`, "success");
+              await page.mouse.click(0, 0);
+              
+              await resumeAgenticLoopBHX('submit');
             }
-          });
+            sendLog("Bach Hoa Xanh: Đã click lựa chọn giao hàng trên trang thật.", "success");
+          } catch (err) {
+            sendLog(`Bach Hoa Xanh: Không click được lựa chọn giao hàng trên trang thật: ${err.message}`, "warning");
+          }
+          break;
+
+        case "submit_otp":
+          if (isBachHoaXanhFlow) {
+            await resumeAgenticLoopBHX('otp', msg.otp);
+          } else {
+            await resumeAgenticLoop("otp", async () => {
+              if (msg.otp) {
+                await page.keyboard.type(String(msg.otp), { delay: 30 });
+                await page.keyboard.press("Enter");
+                sendLog("Đã nhận OTP từ orchestrator và điền vào trang.", "success");
+              }
+            });
+          }
           break;
 
         case "captcha_completed":
@@ -385,15 +600,41 @@ wss.on("connection", async (ws) => {
     isAutomating = true;
     try {
       sendStatus("running");
-      const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
-      if (aiHandled) { isAutomating = false; return; }
+      if (payload.chain !== 'bhx') {
+        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
+        if (aiHandled) { isAutomating = false; return; }
+        
+        const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
+        sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
+        sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(1500);
+      } else {
+        isBachHoaXanhFlow = true;
+      }
 
-      const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
-      sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
-      sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
-      await page.goto(url, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(1500);
+      if (payload.chain === 'bhx') {
+        // const url = 'https://www.bachhoaxanh.com'
+        // await page.goto(url, { waitUntil: "domcontentloaded" });
+        // await page.waitForTimeout(1500);
 
+        // payload.cookiesFilePath = 'www.bachhoaxanh.com.cookies.json';
+
+        // // Nếu payload cung cấp đường dẫn cookie JSON, nạp cookie trước khi tiếp tục
+        // if (payload.cookiesFilePath) {
+        //   const added = await addCookiesFromJsonFile(payload.cookiesFilePath, url);
+        //   if (added) {
+        //     sendLog(`Tạo lại trang sau khi nạp cookie từ ${payload.cookiesFilePath}...`, "info");
+        //     await page.reload({ waitUntil: "domcontentloaded" });
+        //     await page.waitForTimeout(1000);
+        //   }
+        // }
+        sendMessage("Mở website Bách Hóa Xanh.");
+        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
+        if (aiHandled) { isAutomating = false; return; }
+      }
+      
+      // Tìm các nút mua hàng phổ biến ở Việt Nam
       const buySelectors = [
         "text=Mua ngay", "text=MUA NGAY", "text=Thêm vào giỏ hàng", "text=THÊM VÀO GIỎ",
         "button:has-text('Mua')", "button:has-text('Đặt')", ".btn-buy", ".add-to-cart", "a:has-text('Mua')"

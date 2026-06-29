@@ -276,7 +276,7 @@ async function detectActivePopup(page) {
 /**
  * Vòng lặp điều khiển chính của AI Agent - DOM-first approach
  */
-async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}) {
+async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}, sendMessage = null) {
   const { productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
 
   // Kiểm tra API Key
@@ -314,7 +314,7 @@ async function runAgenticLoop(page, payload, sendLog, sendStatus, options = {}) 
 
   // Chạy Playbook đặc thù của chuỗi cửa hàng (nếu có) trước khi vào AI loop
   try {
-    const pbResult = await runPlaybook(page, payload, sendLog, sendStatus);
+    const pbResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage);
     if (pbResult) {
       sendLog(`Playbook ${payload.chain}: ${pbResult.done ? "Hoàn tất" : "Bootstrap xong"}.`, "success");
       if (pbResult.done) return true; // Playbook tự hoàn thành hoàn toàn, không cần AI
