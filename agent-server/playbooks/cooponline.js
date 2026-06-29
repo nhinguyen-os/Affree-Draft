@@ -9,8 +9,50 @@ const { createHash, randomBytes } = require("node:crypto");
  *
  * Trả về:
  * - { done: true }  : playbook đã hoàn thành toàn bộ, không cần AI tiếp
- * - { done: false } : đã xử lý bootstrap xong, nhường lại cho AI DOM loop
+ * - { done: false } : đã xử lý bootstrap xong, nhường lại cho AI tiếp
  */
+
+const {
+  safeGoto,
+  clickFirstVisible,
+  fillFirstVisible,
+  notifyWaitingForUser,
+  waitForSuccessUrl,
+} = require("./css-helpers");
+
+const CHECKOUT_SELECTORS = [
+  'button:has-text("Thanh toán")',
+  'button:has-text("Tiến hành thanh toán")',
+  'button:has-text("Đặt hàng")',
+  'a:has-text("Thanh toán")',
+  'a[href*="checkout"]',
+  'button[class*="checkout"]',
+];
+
+const NAME_SELECTORS = [
+  'input[name="fullName"]',
+  'input[name*="name"]',
+  'input[placeholder*="họ tên" i]',
+  'input[placeholder*="người nhận" i]',
+];
+
+const PHONE_SELECTORS = [
+  'input[name="phone"]',
+  'input[name*="phone"]',
+  'input[name*="mobile"]',
+  'input[placeholder*="điện thoại" i]',
+  'input[placeholder*="số điện thoại" i]',
+];
+
+const ADDRESS_SELECTORS = [
+  'textarea[name*="address"]',
+  'input[name*="address"]',
+  'input#address',
+  'input[placeholder*="địa chỉ" i]',
+  'input[placeholder*="số nhà" i]',
+];
+
+const SUCCESS_URL_KEYWORDS = ["thank-you", "success", "don-hang", "checkout/complete", "cooponline.vn/account/orders"];
 
 function normalizeText(value) {
   return String(value || "")
@@ -738,6 +780,51 @@ async function run(page, payload, sendLog, sendStatus) {
   return { done: false }; // Để AI DOM loop tiếp tục phần checkout
 }
 
+async function runCss(page, payload, sendLog, sendStatus) {
+  const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
+  sendLog(`Co.opmart CSS: bắt đầu fallback riêng cho ${productName} (SL: ${qty}) tại ${String(chain || "cooponline").toUpperCase()}.`, "info");
+
+  await safeGoto(page, url, sendLog, { waitUntil: "load", settleMs: 1500 });
+  await handleAddressPopup(page, payload, sendLog);
+  await page.waitForTimeout(800);
+
+  await searchAndAddToCart(page, payload, sendLog);
+  await page.waitForTimeout(1200);
+
+  await clickFirstVisible(page, CHECKOUT_SELECTORS, sendLog, {
+    successMessage: "Co.opmart CSS: đã mở bước checkout",
+    failureMessage: "Co.opmart CSS: chưa tìm thấy nút checkout rõ ràng, tiếp tục thử điền trực tiếp nếu form đã mở.",
+  });
+
+  await page.waitForTimeout(1200);
+
+  await fillFirstVisible(page, NAME_SELECTORS, buyerName, sendLog, {
+    fieldLabel: "họ tên Co.opmart",
+    failureMessage: "Co.opmart CSS: chưa tìm thấy ô họ tên checkout.",
+  });
+  await fillFirstVisible(page, PHONE_SELECTORS, buyerPhone, sendLog, {
+    fieldLabel: "SĐT Co.opmart",
+    failureMessage: "Co.opmart CSS: chưa tìm thấy ô SĐT checkout.",
+  });
+  await fillFirstVisible(page, ADDRESS_SELECTORS, buyerAddress, sendLog, {
+    fieldLabel: "địa chỉ Co.opmart",
+    failureMessage: "Co.opmart CSS: chưa tìm thấy ô địa chỉ checkout.",
+  });
+
+  await page.waitForTimeout(1200);
+
+  notifyWaitingForUser(sendStatus, sendLog, {
+    reason: "Co.opmart đang chờ khách hàng xác nhận OTP hoặc thanh toán trực tiếp trên website.",
+  });
+
+  await waitForSuccessUrl(page, sendLog, sendStatus, {
+    successUrlKeywords: SUCCESS_URL_KEYWORDS,
+    timeoutMessage: "Co.opmart CSS: hết thời gian chờ xác nhận thành công. Vui lòng kiểm tra lại đơn hàng.",
+  });
+
+  return { done: true };
+}
+
 async function safeGotoCoop(page, url, sendLog, sendFrame) {
   await page.goto(url, { waitUntil: "commit", timeout: 20000 });
   await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {
@@ -1433,4 +1520,9 @@ async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
   return { done: true };
 }
 
-module.exports = { run, showCartPreview, showProfileSetup };
+module.exports = {
+  run,
+  runCss,
+  showCartPreview,
+  showProfileSetup
+};

@@ -1,4 +1,4 @@
-import type { OrderSessionEvent, OrderSessionPrivateState, OrderSessionUpdate } from "./types";
+import type { OrderSessionEvent, OrderSessionPopupState, OrderSessionPrivateState, OrderSessionUpdate } from "./types";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 
@@ -9,6 +9,9 @@ export interface InMemoryOrderSessionStore {
   update(id: string, patch: OrderSessionUpdate): OrderSessionPrivateState | null;
   appendEvent(id: string, event: OrderSessionEvent): OrderSessionPrivateState | null;
   saveQrCode(id: string, qrImageBase64: string, qrContentType?: string): OrderSessionPrivateState | null;
+  savePopupState(id: string, popupState?: OrderSessionPopupState): OrderSessionPrivateState | null;
+  savePopupFrame(id: string, popupFrameBase64: string, popupFrameContentType?: string): OrderSessionPrivateState | null;
+  clearPopupState(id: string): OrderSessionPrivateState | null;
   expire(id: string): OrderSessionPrivateState | null;
 }
 
@@ -20,16 +23,18 @@ export function createInMemoryOrderSessionStore(ttlMs = DEFAULT_TTL_MS): InMemor
     const session = sessions.get(id) ?? null;
     if (!session) return null;
     if (Date.now() <= new Date(session.expiresAt).getTime()) return session;
+    if (session.status === "expired") return session;
 
+    const now = new Date().toISOString();
     const expired: OrderSessionPrivateState = {
       ...session,
       status: "expired",
       step: "expired",
       progress: session.progress,
       message: "Phiên đã hết hạn",
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
       timeline: session.timeline.concat({
-        at: new Date().toISOString(),
+        at: now,
         status: "expired",
         message: "Phiên đã hết hạn",
       }),
@@ -59,12 +64,17 @@ export function createInMemoryOrderSessionStore(ttlMs = DEFAULT_TTL_MS): InMemor
       const current = get(id);
       if (!current) return null;
       const now = new Date().toISOString();
+      const nextStatus = patch.status ?? current.status;
+      const lastTimelineEntry = current.timeline.at(-1);
+      const shouldAppendTimeline = Boolean(
+        patch.message && (lastTimelineEntry?.message !== patch.message || lastTimelineEntry?.status !== nextStatus)
+      );
       const next: OrderSessionPrivateState = {
         ...current,
         ...patch,
         updatedAt: now,
-        timeline: patch.message
-          ? current.timeline.concat({ at: now, status: patch.status ?? current.status, message: patch.message })
+        timeline: shouldAppendTimeline
+          ? current.timeline.concat({ at: now, status: nextStatus, message: patch.message! })
           : current.timeline,
       };
       sessions.set(id, next);
@@ -96,17 +106,70 @@ export function createInMemoryOrderSessionStore(ttlMs = DEFAULT_TTL_MS): InMemor
       sessions.set(id, next);
       return next;
     },
+    savePopupState(id, popupState) {
+      const current = get(id);
+      if (!current) return null;
+      const next: OrderSessionPrivateState = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        private: {
+          ...current.private,
+          popupState,
+          ...(popupState
+            ? {}
+            : {
+                popupFrameBase64: undefined,
+                popupFrameContentType: undefined,
+              }),
+        },
+      };
+      sessions.set(id, next);
+      return next;
+    },
+    savePopupFrame(id, popupFrameBase64, popupFrameContentType = "image/jpeg") {
+      const current = get(id);
+      if (!current) return null;
+      const next: OrderSessionPrivateState = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        private: {
+          ...current.private,
+          popupFrameBase64,
+          popupFrameContentType,
+        },
+      };
+      sessions.set(id, next);
+      return next;
+    },
+    clearPopupState(id) {
+      const current = get(id);
+      if (!current) return null;
+      const next: OrderSessionPrivateState = {
+        ...current,
+        updatedAt: new Date().toISOString(),
+        private: {
+          ...current.private,
+          popupState: undefined,
+          popupFrameBase64: undefined,
+          popupFrameContentType: undefined,
+        },
+      };
+      sessions.set(id, next);
+      return next;
+    },
     expire(id) {
       const current = sessions.get(id);
       if (!current) return null;
+      if (current.status === "expired") return current;
+      const now = new Date().toISOString();
       const next: OrderSessionPrivateState = {
         ...current,
         status: "expired",
         step: "expired",
         message: "Phiên đã hết hạn",
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
         timeline: current.timeline.concat({
-          at: new Date().toISOString(),
+          at: now,
           status: "expired",
           message: "Phiên đã hết hạn",
         }),
