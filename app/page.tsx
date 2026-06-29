@@ -1591,12 +1591,12 @@ export default function Home() {
             >
               {t("Lịch sử mua")}
             </Link>
-            <Link
+            {/* <Link
               href="/agent-demo"
               className="shrink-0 whitespace-nowrap rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-sm font-medium hover:bg-emerald-100 text-emerald-800 sm:px-3"
             >
               🤖 Agent Demo
-            </Link>
+            </Link> */}
             <button
               onClick={() => setTxnnLiveOpen(true)}
               className="shrink-0 whitespace-nowrap rounded-full border border-teal-300 bg-teal-50 px-2.5 py-1.5 text-sm font-medium text-teal-800 hover:bg-teal-100 sm:px-3"
