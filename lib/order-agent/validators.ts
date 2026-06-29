@@ -78,12 +78,20 @@ export function validateOrderSessionEvent(input: unknown): OrderSessionEvent {
       if (otp.length < 4) fail("otp is required");
       return { type: "otp_submitted", otp };
     }
+    case "login_completed":
     case "captcha_completed":
     case "confirm_final_action":
     case "payment_submitted":
     case "choose_handoff":
     case "cancel":
       return { type: value.type } as OrderSessionEvent;
+    case "popup_click": {
+      const xRatio = Number((value as { xRatio?: number }).xRatio);
+      const yRatio = Number((value as { yRatio?: number }).yRatio);
+      if (!Number.isFinite(xRatio) || xRatio < 0 || xRatio > 1) fail("xRatio must be between 0 and 1");
+      if (!Number.isFinite(yRatio) || yRatio < 0 || yRatio > 1) fail("yRatio must be between 0 and 1");
+      return { type: "popup_click", xRatio, yRatio };
+    }
     default:
       fail("unsupported event type");
   }

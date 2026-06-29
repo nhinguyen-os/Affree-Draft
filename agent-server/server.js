@@ -37,11 +37,16 @@ loadEnvFile(path.join(__dirname, "..", ".env"));
 
 const { chromium } = require("playwright");
 const WebSocket = require("ws");
-const { runPlaybook } = require("./playbooks");
+const { runPlaybook, resolvePlaybook } = require("./playbooks");
 const { runAgenticToolUseLoop } = require("./agent-llm");
 const cooponlinePlaybook = require("./playbooks/cooponline");
 const { updateSkillFromSession } = require("./skill-updater");
 const { domainFromUrl } = require("./skill-store");
+
+const HAS_LLM_API_KEY = Boolean(
+  process.env.QWEN_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY
+);
+const RUN_TXNN_AGENTIC = process.env.RUN_TXNN_AGENTIC === "true";
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
@@ -60,6 +65,8 @@ wss.on("connection", async (ws) => {
   let isAutomating = false;
   let lastOrderPayload = null;
   let cancelledByUser = false;
+  let popupFocusState = null;
+  let popupFrameInterval = null;
   let completionMonitor = null;
   let completionSent = false;
   let paymentFailureSent = false;
@@ -85,6 +92,60 @@ wss.on("connection", async (ws) => {
     }
   }
 
+  function sendPopupState(popup) {
+    popupFocusState = popup || null;
+    try {
+      ws.send(JSON.stringify({
+        type: "popup_state",
+        open: Boolean(popup),
+        popup: popup
+          ? {
+              kind: popup.kind,
+              title: popup.title,
+              text: popup.text,
+              actions: popup.actions,
+              bounds: popup.bounds,
+            }
+          : undefined,
+      }));
+    } catch (e) { }
+  }
+
+  function clearPopupFrameInterval() {
+    if (popupFrameInterval) {
+      clearInterval(popupFrameInterval);
+      popupFrameInterval = null;
+    }
+  }
+
+  function startPopupFrameInterval() {
+    clearPopupFrameInterval();
+    if (!popupFocusState) return;
+    popupFrameInterval = setInterval(() => {
+      void sendScreenshotFrame({ clip: popupFocusState.bounds, mode: "popup-focus" });
+    }, 1200);
+  }
+
+  function normalizeClip(clip) {
+    const viewport = page?.viewportSize?.() || { width: 1024, height: 768 };
+    if (!clip) {
+      return {
+        x: 0,
+        y: 0,
+        width: viewport.width,
+        height: viewport.height,
+      };
+    }
+
+    const x = Math.max(0, Math.floor(Number(clip.x) || 0));
+    const y = Math.max(0, Math.floor(Number(clip.y) || 0));
+    const maxWidth = Math.max(1, viewport.width - x);
+    const maxHeight = Math.max(1, viewport.height - y);
+    const width = Math.max(1, Math.min(maxWidth, Math.floor(Number(clip.width) || 0)));
+    const height = Math.max(1, Math.min(maxHeight, Math.floor(Number(clip.height) || 0)));
+    return { x, y, width, height };
+  }
+
   // Gửi message tự do về client (BHX dùng để gửi popup chọn giờ/OTP).
   function sendMessage(content, type = "message") {
     try {
@@ -100,6 +161,20 @@ wss.on("connection", async (ws) => {
     try {
       ws.send(JSON.stringify({ type: "status", phase, ...details }));
     } catch (e) { }
+
+    if (phase === "waiting_user_input" && details?.requiredInput === "qr_payment") {
+      void refreshTxnnPopupFocus("waiting_for_qr_payment").then((popup) => {
+        if (!popup) {
+          sendLog("TXNN: chưa detect được popup thanh toán thật, tạm giữ fallback hiện có.", "warning");
+        }
+      });
+      return;
+    }
+
+    if (phase === "running" || phase === "completed" || phase === "failed" || phase === "cancelled") {
+      clearPopupFrameInterval();
+      sendPopupState(null);
+    }
   }
 
   async function handleClientMessage(messageStr) {
@@ -280,15 +355,66 @@ wss.on("connection", async (ws) => {
           });
           break;
 
-        case "payment_submitted":
-          await resumeAgenticLoop("payment_submitted", async () => {
+        case "payment_submitted": {
+          try {
             sendLog("Đã nhận tín hiệu người dùng báo thanh toán xong, bắt đầu xác minh lại trang.", "info");
-          });
+            sendStatus("running", { reason: "resume:payment_submitted" });
+            const confirmSelectors = [
+              'button:has-text("✅ Xác nhận")',
+              'button:has-text("Xác nhận")',
+              'button:has-text("OK")',
+            ];
+            let clicked = false;
+            for (const selector of confirmSelectors) {
+              const locator = page.locator(selector).last();
+              if (await locator.isVisible({ timeout: 600 }).catch(() => false)) {
+                await locator.click({ timeout: 3000 });
+                sendLog(`Đã click nút xác nhận cuối sau thanh toán bằng selector: ${selector}`, "success");
+                clicked = true;
+                break;
+              }
+            }
+            if (clicked && await completeTxnnAfterFinalConfirmation()) {
+              isAutomating = false;
+              break;
+            }
+            if (!clicked) {
+              sendLog("Không thấy nút xác nhận cuối sau khi user báo thanh toán; sẽ tiếp tục bằng AI loop để tự dò lại trang.", "warning");
+            }
+            await resumeAgenticLoop("payment_submitted");
+          } catch (err) {
+            sendLog(`Lỗi khi thử click nút xác nhận cuối sau thanh toán: ${err.message}`, "warning");
+            await resumeAgenticLoop("payment_submitted");
+          }
           break;
+        }
+
+        case "popup_click": {
+          if (!popupFocusState || isAutomating) break;
+          const bounds = popupFocusState.bounds;
+          const xRatio = Math.min(1, Math.max(0, Number(msg.xRatio) || 0));
+          const yRatio = Math.min(1, Math.max(0, Number(msg.yRatio) || 0));
+          const x = Math.round(bounds.x + bounds.width * xRatio);
+          const y = Math.round(bounds.y + bounds.height * yRatio);
+          await page.mouse.click(x, y);
+          await page.waitForTimeout(900);
+          const popup = await refreshTxnnPopupFocus("popup_click");
+          if (!popup) {
+            sendLog("Popup thanh toán đã đóng sau thao tác của user; vẫn chờ user bấm xác nhận đã thanh toán để bắt đầu verify.", "info");
+            sendStatus("waiting_user_input", {
+              reason: "Popup thanh toán đã đóng. Hệ thống vẫn chờ user xác nhận đã thanh toán xong trước khi kiểm tra hoàn tất.",
+              requiredInput: "qr_payment",
+            });
+            await sendScreenshotFrame();
+          }
+          break;
+        }
 
         case "user_cancelled":
         case "cancel_order":
           cancelledByUser = true;
+          clearPopupFrameInterval();
+          sendPopupState(null);
           sendLog("Người dùng đã hủy quy trình.", "warning");
           sendStatus("cancelled");
           break;
@@ -296,6 +422,8 @@ wss.on("connection", async (ws) => {
         case "choose_handoff":
           cancelledByUser = true;
           isAutomating = false;
+          clearPopupFrameInterval();
+          sendPopupState(null);
           sendStatus("failed", { error: "handoff_to_user", orderUrl: page.url() });
           sendLog("Phiên này đã được chuyển sang thao tác thủ công theo yêu cầu orchestrator.", "warning");
           break;
@@ -599,12 +727,14 @@ wss.on("connection", async (ws) => {
 
     cdpSession.on("Page.screencastFrame", ({ data, sessionId }) => {
       try {
-        ws.send(JSON.stringify({
-          type: "screencast",
-          data: data,
-          width: 1024,
-          height: 768
-        }));
+        if (!popupFocusState) {
+          ws.send(JSON.stringify({
+            type: "screencast",
+            data: data,
+            width: 1024,
+            height: 768
+          }));
+        }
       } catch (err) { }
       cdpSession.send("Page.screencastFrameAck", { sessionId }).catch(() => { });
     });
@@ -628,16 +758,21 @@ wss.on("connection", async (ws) => {
     });
   }
 
-  async function sendScreenshotFrame() {
+  async function sendScreenshotFrame(options = {}) {
     if (!page || ws.readyState !== WebSocket.OPEN) return;
     try {
-      const viewport = page.viewportSize() || { width: 1024, height: 768 };
-      const data = await page.screenshot({ type: "jpeg", quality: 62 });
+      const clip = normalizeClip(options.clip);
+      const data = await page.screenshot({ type: "jpeg", quality: 62, clip });
       ws.send(JSON.stringify({
         type: "screencast",
         data: data.toString("base64"),
-        width: viewport.width,
-        height: viewport.height
+        width: clip.width,
+        height: clip.height,
+        sourceX: clip.x,
+        sourceY: clip.y,
+        sourceWidth: clip.width,
+        sourceHeight: clip.height,
+        mode: options.mode || (options.clip ? "partial" : "full"),
       }));
     } catch (e) {
       sendLog(`Không gửi được ảnh màn hình: ${e.message}`, "warning");
@@ -709,6 +844,8 @@ wss.on("connection", async (ws) => {
 
     isAutomating = true;
     cancelledByUser = false;
+    clearPopupFrameInterval();
+    sendPopupState(null);
     try {
       if (typeof extraAction === "function") {
         await extraAction();
@@ -739,6 +876,162 @@ wss.on("connection", async (ws) => {
     } finally {
       isAutomating = false;
     }
+  }
+
+  async function detectTxnnPaymentPopup() {
+    if (!page || page.isClosed()) return null;
+    try {
+      return await page.evaluate(() => {
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+        const normalizeLower = (value) => normalize(value).toLowerCase();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+        const nodes = Array.from(document.querySelectorAll('div, section, article, aside, [role="dialog"]'));
+        const candidates = nodes.map((node) => {
+          const text = normalize(node.textContent || "");
+          if (!text) return null;
+          const textLower = normalizeLower(text);
+          const style = window.getComputedStyle(node);
+          if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || '1') === 0) return null;
+          const rect = node.getBoundingClientRect();
+          if (rect.width < 180 || rect.height < 160) return null;
+          const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < viewportHeight && rect.left < viewportWidth;
+          if (!inViewport) return null;
+          const buttons = Array.from(node.querySelectorAll('button, [role="button"]'))
+            .map((el) => normalize(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || ''))
+            .filter(Boolean);
+          const actionText = buttons.join(' | ');
+          const actionLower = normalizeLower(actionText);
+          const isInvoiceDetails =
+            /hóa đơn chi tiết|hoa don chi tiet|chi tiết hóa đơn|chi tiet hoa don/.test(textLower) ||
+            ((/thông tin đặt hàng|thong tin dat hang|tên người đặt|ten nguoi dat|số điện thoại|so dien thoai/.test(textLower)) &&
+              (/xác nhận|xac nhan|đóng|dong|ok|xong/.test(actionLower) || /xác nhận|xac nhan/.test(textLower)));
+          const isPaymentPopup = /qr|thanh toán|thanh toan|chuyển khoản|chuyen khoan/.test(textLower);
+          const score =
+            ((isPaymentPopup || isInvoiceDetails || /xác nhận|xac nhan|đặt hàng|dat hang/.test(textLower)) ? 5 : 0) +
+            ((style.position === 'fixed' || style.position === 'absolute') ? 3 : 0) +
+            ((Number(style.zIndex || '0') >= 10) ? 2 : 0) +
+            (buttons.length ? 2 : 0);
+          if (score < 5) return null;
+          return {
+            kind: isInvoiceDetails ? 'invoice_details' : isPaymentPopup ? 'payment' : 'dialog',
+            title: buttons.find((item) => /xác nhận thanh toán|xác nhận|đặt hàng/i.test(item)) || text.slice(0, 120),
+            text: text.slice(0, 1200),
+            actions: buttons.filter((item, index, arr) => arr.indexOf(item) === index).slice(0, 6),
+            bounds: {
+              x: Math.max(0, Math.floor(rect.left)),
+              y: Math.max(0, Math.floor(rect.top)),
+              width: Math.min(viewportWidth, Math.ceil(rect.width)),
+              height: Math.min(viewportHeight, Math.ceil(rect.height)),
+            },
+            score,
+          };
+        }).filter(Boolean);
+
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0] || null;
+      });
+    } catch (err) {
+      sendLog(`TXNN: lỗi khi detect popup thanh toán: ${err.message}`, "warning");
+      return null;
+    }
+  }
+
+  async function refreshTxnnPopupFocus(reason = "refresh") {
+    const popup = await detectTxnnPaymentPopup();
+    if (!popup) {
+      clearPopupFrameInterval();
+      if (popupFocusState) {
+        sendLog(`TXNN: popup-focus đã đóng (${reason}).`, "info");
+      }
+      sendPopupState(null);
+      return null;
+    }
+    sendPopupState(popup);
+    await sendScreenshotFrame({ clip: popup.bounds, mode: "popup-focus" });
+    startPopupFrameInterval();
+    return popup;
+  }
+
+  async function detectTxnnCompletion() {
+    try {
+      await page.waitForTimeout(1200);
+      const result = await page.evaluate(() => {
+        const bodyText = (document.body.innerText || "").replace(/\s+/g, " ").trim();
+        const popupRoot = Array.from(document.querySelectorAll('div, section, article, [role="dialog"]')).find((el) => {
+          const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (!text) return false;
+          const style = window.getComputedStyle(el);
+          return style.visibility !== 'hidden' && style.display !== 'none' && /đặt hàng thành công|mã đơn hàng/i.test(text);
+        });
+        const popupText = ((popupRoot?.textContent || bodyText) || "").replace(/\s+/g, " ").trim();
+        const success = /đặt hàng thành công|mã đơn hàng/i.test(popupText);
+        const orderCode = popupText.match(/Mã đơn hàng\s*:?\s*([A-Z0-9\-]+)/i)?.[1] || bodyText.match(/Mã đơn hàng\s*:?\s*([A-Z0-9\-]+)/i)?.[1] || null;
+        return { success, orderCode, popupText };
+      });
+      if (result?.success) {
+        clearPopupFrameInterval();
+        sendPopupState(null);
+        sendLog(`TXNN: phát hiện trạng thái completed${result.orderCode ? ` với mã đơn ${result.orderCode}` : ""}.`, "success");
+        sendStatus("completed", {
+          orderUrl: page.url(),
+          orderCode: result.orderCode || undefined,
+          successMessage: result.popupText || undefined,
+        });
+        return true;
+      }
+    } catch (err) {
+      sendLog(`TXNN: lỗi khi dò completed state: ${err.message}`, "warning");
+    }
+    return false;
+  }
+
+  async function closeTxnnPopupByKeywords(keywords, popupLabel) {
+    try {
+      const closed = await page.evaluate(({ keywords }) => {
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const nodes = Array.from(document.querySelectorAll('div, section, article, [role="dialog"]'));
+        const target = nodes.find((node) => {
+          const text = normalize(node.textContent || "");
+          if (!text) return false;
+          const style = window.getComputedStyle(node);
+          if (style.visibility === 'hidden' || style.display === 'none') return false;
+          return keywords.some((keyword) => text.includes(normalize(keyword)));
+        });
+        if (!target) return false;
+
+        const buttonCandidates = Array.from(target.querySelectorAll('button, [role="button"], .close, [aria-label], [title]'));
+        const closeButton = buttonCandidates.find((button) => {
+          const text = normalize(button.textContent || button.getAttribute('aria-label') || button.getAttribute('title') || '');
+          return text === '×' || text === 'x' || /đóng|close|tắt|ok|xong|bỏ qua/.test(text);
+        });
+        if (closeButton) {
+          closeButton.click();
+          return true;
+        }
+        return false;
+      }, { keywords });
+      if (closed) {
+        sendLog(`TXNN: đã đóng popup ${popupLabel}.`, "success");
+        await page.waitForTimeout(900);
+        return true;
+      }
+    } catch (err) {
+      sendLog(`TXNN: lỗi khi đóng popup ${popupLabel}: ${err.message}`, "warning");
+    }
+
+    try {
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+    } catch { }
+    return false;
+  }
+
+  async function completeTxnnAfterFinalConfirmation() {
+    await page.waitForTimeout(1200);
+    await closeTxnnPopupByKeywords(["print hóa đơn", "in hóa đơn"], "print hóa đơn");
+    await closeTxnnPopupByKeywords(["hóa đơn chi tiết", "hoa don chi tiet", "chi tiết hóa đơn"], "hóa đơn chi tiết");
+    return detectTxnnCompletion();
   }
 
   async function resumeAgenticLoopBHX(reason, content = null) {
@@ -804,6 +1097,8 @@ wss.on("connection", async (ws) => {
         sendMessage("Mở website Bách Hóa Xanh.");
       }
 
+      const resolvedPlaybook = resolvePlaybook(payload);
+
       // ── Bước 1: Thử Playbook ────────────────────────────────────────────────
       let playbookResult = null;
       try {
@@ -819,6 +1114,25 @@ wss.on("connection", async (ws) => {
         sendLog(`[Playbook] Đã xử lý xong đơn hàng.`, "success");
         isAutomating = false;
         return;
+      }
+
+      const shouldRunTxnnCssFallback =
+        chain === "tuoixanhnhanhngon" &&
+        !RUN_TXNN_AGENTIC &&
+        typeof resolvedPlaybook?.playbook?.runCss === "function";
+
+      if (shouldRunTxnnCssFallback) {
+        sendLog(`[Playbook] RUN_TXNN_AGENTIC=false, chuyển sang CSS fallback của ${chain.toUpperCase()}.`, "warning");
+        const cssFallbackResult = await resolvedPlaybook.playbook.runCss(page, payload, sendLog, sendStatus, sendMessage);
+        if (cssFallbackResult?.done === true) {
+          sendLog(`[Playbook] CSS fallback đã tiếp quản phiên hiện tại.`, "success");
+          isAutomating = false;
+          return;
+        }
+      }
+
+      if (!HAS_LLM_API_KEY) {
+        sendLog("⚠️ Chưa cấu hình API Key (QWEN/GEMINI/ANTHROPIC).", "error");
       }
 
       // ── Bước 2: AI Tool-Use Loop ────────────────────────────────────────────
@@ -853,6 +1167,7 @@ wss.on("connection", async (ws) => {
 
   async function cleanup() {
     console.log("[Agent Server] Đang dọn dẹp tài nguyên phiên...");
+    clearPopupFrameInterval();
     try {
       stopCompletionMonitor();
       if (cdpSession) await cdpSession.detach().catch(() => { });

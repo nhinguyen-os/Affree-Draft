@@ -8,6 +8,7 @@ import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { geocode } from "@/lib/geocode";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { type Lang, tr } from "@/lib/i18n";
+import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
@@ -17,7 +18,7 @@ import { type Lang, tr } from "@/lib/i18n";
  * resume trước khi làm thật.
  */
 
-type StepKind = "auto" | "otp" | "login" | "captcha" | "confirm" | "success";
+type StepKind = "auto" | "otp" | "login" | "captcha" | "qr" | "confirm" | "success";
 type Step = { kind: StepKind; label: string };
 type CoopOrderResult = {
   phase?: "otp" | "cart" | "ordered";
@@ -297,6 +298,7 @@ export default function OrderAgentModal({
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
   const isCoopReal = activeOffer.store.chain === "coop";
+  const isTXNNReal = activeOffer.store.chain === "tuoixanhnhanhngon";
   const isBHXReal = activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
@@ -334,8 +336,18 @@ export default function OrderAgentModal({
 
   // Trạng thái chạy của trợ lý
   const [stepIndex, setStepIndex] = useState(0);
+  const placedRef = useRef(false);
   const [otp, setOtp] = useState("");
   const [otpError, setOtpError] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [serverState, setServerState] = useState<PublicOrderSessionState | null>(null);
+  const [popupViewerOpen, setPopupViewerOpen] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [paymentConfirmSubmitting, setPaymentConfirmSubmitting] = useState(false);
+  const closingSessionRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionStatusRef = useRef<PublicOrderSessionState["status"] | undefined>(undefined);
   // Mã OTP MÔ PHỎNG (bản demo chưa kết nối SMS thật): sinh ngẫu nhiên 6 số khi tới bước OTP,
   // hiển thị như "tin nhắn" để bạn nhập thử. KHÔNG phải mã thật từ cửa hàng.
   const [simOtp, setSimOtp] = useState("");
@@ -381,7 +393,40 @@ export default function OrderAgentModal({
     bhxShowScreencastRef.current = bhxShowScreencast;
   }, [bhxShowScreencast]);
 
+  const requiredInput = serverState?.requiredInput;
+  const currentStepKind: StepKind =
+    requiredInput === "otp"
+      ? "otp"
+      : requiredInput === "captcha"
+        ? "captcha"
+        : requiredInput === "login"
+          ? "login"
+          : requiredInput === "qr_payment"
+            ? "qr"
+            : requiredInput === "final_confirmation"
+              ? "confirm"
+              : serverState?.status === "completed"
+                ? "success"
+                : "auto";
+
   const steps: Step[] = useMemo(() => {
+    // BLOCK 2: Nếu có trạng thái từ server, hiển thị timeline thực tế từ server
+    if (serverState) {
+      const timeline: Step[] = serverState.timeline.map((item) => ({
+        kind: "auto",
+        label: item.message,
+      }));
+
+      if (serverState.status === "completed") {
+        timeline.push({ kind: "success", label: t("Đặt hàng thành công") });
+      } else if (serverState.requiredInput) {
+        timeline.push({ kind: currentStepKind, label: serverState.message });
+      }
+      
+      return timeline;
+    }
+
+    // BLOCK 1: Nếu chưa có serverState, hiển thị danh sách các bước dự kiến (mặc định)
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
 
     // Đăng nhập/định danh — khác nhau theo từng nguồn.
@@ -395,53 +440,147 @@ export default function OrderAgentModal({
     }
 
     s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
+    
     if (cfg.needStorePick) {
       s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
     }
+    
     s.push({ kind: "auto", label: t("Điền địa chỉ giao: {address}…", { address: address || t("(địa chỉ của bạn)") }) });
+    
     if (cfg.needEmail) {
       s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
     }
+    
     if (cfg.needSlot) {
       s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
     }
+    
     s.push({ kind: "auto", label: t("Chọn thanh toán COD…") });
+    
     if (cfg.captcha) {
       s.push({ kind: "captcha", label: t('{chain} yêu cầu xác minh "Tôi không phải robot"', { chain }) });
     }
+    
     s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
     s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
     s.push({ kind: "success", label: t("Đặt hàng thành công") });
+    
     return s;
-  }, [chain, cfg, phone, email, address, qty, slot, activeOffer.product.name, activeOffer.store.name, lang]);
+}, [
+  serverState, 
+  currentStepKind, 
+  chain, 
+  cfg, 
+  phone, 
+  email, 
+  address, 
+  qty, 
+  slot, 
+  activeOffer.product.name, 
+  activeOffer.store.name, 
+  lang, 
+  t
+]);
 
-  const current = steps[stepIndex];
+  
+  const usesServerTimeline = !isCoopReal && Boolean(serverState);
+  const visibleSteps = usesServerTimeline ? steps : steps.slice(0, stepIndex + 1);
+  const currentStepIndex = usesServerTimeline ? Math.max(0, visibleSteps.length - 1) : stepIndex;
+  const current = visibleSteps[currentStepIndex] ?? steps[steps.length - 1];
+
+  const isTerminalSessionStatus = (status?: PublicOrderSessionState["status"]) =>
+    status === "completed" || status === "failed" || status === "cancelled" || status === "expired";
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    sessionStatusRef.current = serverState?.status;
+  }, [sessionId, serverState?.status]);
 
   // Bước "auto" thì tự chạy tiếp sau 1 nhịp; bước cần người thì đứng chờ thao tác.
   useEffect(() => {
-    if (phase !== "running") return;
-    if (!current) return;
-    if (current.kind === "auto") {
-      const t = setTimeout(() => setStepIndex((i) => i + 1), 1000);
-      return () => clearTimeout(t);
-    }
-    // Tới bước OTP → "cửa hàng gửi mã" (mô phỏng): sinh mã 6 số sau 1 nhịp như đợi SMS.
-    if (current.kind === "otp" && !simOtp) {
-      const t = setTimeout(
-        () => setSimOtp(String(Math.floor(100000 + Math.random() * 900000))),
-        800
-      );
-      return () => clearTimeout(t);
-    }
-    if (current.kind === "success") {
-      const code = `#${activeOffer.store.chain.toUpperCase().slice(0, 4)}-${Math.floor(
-        100000 + Math.random() * 900000
-      )}`;
-      setOrderCode(code);
+    if (phase !== "running" || !sessionId) return;
+    let alive = true;
+    let inFlight = false;
+    let timer: number | null = null;
+    let consecutiveIdlePolls = 0;
+    let consecutivePollErrors = 0;
+    let lastSeenUpdatedAt: string | null = null;
+
+    const nextDelay = (status?: PublicOrderSessionState["status"], options?: { idle?: number; errors?: number }) => {
+      const idle = options?.idle ?? 0;
+      const errors = options?.errors ?? 0;
+
+      if (errors > 0) {
+        return Math.min(30000, 12000 + (errors - 1) * 6000);
+      }
+
+      if (status === "running" || status === "verifying_payment") {
+        return Math.min(20000, 8000 + idle * 4000);
+      }
+
+      if (status?.startsWith("waiting_for_")) {
+        return Math.min(30000, 15000 + idle * 5000);
+      }
+
+      return Math.min(20000, 10000 + idle * 4000);
+    };
+
+    const schedule = (status?: PublicOrderSessionState["status"], options?: { idle?: number; errors?: number }) => {
+      if (!alive || isTerminalSessionStatus(status)) return;
+      timer = window.setTimeout(() => {
+        void poll();
+      }, nextDelay(status, options));
+    };
+
+    const poll = async () => {
+      if (!alive || inFlight) return;
+      inFlight = true;
+      try {
+        const res = await fetch(`/api/order-sessions/${sessionId}`, { cache: "no-store" });
+        const data = (await res.json()) as { ok: boolean; error?: string; state?: PublicOrderSessionState };
+        if (!alive) return;
+        if (!res.ok || !data.ok || !data.state) {
+          consecutivePollErrors += 1;
+          setSubmitError(data.error || t("Không đọc được trạng thái phiên đặt hàng."));
+          schedule(undefined, { errors: consecutivePollErrors });
+          return;
+        }
+        consecutivePollErrors = 0;
+        const unchanged = lastSeenUpdatedAt === data.state.updatedAt;
+        consecutiveIdlePolls = unchanged ? consecutiveIdlePolls + 1 : 0;
+        lastSeenUpdatedAt = data.state.updatedAt;
+        setServerState(data.state);
+        schedule(data.state.status, { idle: consecutiveIdlePolls });
+      } catch {
+        if (!alive) return;
+        consecutivePollErrors += 1;
+        setSubmitError(t("Không đọc được trạng thái phiên đặt hàng."));
+        schedule(undefined, { errors: consecutivePollErrors });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void poll();
+    return () => {
+      alive = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [phase, sessionId, lang]);
+
+  useEffect(() => {
+    if (!serverState) return;
+    if (serverState.status === "completed" && serverState.orderCode && !placedRef.current) {
+      placedRef.current = true;
+      setOrderCode(serverState.orderCode);
       setPhase("done");
-      onPlaced(code, activeOffer);
+      onPlaced(serverState.orderCode, activeOffer);
+      return;
     }
-  }, [phase, stepIndex, current, activeOffer, onPlaced, simOtp]);
+    if (["failed", "cancelled", "expired"].includes(serverState.status)) {
+      setSubmitError(serverState.error || serverState.message);
+    }
+  }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp]);
 
   const total = activeOffer.price * qty;
   const coopMinTotal = 200000;
@@ -537,6 +676,162 @@ export default function OrderAgentModal({
     !!address.trim() &&
     (!cfg.needEmail || emailValid) &&
     (!isCoopReal || coopCanStart);
+
+  const usesQrPayment =
+    isTXNNReal ||
+    isBHXReal ||
+    steps.some((item) => item.kind === "qr") ||
+    serverState?.status === "waiting_for_qr_payment" ||
+    serverState?.status === "verifying_payment";
+  const paymentLabel = usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
+  const paymentConfirmBusy = paymentConfirmSubmitting || serverState?.status === "verifying_payment";
+  const popupFrameTs = serverState?.popup?.updatedAt || serverState?.updatedAt;
+  const popupFrameSrc = sessionId && popupFrameTs
+    ? `/api/order-sessions/${sessionId}/popup-frame?ts=${encodeURIComponent(popupFrameTs)}`
+    : null;
+
+  useEffect(() => {
+    if (!popupViewerOpen) return;
+    if (!sessionId || !serverState?.popupFrameAvailable || !serverState?.popup) {
+      setPopupViewerOpen(false);
+    }
+  }, [popupViewerOpen, sessionId, serverState?.popupFrameAvailable, serverState?.popup]);
+
+  useEffect(() => {
+    if (!popupViewerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPopupViewerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [popupViewerOpen]);
+
+  function handlePopupFrameClick(event: React.MouseEvent<HTMLImageElement>) {
+    if (!serverState?.popupFrameAvailable) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const xRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const yRatio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+    void sendSessionEvent({ type: "popup_click", xRatio, yRatio });
+  }
+
+  
+  async function createSession() {
+    flushProfile({ name, phone, address });
+    placedRef.current = false;
+    closingSessionRef.current = false;
+    setPaymentConfirmSubmitting(false);
+    setSessionId(null);
+    setServerState(null);
+    setOrderCode("");
+    setOtp("");
+    setOtpError(false);
+    setSubmitError("");
+    setSubmitting(true);
+
+    try {
+      const res = await fetch("/api/order-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "tuoixanhnhanhngon",
+          offer: {
+            productId: activeOffer.product.id,
+            productName: activeOffer.product.name,
+            productUrl: activeOffer.productUrl,
+            storeId: activeOffer.store.id,
+            price: activeOffer.price,
+          },
+          quantity: qty,
+          customer: {
+            name,
+            phone,
+            address,
+          },
+          delivery: cfg.needSlot ? { slot } : undefined,
+          idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${activeOffer.store.id}`,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string; sessionId?: string; state?: PublicOrderSessionState };
+      if (!res.ok || !data.ok || !data.sessionId || !data.state) {
+        throw new Error(data.error || t("Không tạo được phiên đặt hàng."));
+      }
+      setSessionId(data.sessionId);
+      setServerState(data.state);
+      setPhase("running");
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : t("Không tạo được phiên đặt hàng."));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function sendSessionEvent(event: Record<string, unknown>) {
+    if (!sessionId) return;
+    setSubmitError("");
+    try {
+      const res = await fetch(`/api/order-sessions/${sessionId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string; state?: PublicOrderSessionState | null };
+      if (!res.ok || !data.ok || !data.state) {
+        throw new Error(data.error || t("Không gửi được thao tác cho phiên đặt hàng."));
+      }
+      setServerState(data.state);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : t("Không gửi được thao tác cho phiên đặt hàng."));
+    }
+  }
+
+  async function submitPaymentConfirmed() {
+    if (paymentConfirmBusy) return;
+    setPaymentConfirmSubmitting(true);
+    try {
+      await sendSessionEvent({ type: "payment_submitted" });
+    } finally {
+      setPaymentConfirmSubmitting(false);
+    }
+  }
+
+  async function releaseCurrentSession(options?: { keepalive?: boolean }) {
+    if (!sessionId || isTerminalSessionStatus(serverState?.status) || closingSessionRef.current) return;
+    closingSessionRef.current = true;
+    try {
+      await fetch(`/api/order-sessions/${sessionId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "cancel" }),
+        keepalive: options?.keepalive,
+      });
+    } catch {
+      // Đóng modal vẫn nên tiếp tục ngay cả khi request cancel bị lỗi mạng.
+    }
+  }
+
+  async function handleCloseModal() {
+    setPopupViewerOpen(false);
+    await releaseCurrentSession();
+    onClose();
+  }
+
+  useEffect(() => {
+    return () => {
+      const activeSessionId = sessionIdRef.current;
+      const activeStatus = sessionStatusRef.current;
+      if (!activeSessionId || isTerminalSessionStatus(activeStatus) || closingSessionRef.current) return;
+      closingSessionRef.current = true;
+      void fetch(`/api/order-sessions/${activeSessionId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "cancel" }),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+  }, []);
 
   const postCoopOrder = async (payload: Record<string, unknown>) => {
     const res = await fetch("/api/coop/order", {
@@ -1584,6 +1879,7 @@ export default function OrderAgentModal({
         className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
         role="dialog"
         aria-modal="true"
+        onClick={handleCloseModal}
       >
         <div
           className="flex min-h-0 w-full flex-col rounded-t-2xl bg-white sm:rounded-2xl"
@@ -1606,7 +1902,7 @@ export default function OrderAgentModal({
                 {activeOffer.product.name} · {chain}
               </p>
             </div>
-            <button onClick={onClose} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100" aria-label={t("Đóng")}>
+            <button onClick={handleCloseModal} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100" aria-label={t("Đóng")}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M18 6 6 18M6 6l12 12" />
               </svg>
@@ -2055,7 +2351,7 @@ export default function OrderAgentModal({
                   </div>
                   <h3 className="mt-3 text-lg font-bold text-slate-900">{t("Đặt hàng Co.op thành công")}</h3>
                   <p className="mt-1 text-sm text-slate-600">{orderCode}</p>
-                  <button onClick={onClose} className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                  <button onClick={handleCloseModal} className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
                     {t("Xong")}
                   </button>
                 </div>
@@ -2178,6 +2474,7 @@ export default function OrderAgentModal({
   return (
     <div
       className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
+      onClick={handleCloseModal}
     >
       <div
         className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
@@ -2199,7 +2496,7 @@ export default function OrderAgentModal({
             </p>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100"
             aria-label={t("Đóng")}
           >
@@ -2210,17 +2507,23 @@ export default function OrderAgentModal({
         </div>
 
         <div className="overflow-y-auto px-4 py-4">
+          {/* Banner: trợ lý thật, có human-gated checkpoints */}
           {/* Banner: bản mô phỏng */}
           <div
             className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+              isTXNNReal
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800" :
               isCoopReal
                 ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                 : "border-amber-200 bg-amber-50 text-amber-800"
             }`}
           >
-            {isCoopReal
-              ? t("Co.op đang dùng luồng thật: dùng token cache hoặc đăng nhập bằng mật khẩu, rồi thêm sản phẩm vào giỏ Co.op.")
-              : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
+            {
+              isTXNNReal
+                ? "🤝 " + t("Trợ lý đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
+                : isCoopReal
+                  ? t("Co.op đang dùng luồng thật: dùng token cache hoặc đăng nhập bằng mật khẩu, rồi thêm sản phẩm vào giỏ Co.op.")
+                  : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
           </div>
 
           {/* PHASE 1: form thông tin cần có */}
@@ -2448,13 +2751,13 @@ export default function OrderAgentModal({
               <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">{t("Thanh toán")}</span>
-                  <span className="font-semibold text-slate-800">
-                    {isCoopReal ? t("Chọn ở bước checkout") : (isBHXReal ? t("Chuyển khoản") : t("COD (tiền mặt khi nhận)"))}
-                  </span>
+                  <span className="font-semibold text-slate-800">{paymentLabel}</span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  {isCoopReal
-                    ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
+                  {usesQrPayment
+                    ? t("Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý.")
+                    : isCoopReal
+                      ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
                     : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
                 </p>
               </div>
@@ -2475,7 +2778,16 @@ export default function OrderAgentModal({
                 <span className="text-sm text-slate-500">{t("Tạm tính")}</span>
                 <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
               </div>
-
+              {isTXNNReal && (
+                <button
+                  disabled={!canStart}
+                  onClick={createSession}
+                  className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {submitting ? t("Đang tạo phiên đặt hàng…") : t("Để trợ lý đặt giúp →")}
+              </button>)
+              }
+              {isCoopReal && ( 
               <button
                 disabled={!canStart || coopBusy}
                 onClick={() => {
@@ -2502,7 +2814,7 @@ export default function OrderAgentModal({
                   : isCoopReal
                     ? t("Đăng nhập Co.op và thêm vào giỏ →")
                     : t("Để trợ lý đặt giúp →")}
-              </button>
+              </button>)}
               {!canStart && (
                 <p className="text-center text-xs text-slate-400">
                   {isCoopReal
@@ -2697,9 +3009,9 @@ export default function OrderAgentModal({
           {phase === "running" && !isCoopReal && !isBHXReal && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
-                {steps.slice(0, stepIndex + 1).map((s, i) => {
-                  const isCurrent = i === stepIndex;
-                  const done = i < stepIndex;
+                {visibleSteps.map((s, i) => {
+                  const isCurrent = i === currentStepIndex;
+                  const done = i < currentStepIndex;
                   return (
                     <li key={i} className="flex items-start gap-2.5">
                       <span className="mt-0.5 shrink-0">
@@ -2724,7 +3036,13 @@ export default function OrderAgentModal({
                         {isCurrent && s.kind === "login" && (
                           <PauseBox tone="blue" hint={t("🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
                             <button
-                              onClick={() => setStepIndex((x) => x + 1)}
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "login_completed" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
                               className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
                             >
                               {t("Tôi đã đăng nhập xong →")}
@@ -2734,13 +3052,12 @@ export default function OrderAgentModal({
 
                         {isCurrent && s.kind === "otp" && (
                           <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
-                            {/* "Tin nhắn" OTP mô phỏng: hiện mã để bạn nhập thử (bản demo, không phải SMS thật). */}
-                            {!simOtp ? (
+                            {!usesServerTimeline && !simOtp ? (
                               <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
                                 <Spinner />
                                 {t("Đang chờ {chain} gửi mã…", { chain })}
                               </div>
-                            ) : (
+                            ) : !usesServerTimeline && simOtp ? (
                               <div className="mb-2 rounded-lg border border-blue-200 bg-white px-2.5 py-2">
                                 <p className="text-[11px] text-slate-500">
                                   💬 {t("Tin nhắn mô phỏng từ {chain}", { chain })}
@@ -2761,12 +3078,16 @@ export default function OrderAgentModal({
                                   </button>
                                 </div>
                               </div>
+                            ) : (
+                              <div className="mb-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                {t("Nhập OTP thật bạn vừa nhận được rồi bấm Gửi để worker tiếp tục.")}
+                              </div>
                             )}
                             <div className="flex gap-2">
                               <input
                                 value={otp}
                                 onChange={(e) => {
-                                  setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                                  setOtp(e.target.value.replace(/\D/g, "").slice(0, 8));
                                   setOtpError(false);
                                 }}
                                 inputMode="numeric"
@@ -2775,14 +3096,19 @@ export default function OrderAgentModal({
                                 autoFocus
                               />
                               <button
-                                disabled={otp.length < 4 || !simOtp}
+                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp)}
                                 onClick={() => {
-                                  if (otp !== simOtp) {
+                                  if (!usesServerTimeline && otp !== simOtp) {
                                     setOtpError(true);
                                     return;
                                   }
+                                  const submittedOtp = otp;
                                   setOtp("");
                                   setOtpError(false);
+                                  if (usesServerTimeline) {
+                                    void sendSessionEvent({ type: "otp_submitted", otp: submittedOtp });
+                                    return;
+                                  }
                                   setSimOtp("");
                                   setStepIndex((x) => x + 1);
                                 }}
@@ -2791,7 +3117,7 @@ export default function OrderAgentModal({
                                 {t("Gửi")}
                               </button>
                             </div>
-                            {otpError && (
+                            {otpError && !usesServerTimeline && (
                               <p className="mt-1.5 text-xs font-medium text-rose-600">
                                 {t("Mã chưa đúng — nhập đúng {otp} (hoặc bấm “Điền giúp”).", { otp: simOtp })}
                               </p>
@@ -2802,7 +3128,13 @@ export default function OrderAgentModal({
                         {isCurrent && s.kind === "captcha" && (
                           <PauseBox tone="amber" hint={t("🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
                             <button
-                              onClick={() => setStepIndex((x) => x + 1)}
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "captcha_completed" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
                               className="flex w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-left text-sm hover:bg-slate-50"
                             >
                               <span className="flex h-5 w-5 items-center justify-center rounded border-2 border-slate-400 text-emerald-600">
@@ -2813,19 +3145,128 @@ export default function OrderAgentModal({
                           </PauseBox>
                         )}
 
+                        {isCurrent && s.kind === "qr" && (
+                          <PauseBox tone="amber" hint={t("💳 Worker đang cast popup thanh toán thật để bạn thao tác trực tiếp. Nếu popup không hiện đúng, vẫn có thể mở trang nguồn hoặc dùng fallback xác nhận thủ công.")}>
+                            <div className="mb-2 space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                              <p className="text-sm font-semibold text-slate-700">{t("Thông tin đặt hàng")}</p>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="block text-xs font-medium text-slate-500">
+                                  {t("Tên người đặt")}
+                                  <input value={name} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
+                                </label>
+                                <label className="block text-xs font-medium text-slate-500">
+                                  {t("Số điện thoại")}
+                                  <input value={phone} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
+                                </label>
+                              </div>
+                              <p className="text-[11px] text-slate-400">
+                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
+                              </p>
+                            </div>
+
+                            {serverState?.popupFrameAvailable && serverState.popup && sessionId ? (
+                              <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                                <div className="mb-2 flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-800">
+                                      {serverState.popup.title || t("Popup thanh toán thật")}
+                                    </p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {t("Click trực tiếp vào ảnh popup bên dưới để bấm các nút như Xác nhận / Đóng trên website thật.")}
+                                    </p>
+                                  </div>
+                                  <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                    popup-focus
+                                  </span>
+                                </div>
+                                <img
+                                  src={popupFrameSrc || undefined}
+                                  alt={serverState.popup.title || t("Popup thanh toán")}
+                                  className={`mx-auto max-h-[26rem] w-auto rounded-lg border border-slate-200 bg-white ${popupViewerOpen ? "cursor-zoom-in opacity-75" : "cursor-crosshair"}`}
+                                  onClick={handlePopupFrameClick}
+                                />
+                                <div className="mt-2 space-y-1">
+                                  {serverState.popup.text && (
+                                    <p className="rounded-lg bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
+                                      {serverState.popup.text}
+                                    </p>
+                                  )}
+                                  {serverState.popup.actions.length > 0 && (
+                                    <p className="text-[11px] text-slate-500">
+                                      {t("Nút phát hiện trong popup")}: {serverState.popup.actions.join(" · ")}
+                                    </p>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setPopupViewerOpen(true)}
+                                    className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                  >
+                                    {t("Mở popup lớn để thao tác")}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : serverState?.qrCodeAvailable && sessionId ? (
+                              <div className="rounded-lg bg-white p-3">
+                                <img
+                                  src={`/api/order-sessions/${sessionId}/qrcode?ts=${encodeURIComponent(serverState.updatedAt)}`}
+                                  alt={t("Mã QR thanh toán")}
+                                  className="mx-auto max-h-72 w-auto rounded-lg border border-slate-200 bg-white"
+                                />
+                                <p className="mt-2 text-center text-xs text-slate-500">
+                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.")}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800">
+                                {t("Chưa lấy được popup-focus frame từ worker. Bạn có thể mở trang nguồn để thanh toán thủ công rồi quay lại báo hoàn tất.")}
+                              </div>
+                            )}
+
+                            <div className="mt-2 space-y-2">
+                              <button
+                                onClick={() => void submitPaymentConfirmed()}
+                                disabled={paymentConfirmBusy}
+                                className="w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                              >
+                                {paymentConfirmBusy
+                                  ? t("Đang kiểm tra thanh toán...")
+                                  : serverState?.popupFrameAvailable
+                                    ? t("Popup chưa tự đóng? Báo đã thanh toán xong")
+                                    : t("Tôi đã thanh toán xong")}
+                              </button>
+                              <a
+                                href={serverState?.handoffUrl || activeOffer.productUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                {t("Mở trang nguồn")}
+                              </a>
+                            </div>
+                          </PauseBox>
+                        )}
+
                         {isCurrent && s.kind === "confirm" && (
                           <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}>
                             <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
+                              <Row k={t("Tên người đặt")} v={name} />
+                              <Row k={t("Số điện thoại")} v={phone} />
                               <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
                               <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
                               <Row k={t("Giao tới")} v={address} />
                               {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
                               {cfg.needSlot && !isCoopReal && <Row k={t("Khung giờ")} v={t(slot)} />}
-                              <Row k={t("Thanh toán")} v="COD" />
+                              <Row k={t("Thanh toán")} v={paymentLabel} />
                               <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
                             </div>
                             <button
-                              onClick={() => setStepIndex((x) => x + 1)}
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "confirm_final_action" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
                               className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
                             >
                               {t("Xác nhận đặt hàng")}
@@ -3034,7 +3475,7 @@ export default function OrderAgentModal({
               )}
 
               <button
-                onClick={onClose}
+                onClick={handleCloseModal}
                 className="mt-3 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
               >
                 {t("Xong")}
@@ -3043,6 +3484,105 @@ export default function OrderAgentModal({
           )}
         </div>
       </div>
+
+      {popupViewerOpen && serverState?.popup && popupFrameSrc && (
+        <div
+          className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/75 p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={serverState.popup.title || t("Popup thanh toán")}
+          onClick={() => setPopupViewerOpen(false)}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-emerald-300">
+                  {serverState.popup.title || t("Popup thanh toán thật")}
+                </p>
+                <p className="mt-1 text-xs text-white/70">
+                  {t("Ảnh bên dưới là vùng popup đang được worker cast ra. Click trực tiếp để thao tác trên website thật.")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                  popup-focus
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPopupViewerOpen(false)}
+                  className="rounded-full p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white"
+                  aria-label={t("Đóng popup lớn")}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-5 sm:py-4">
+              <div className="flex min-h-full flex-col gap-4 lg:flex-row">
+                <div className="flex min-h-[320px] flex-1 items-center justify-center rounded-2xl border border-white/10 bg-black/20 p-2 sm:p-4">
+                  <img
+                    src={popupFrameSrc}
+                    alt={serverState.popup.title || t("Popup thanh toán")}
+                    className="max-h-[78vh] w-auto max-w-full cursor-crosshair rounded-xl border border-slate-700 bg-white object-contain"
+                    onClick={handlePopupFrameClick}
+                  />
+                </div>
+
+                <div className="w-full shrink-0 space-y-3 lg:w-80">
+                  {serverState.popup.text && (
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/85">
+                      {serverState.popup.text}
+                    </div>
+                  )}
+
+                  {serverState.popup.actions.length > 0 && (
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70">
+                      <p className="font-semibold text-white/85">{t("Nút phát hiện trong popup")}</p>
+                      <p className="mt-1 leading-relaxed">{serverState.popup.actions.join(" · ")}</p>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+                    {t("Mẹo: popup này đã được phóng to, nhưng click vẫn map theo đúng tỷ lệ về popup thật trên website nguồn.")}
+                  </div>
+
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => void submitPaymentConfirmed()}
+                      disabled={paymentConfirmBusy}
+                      className="w-full rounded-lg bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
+                    >
+                      {paymentConfirmBusy ? t("Đang kiểm tra thanh toán...") : t("Tôi đã thanh toán xong")}
+                    </button>
+                    <a
+                      href={serverState.handoffUrl || activeOffer.productUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-white/10"
+                    >
+                      {t("Mở trang nguồn")}
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setPopupViewerOpen(false)}
+                      className="w-full rounded-lg border border-white/15 bg-transparent px-3 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
+                    >
+                      {t("Thu nhỏ về modal chính")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* tiện ích style cho input/select/textarea dùng chung */}
       <style jsx global>{`

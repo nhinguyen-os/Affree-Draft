@@ -23,9 +23,11 @@ export type OrderRequiredInput =
 
 export type OrderSessionEvent =
   | { type: "otp_submitted"; otp: string }
+  | { type: "login_completed" }
   | { type: "captcha_completed" }
   | { type: "confirm_final_action" }
   | { type: "payment_submitted" }
+  | { type: "popup_click"; xRatio: number; yRatio: number }
   | { type: "choose_handoff" }
   | { type: "cancel" };
 
@@ -57,6 +59,24 @@ export interface OrderSessionTimelineEntry {
   message: string;
 }
 
+export interface OrderSessionPopupBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface OrderSessionPopupState {
+  open: boolean;
+  mode: "popup-focus";
+  kind: string;
+  title?: string;
+  text?: string;
+  actions: string[];
+  bounds: OrderSessionPopupBounds;
+  updatedAt: string;
+}
+
 export interface PublicOrderSessionState {
   id: string;
   provider: OrderProviderKey;
@@ -72,6 +92,8 @@ export interface PublicOrderSessionState {
   expiresAt: string;
   timeline: OrderSessionTimelineEntry[];
   qrCodeAvailable: boolean;
+  popup?: OrderSessionPopupState;
+  popupFrameAvailable: boolean;
 }
 
 export interface OrderSessionPrivateState {
@@ -98,6 +120,9 @@ export interface OrderSessionPrivateState {
   private: {
     qrImageBase64?: string;
     qrContentType?: string;
+    popupState?: OrderSessionPopupState;
+    popupFrameBase64?: string;
+    popupFrameContentType?: string;
     lastOtp?: string;
   };
 }
