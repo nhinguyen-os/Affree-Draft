@@ -10,6 +10,7 @@ const PLAYBOOKS = {
   coop: require("./cooponline"),
   cooponline: require("./cooponline"),
   tuoixanhnhanhngon: require("./tuoixanhnhanhngon"),
+  bhx: require("./bachhoaxanh"),
 };
 
 /**
@@ -18,14 +19,14 @@ const PLAYBOOKS = {
  * trả về { done: false } nếu chỉ bootstrap và cần AI tiếp.
  * Trả về null nếu không có playbook nào phù hợp.
  */
-async function runPlaybook(page, payload, sendLog, sendStatus) {
+async function runPlaybook(page, payload, sendLog, sendStatus, sendMessage = null) {
   const { chain, url } = payload;
 
   // 1. Tìm theo chain key trước
   if (chain && PLAYBOOKS[chain.toLowerCase()]) {
     const pb = PLAYBOOKS[chain.toLowerCase()];
     sendLog(`Tìm thấy Playbook cho chuỗi: ${chain.toUpperCase()}`, "info");
-    return pb.run(page, payload, sendLog, sendStatus);
+    return pb.run(page, payload, sendLog, sendStatus, sendMessage);
   }
 
   // 2. Tìm theo domain của URL
