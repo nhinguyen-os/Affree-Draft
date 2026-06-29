@@ -703,7 +703,6 @@ export default function OrderAgentModal({
             setBhxBusy(false);
           }
         } else if (message.type === 'popup_delivery_time' && message.content) {
-            console.log("Received HTML content from BHX agent:", message.content);
             setBhxDeliveryHtml(message.content);
         } else if (message.type === 'order_success' && message.content) {
             setBhxBusy(false);
