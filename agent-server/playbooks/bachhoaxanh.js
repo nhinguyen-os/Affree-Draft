@@ -255,7 +255,7 @@ async function login(page, payload, sendLog, sendMessage) {
       const element = await page.locator(selector).first();
       await waitForVisible(element, 10000);
       if (await element.isVisible({ timeout: 3000 })) {
-        // await element.click({ timeout: 5000 });
+        await element.click({ timeout: 5000 });
         sendLog(`Bach Hoa Xanh: Đã click nút "${selector}"`, "success");
 
         sendMessage(`Vui lòng nhập mã OTP đã nhận được qua số điện thoại ${buyerPhone}`, 'input_otp')
