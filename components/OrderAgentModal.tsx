@@ -679,6 +679,7 @@ export default function OrderAgentModal({
 
   const usesQrPayment =
     isTXNNReal ||
+    isBHXReal ||
     steps.some((item) => item.kind === "qr") ||
     serverState?.status === "waiting_for_qr_payment" ||
     serverState?.status === "verifying_payment";
@@ -983,10 +984,7 @@ export default function OrderAgentModal({
           width?: number;
           height?: number;
         };
-        if (message.type === "ready") {
-          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
-          sendBHXOrderRequest();
-        } else if (message.type === "screencast" && message.data) {
+        if (message.type === "screencast" && message.data) {
           if (bhxShowScreencastRef.current) {
             setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
             if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
@@ -994,7 +992,10 @@ export default function OrderAgentModal({
         } else if (message.type === "message" && message.content) {
           setBhxMessages((logs) => [...logs, { message: message.content || "", status: 'success' }]);
         } else if (message.type === "status") {
-          if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
+          if (message.phase === 'ready') {
+            setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
+            sendBHXOrderRequest();
+          } else if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
             setBhxBusy(false);
           }
         } else if (message.type === 'popup_delivery_time' && message.content) {
@@ -2730,7 +2731,7 @@ export default function OrderAgentModal({
                   </div>
                 </Field>
 
-                {cfg.needSlot && !isCoopReal && (
+                {cfg.needSlot && !isCoopReal && !isBHXReal && (
                   <Field label={t("Khung giờ giao")}>
                     <select
                       value={slot}
