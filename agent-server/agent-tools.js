@@ -257,41 +257,7 @@ const TOOLS = [
     },
   },
 ];
-    description:
-      "TERMINAL ACTION: Tạm dừng và yêu cầu người dùng can thiệp thủ công. " +
-      "Dùng khi: (1) cần nhập mã OTP, (2) giải CAPTCHA, (3) chọn địa chỉ dropdown đa tầng phức tạp, " +
-      "(4) cần chọn phương thức thanh toán không phải COD, (5) tất cả thông tin đã điền xong và cần review trước khi đặt. " +
-      "KHÔNG tự click nút Đặt hàng/Xác nhận cuối cùng — đây là bước cần người dùng duyệt.",
-    parameters: {
-      type: "object",
-      properties: {
-        reason: {
-          type: "string",
-          enum: ["otp", "captcha", "address", "payment", "review", "stuck", "other"],
-          description: "Loại can thiệp cần từ người dùng",
-        },
-        message: {
-          type: "string",
-          description: "Hướng dẫn cụ thể cho người dùng cần làm gì",
-        },
-      },
-      required: ["reason", "message"],
-    },
-  },
-  {
-    name: "complete_success",
-    description:
-      "TERMINAL ACTION: Báo cáo đặt hàng thành công. " +
-      "Chỉ gọi khi đã thấy màn hình xác nhận đơn hàng (thank-you page, mã đơn hàng hiển thị rõ ràng).",
-    parameters: {
-      type: "object",
-      properties: {
-        orderId: { type: "string", description: "Mã đơn hàng nếu hiển thị trên trang" },
-        message: { type: "string", description: "Mô tả ngắn trạng thái thành công" },
-      },
-    },
-  },
-];
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FORMAT CONVERTERS — chuyển đổi TOOLS sang format của từng LLM API
