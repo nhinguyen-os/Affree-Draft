@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHmac } from "node:crypto";
 
 import WebSocket from "ws";
 
@@ -41,7 +41,8 @@ function sendJson(socket: WebSocket, payload: unknown, onError?: (message: strin
   }
 }
 
-const AGENT_SERVER_URL = process.env.ORDER_AGENT_SERVER_URL || "ws://127.0.0.1:8080";
+const AGENT_SERVER_URL = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || process.env.ORDER_AGENT_SERVER_URL || "ws://127.0.0.1:8080";
+const AGENT_SERVER_SECRET_TOKEN = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_SECRET_TOKEN || process.env.ORDER_AGENT_SERVER_SECRET_TOKEN || "";
 const ENABLE_REAL_AGENT_SERVER = process.env.ORDER_AGENT_SERVER_DISABLED !== "true";
 
 function inferRequiredInput(text?: string): OrderRequiredInput | undefined {
@@ -236,7 +237,16 @@ class AgentServerBridgeClient implements OrderWorkerClient {
     }
 
     try {
-      const socket = new WebSocket(AGENT_SERVER_URL);
+      const timestamp = Date.now().toString();
+      const separator = AGENT_SERVER_URL.includes("?") ? "&" : "?";
+      let urlWithSession = `${AGENT_SERVER_URL}${separator}sessionId=${sessionId}`;
+      if (AGENT_SERVER_SECRET_TOKEN) {
+        const hmac = createHmac("sha256", AGENT_SERVER_SECRET_TOKEN);
+        hmac.update(`${sessionId}:${timestamp}`);
+        const token = hmac.digest("hex");
+        urlWithSession += `&timestamp=${timestamp}&token=${token}`;
+      }
+      const socket = new WebSocket(urlWithSession);
       const connection: WorkerConnection = { sessionId, socket };
       this.connections.set(sessionId, connection);
 
@@ -244,7 +254,7 @@ class AgentServerBridgeClient implements OrderWorkerClient {
         status: "running",
         step: "connect_agent_server",
         progress: 5,
-        message: `Đang kết nối agent-server tại ${AGENT_SERVER_URL}`,
+        message: `Đang kết nối agent-server tại ${urlWithSession.replace(/token=[^&]+/, "token=***")}`,
       });
 
       socket.on("open", () => {

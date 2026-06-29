@@ -9,6 +9,7 @@ const OAUTH_TOKEN_URL = "https://oauth-saigoncoop.oauth.teko.vn/oauth/token";
 const CART_API_URL = "https://carts-consumer.tekoapis.com/api/v2/carts";
 const CART_ITEMS_API_URL = "https://carts-consumer.tekoapis.com/api/v2/carts/items";
 const USER_API_URL = "https://users.tekoapis.com";
+const PAYMENT_BFF_API_URL = "https://payment-consumer-bff.tekoapis.com";
 const COOP_LOG_PATH = path.join(process.cwd(), "logs", "coop-api.log");
 const COOP_TOKEN_CACHE_PATH = path.join(process.cwd(), ".coop_token_cache.json");
 const coopFetchTimeoutMs = Number(process.env.COOP_FETCH_TIMEOUT_MS || 15000);
@@ -203,12 +204,19 @@ export type CoopPaymentCheck = {
   codAvailable: boolean;
   codSelected: boolean;
   methods: Array<{
+    icon?: string;
     methodCode?: string;
     methodGroupCode?: string;
+    merchantCode?: string;
     merchantMethodCode?: string;
+    paymentTerminalCode?: string;
     name?: string;
+    description?: string;
     isSelected?: boolean;
     isDisabled?: boolean;
+    warning?: unknown;
+    amount?: number | null;
+    maxTransactionAmount?: number;
     paymentMethodType?: string;
   }>;
   message: string;
@@ -229,9 +237,17 @@ export type CoopDeliveryInfo = {
   provinceName?: string;
   fullAddress?: string;
   siteId?: number;
+  latitude?: string;
+  longitude?: string;
   scheduledDeliveryDate?: string;
   scheduledDeliveryTimeSlotFrom?: string;
   scheduledDeliveryTimeSlotTo?: string;
+};
+
+type CoopScheduleSelection = {
+  scheduledDeliveryDate: string;
+  scheduledDeliveryTimeSlotFrom: string;
+  scheduledDeliveryTimeSlotTo: string;
 };
 
 export type CoopAddressSyncInfo = {
@@ -269,6 +285,7 @@ type CoopProfileAddress = {
 
 type CoopProfile = {
   id?: string;
+  userId?: string;
   name?: string;
   email?: string;
   telephone?: string;
@@ -282,6 +299,8 @@ export type CoopCheckoutOrderResult = {
   grandTotal?: number;
   totalPaid?: number;
   paymentMethodCode?: string;
+  paymentUrl?: string;
+  paymentRaw?: unknown;
   raw: unknown;
 };
 
@@ -382,6 +401,7 @@ function coopServiceName(value: string) {
     if (host.includes("identity.tekoapis.com")) return "Co.op IAM";
     if (host.includes("oauth-saigoncoop.oauth.teko.vn")) return "Co.op OAuth";
     if (host.includes("carts-consumer.tekoapis.com")) return "Co.op Cart";
+    if (host.includes("payment-consumer-bff.tekoapis.com")) return "Co.op Payment";
     if (host.includes("users.tekoapis.com")) return "Co.op User";
     if (host.includes("cooponline.vn")) return "Co.op Online";
     return host;
@@ -717,6 +737,14 @@ async function setCoopDefaultAddress(input: { accessToken: string; address: Coop
   return parseJsonResponse(res, { method: "PATCH", request: payload });
 }
 
+// Toạ độ Co.op hợp lệ: chuỗi số hữu hạn và KHÁC 0 ("0"/""/undefined → "" để bỏ qua,
+// tránh giữ lại toạ độ rác đã lưu trong tài khoản).
+function validCoopCoord(value?: string): string {
+  if (!value) return "";
+  const n = Number(value);
+  return Number.isFinite(n) && n !== 0 ? String(n) : "";
+}
+
 function buildCoopAddressPayload(input: {
   profile: CoopProfile;
   fallback?: CoopDeliveryInfo;
@@ -741,8 +769,8 @@ function buildCoopAddressPayload(input: {
     districtName: districtName || inferredCodes?.districtName,
     wardName: wardName || inferredCodes?.wardName,
     isDefault: true,
-    longitude: current?.longitude ?? "",
-    latitude: current?.latitude ?? "",
+    longitude: validCoopCoord(input.fallback?.longitude) || validCoopCoord(current?.longitude) || "",
+    latitude: validCoopCoord(input.fallback?.latitude) || validCoopCoord(current?.latitude) || "",
   };
 }
 
@@ -969,6 +997,15 @@ function cartHeaders(accessToken: string, cartToken?: string): HeadersInit {
   };
 }
 
+function paymentHeaders(accessToken: string): HeadersInit {
+  return {
+    ...browserHeaders(),
+    authorization: `Bearer ${accessToken}`,
+    "accept-language": "vi",
+    "content-type": "application/json",
+  };
+}
+
 function readCartToken(res: Response, fallback?: string) {
   return res.headers.get("x-cart-token") || res.headers.get("X-Cart-Token") || fallback || "";
 }
@@ -1149,12 +1186,19 @@ function parsePaymentCheck(cart: unknown): CoopPaymentCheck {
   const root = cart as { data?: Record<string, unknown> };
   const data = (root?.data ?? root) as {
     paymentMethods?: Array<{
+      icon?: string;
       methodCode?: string;
       methodGroupCode?: string;
+      merchantCode?: string;
       merchantMethodCode?: string;
+      paymentTerminalCode?: string;
       name?: string;
+      description?: string;
       isSelected?: boolean;
       isDisabled?: boolean;
+      warning?: unknown;
+      amount?: number | null;
+      maxTransactionAmount?: number;
       paymentMethodType?: string;
     }>;
   };
@@ -1167,12 +1211,19 @@ function parsePaymentCheck(cart: unknown): CoopPaymentCheck {
     codAvailable: Boolean(cod && !cod.isDisabled),
     codSelected: Boolean(cod?.isSelected),
     methods: methods.map((item) => ({
+      icon: item.icon,
       methodCode: item.methodCode,
       methodGroupCode: item.methodGroupCode,
+      merchantCode: item.merchantCode,
       merchantMethodCode: item.merchantMethodCode,
+      paymentTerminalCode: item.paymentTerminalCode,
       name: item.name,
+      description: item.description,
       isSelected: item.isSelected,
       isDisabled: item.isDisabled,
+      warning: item.warning,
+      amount: item.amount,
+      maxTransactionAmount: item.maxTransactionAmount,
       paymentMethodType: item.paymentMethodType,
     })),
     message: selected
@@ -1211,9 +1262,39 @@ function readConfirmationData(cart: unknown) {
     deliveryInfo?: CoopDeliveryInfo;
     customerInfo?: CoopCustomerInfo;
     paymentMethods?: CoopPaymentCheck["methods"];
+    paymentMerchantCode?: string;
+    paymentTerminalCode?: string;
     grandTotalAmount?: number;
     remainingAmount?: number;
     note?: string;
+  };
+}
+
+function withScheduleSelection(cart: unknown, schedule: CoopScheduleSelection): unknown {
+  if (!cart || typeof cart !== "object") return cart;
+  const root = cart as Record<string, unknown>;
+  const hasData = root.data && typeof root.data === "object" && !Array.isArray(root.data);
+  const data = (hasData ? root.data : root) as Record<string, unknown>;
+  const deliveryInfo =
+    data.deliveryInfo && typeof data.deliveryInfo === "object" && !Array.isArray(data.deliveryInfo)
+      ? (data.deliveryInfo as Record<string, unknown>)
+      : {};
+  const nextData = {
+    ...data,
+    deliveryInfo: {
+      ...deliveryInfo,
+      ...schedule,
+    },
+  };
+  return hasData ? { ...root, data: nextData } : nextData;
+}
+
+function withDeliveryCheckSelection(check: CoopDeliveryCheck, schedule: CoopScheduleSelection): CoopDeliveryCheck {
+  return {
+    ...check,
+    selectedDate: toCoopIsoDate(schedule.scheduledDeliveryDate),
+    selectedSlotFrom: schedule.scheduledDeliveryTimeSlotFrom,
+    selectedSlotTo: schedule.scheduledDeliveryTimeSlotTo,
   };
 }
 
@@ -1274,6 +1355,7 @@ export async function prepareCoopCheckout(input: {
   deliveryDate: string;
   slotFrom: string;
   slotTo: string;
+  paymentMethodCode?: string;
 }) {
   const confirmation = await getCoopConfirmationCart({
     accessToken: input.accessToken,
@@ -1289,40 +1371,89 @@ export async function prepareCoopCheckout(input: {
     });
   }
 
+  const locationCode = existingDelivery.wardId || undefined;
   const scheduledDeliveryDate = `${input.deliveryDate}T00:00:00+07:00`;
-  const delivery = await updateCoopDeliveryInfo({
+  const selectedSchedule: CoopScheduleSelection = {
+    scheduledDeliveryDate,
+    scheduledDeliveryTimeSlotFrom: input.slotFrom,
+    scheduledDeliveryTimeSlotTo: input.slotTo,
+  };
+
+  // Co.op tính khung giờ theo địa bàn → đọc confirmation kèm location (wardCode) để lấy
+  // slot THẬT cho khu vực này (per-date timeSlots trong confirmation thường rỗng nếu thiếu location).
+  const located = await getCoopConfirmationCart({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: confirmation.cartToken,
+    locationCode,
+  });
+  const realSlots = located.deliveryCheck.availableTimeSlots ?? [];
+  const matchedReal = realSlots.find((s) => s.from === input.slotFrom && s.to === input.slotTo && !s.disabled);
+  if (!realSlots.length) {
+    throw new CoopOrderError(
+      "Co.op chưa mở khung giờ giao cho địa chỉ/kho này nên không đặt được lịch. Vui lòng kiểm tra lại địa chỉ (cần định vị đúng), đổi kho Co.op gần hơn, hoặc thử lại sau.",
+      {
+        status: 409,
+        code: "COOP_DELIVERY_SLOT_REJECTED",
+        detail: {
+          requestedDate: input.deliveryDate,
+          requestedSlot: { from: input.slotFrom, to: input.slotTo },
+          deliveryCheck: located.deliveryCheck,
+        },
+      },
+    );
+  }
+  if (!matchedReal) {
+    throw new CoopOrderError("Khung giờ này hiện không khả dụng cho địa chỉ/kho Co.op đang chọn. Vui lòng chọn khung giờ khác.", {
+      status: 409,
+      code: "COOP_DELIVERY_SLOT_UNAVAILABLE",
+      detail: {
+        requestedDate: input.deliveryDate,
+        requestedSlot: { from: input.slotFrom, to: input.slotTo },
+        deliveryCheck: located.deliveryCheck,
+      },
+    });
+  }
+
+  const delivery = await updateCoopDeliveryInfo({
+    accessToken: input.accessToken,
+    terminalCode: input.terminalCode,
+    cartToken: located.cartToken,
     deliveryInfo: {
       ...existingDelivery,
-      scheduledDeliveryDate,
-      scheduledDeliveryTimeSlotFrom: input.slotFrom,
-      scheduledDeliveryTimeSlotTo: input.slotTo,
+      ...selectedSchedule,
     },
   });
+
   const payment = await applyCoopPaymentMethod({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: delivery.cartToken,
-    paymentMethodCode: "COD",
+    paymentMethodCode: input.paymentMethodCode || "COD",
   });
   const refreshed = await getCoopConfirmationCart({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: payment.cartToken,
+    locationCode,
   });
+  const confirmationCart = withScheduleSelection(refreshed.data, selectedSchedule);
   return {
     cartToken: refreshed.cartToken,
-    confirmationCart: refreshed.data,
-    deliveryCheck: refreshed.deliveryCheck,
+    confirmationCart,
+    deliveryCheck: withDeliveryCheckSelection(parseDeliveryCheck(confirmationCart), selectedSchedule),
     paymentCheck: refreshed.paymentCheck,
   };
 }
 
-function ensurePreparedCoopOrder(cart: unknown, terminalCode: string) {
+function ensurePreparedCoopOrder(
+  cart: unknown,
+  terminalCode: string,
+  schedule?: CoopScheduleSelection,
+  profile?: CoopProfile,
+) {
   const data = readConfirmationData(cart);
-  const deliveryInfo = data.deliveryInfo;
+  const deliveryInfo = schedule && data.deliveryInfo ? { ...data.deliveryInfo, ...schedule } : data.deliveryInfo;
   if (!deliveryInfo?.name || !deliveryInfo.phone || !deliveryInfo.scheduledDeliveryDate) {
     throw new CoopOrderError("Co.op chưa có đủ thông tin nhận hàng để đặt đơn.", {
       status: 400,
@@ -1338,14 +1469,23 @@ function ensurePreparedCoopOrder(cart: unknown, terminalCode: string) {
     });
   }
   const selectedPayment = data.paymentMethods?.find((item) => item.isSelected);
-  if (selectedPayment?.methodCode !== "COD") {
-    throw new CoopOrderError("Vui lòng chọn COD trước khi đặt hàng Co.op.", {
+  if (!selectedPayment?.methodCode) {
+    throw new CoopOrderError("Vui lòng chọn phương thức thanh toán trước khi đặt hàng Co.op.", {
       status: 400,
-      code: "COOP_COD_NOT_SELECTED",
+      code: "COOP_PAYMENT_NOT_SELECTED",
+      detail: { selectedPayment },
+    });
+  }
+  if (selectedPayment.isDisabled) {
+    throw new CoopOrderError("Phương thức thanh toán đang chọn chưa khả dụng cho giỏ Co.op này.", {
+      status: 400,
+      code: "COOP_PAYMENT_DISABLED",
       detail: { selectedPayment },
     });
   }
   const customerInfo = data.customerInfo ?? {};
+  const customerId = customerInfo.id || profile?.userId || profile?.id || "";
+  const profileId = customerInfo.profileId || profile?.id || customerId || undefined;
   return {
     forceCheckoutRemoveInvalidPromotions: false,
     deliveryInfo: {
@@ -1356,11 +1496,11 @@ function ensurePreparedCoopOrder(cart: unknown, terminalCode: string) {
       scheduledDeliveryTimeSlotTo: deliveryInfo.scheduledDeliveryTimeSlotTo,
     },
     customerInfo: {
-      id: customerInfo.id ?? "",
-      profileId: customerInfo.profileId,
-      name: customerInfo.name ?? deliveryInfo.name ?? "",
-      email: customerInfo.email ?? deliveryInfo.email,
-      phone: customerInfo.phone ?? deliveryInfo.phone,
+      id: customerId,
+      profileId,
+      name: customerInfo.name ?? profile?.name ?? deliveryInfo.name ?? "",
+      email: customerInfo.email ?? profile?.email ?? deliveryInfo.email,
+      phone: customerInfo.phone ?? profile?.telephone ?? deliveryInfo.phone,
     },
     note: data.note || undefined,
     channelInfo: {
@@ -1370,17 +1510,177 @@ function ensurePreparedCoopOrder(cart: unknown, terminalCode: string) {
   };
 }
 
+function toNumber(value: unknown, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function genPaymentClientTransactionCode(orderCode: string | undefined, methodGroupCode: string | undefined) {
+  const now = new Date();
+  const input = [
+    orderCode || "COOP",
+    methodGroupCode || "CARD",
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    Math.floor(now.getSeconds() / 2),
+    randomBytes(4).toString("hex"),
+  ].join("|");
+  return createHash("sha256").update(input).digest("hex").slice(0, 18);
+}
+
+function buildCoopPaymentPayload(input: {
+  confirmationCart: unknown;
+  checkoutResult: {
+    code?: string;
+    orderId?: string;
+    id?: string;
+    grandTotal?: unknown;
+    totalPaid?: unknown;
+    payments?: Array<{ amount?: unknown }>;
+  };
+  terminalCode: string;
+}) {
+  const data = readConfirmationData(input.confirmationCart);
+  const selectedPayment = data.paymentMethods?.find((item) => item.isSelected);
+  if (!selectedPayment?.methodCode || selectedPayment.methodCode === "COD") return null;
+  if (selectedPayment.isDisabled) return null;
+
+  const methodGroupCode = selectedPayment.methodGroupCode || "CARD";
+  const groupKey = methodGroupCode.toLowerCase();
+  const orderCode = input.checkoutResult.code || input.checkoutResult.orderId || input.checkoutResult.id;
+  const orderId = input.checkoutResult.orderId || input.checkoutResult.id || input.checkoutResult.code;
+  const grandTotal = toNumber(input.checkoutResult.grandTotal);
+  const totalPaid = toNumber(input.checkoutResult.totalPaid);
+  const previousPayments = (input.checkoutResult.payments ?? []).reduce((sum, item) => sum + toNumber(item.amount), 0);
+  const amount = Math.max(0, grandTotal - totalPaid - previousPayments);
+  if (!orderId || amount <= 0) return null;
+
+  const methodPayment = {
+    ...selectedPayment,
+    amount,
+    type: "URL_REDIRECT",
+    clientTransactionCode: genPaymentClientTransactionCode(orderCode, methodGroupCode),
+    bankCode: selectedPayment.methodCode === "VNPAY_GATEWAY_QR" ? "VNPAYQR" : undefined,
+  };
+  if (!methodPayment.bankCode) delete methodPayment.bankCode;
+
+  return {
+    terminalCode: selectedPayment.paymentTerminalCode || data.paymentTerminalCode || input.terminalCode,
+    successUrl: `${COOP_ORIGIN}/order-result?code=${encodeURIComponent(orderCode || String(orderId))}`,
+    cancelUrl: `${COOP_ORIGIN}/checkout`,
+    isMobile: false,
+    merchantCode: selectedPayment.merchantCode || data.paymentMerchantCode || "",
+    orderId,
+    payments: {
+      [groupKey]: methodPayment,
+    },
+    orderAmount: amount,
+  };
+}
+
+async function createCoopPaymentUrl(input: {
+  accessToken: string;
+  confirmationCart: unknown;
+  checkoutResult: {
+    code?: string;
+    orderId?: string;
+    id?: string;
+    grandTotal?: unknown;
+    totalPaid?: unknown;
+    payments?: Array<{ amount?: unknown }>;
+  };
+  terminalCode: string;
+}) {
+  const payload = buildCoopPaymentPayload({
+    confirmationCart: input.confirmationCart,
+    checkoutResult: input.checkoutResult,
+    terminalCode: input.terminalCode,
+  });
+  if (!payload) return { paymentUrl: undefined, raw: undefined };
+
+  const res = await coopFetch(`${PAYMENT_BFF_API_URL}/api/v1/create-payment`, {
+    method: "POST",
+    headers: paymentHeaders(input.accessToken),
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const data = await parseJsonResponse<{ data?: unknown } | unknown>(res, {
+    method: "POST",
+    request: payload,
+  });
+  const raw = (data as { data?: unknown }).data ?? data;
+  return {
+    paymentUrl: findPaymentUrl(raw),
+    raw,
+  };
+}
+
+function findPaymentUrl(value: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  const visit = (node: unknown): string | undefined => {
+    if (!node || typeof node !== "object") {
+      if (typeof node === "string" && /^https?:\/\/[^"\s]+/i.test(node)) {
+        return /pay\.vnpay\.vn|momo|payment|checkout|transaction/i.test(node) ? node : undefined;
+      }
+      return undefined;
+    }
+    if (seen.has(node)) return undefined;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = visit(item);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const record = node as Record<string, unknown>;
+    const preferredKeys = [
+      "paymentUrl",
+      "payment_url",
+      "redirectUrl",
+      "redirect_url",
+      "checkoutUrl",
+      "checkout_url",
+      "url",
+      "link",
+    ];
+    for (const key of preferredKeys) {
+      const found = visit(record[key]);
+      if (found) return found;
+    }
+    for (const item of Object.values(record)) {
+      const found = visit(item);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(value);
+}
+
 export async function submitCoopCheckout(input: {
   accessToken: string;
   terminalCode: string;
   cartToken: string;
+  deliveryDate?: string;
+  slotFrom?: string;
+  slotTo?: string;
 }) {
+  const profile = await getCoopProfile({ accessToken: input.accessToken }).catch(() => undefined);
   const confirmation = await getCoopConfirmationCart({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: input.cartToken,
   });
-  const order = ensurePreparedCoopOrder(confirmation.data, input.terminalCode);
+  const schedule =
+    input.deliveryDate && input.slotFrom && input.slotTo
+      ? {
+          scheduledDeliveryDate: `${input.deliveryDate}T00:00:00+07:00`,
+          scheduledDeliveryTimeSlotFrom: input.slotFrom,
+          scheduledDeliveryTimeSlotTo: input.slotTo,
+        }
+      : undefined;
+  const order = ensurePreparedCoopOrder(confirmation.data, input.terminalCode, schedule, profile);
   const url = new URL(`${CART_API_URL}/checkout`);
   url.searchParams.set("terminal", input.terminalCode);
   const res = await coopFetch(url, {
@@ -1399,9 +1699,23 @@ export async function submitCoopCheckout(input: {
     orderId?: string;
     id?: string;
     createdAt?: string;
-    grandTotal?: number;
-    totalPaid?: number;
+    grandTotal?: number | string;
+    totalPaid?: number | string;
+    payments?: Array<{ amount?: number | string }>;
+    paymentMethodCode?: string;
   };
+  const paymentCheck = parsePaymentCheck(confirmation.data);
+  const selectedPaymentCode = paymentCheck.selectedMethodCode || result.paymentMethodCode;
+  const checkoutPaymentUrl = findPaymentUrl(raw);
+  const payment =
+    checkoutPaymentUrl || selectedPaymentCode === "COD"
+      ? { paymentUrl: checkoutPaymentUrl, payments: undefined, raw: undefined }
+      : await createCoopPaymentUrl({
+          accessToken: input.accessToken,
+          confirmationCart: confirmation.data,
+          checkoutResult: result,
+          terminalCode: input.terminalCode,
+        });
   return {
     cartToken: readCartToken(res, confirmation.cartToken),
     orderPayload: order,
@@ -1409,9 +1723,11 @@ export async function submitCoopCheckout(input: {
       code: result.code,
       orderId: result.orderId ?? result.id,
       createdAt: result.createdAt,
-      grandTotal: result.grandTotal,
-      totalPaid: result.totalPaid,
-      paymentMethodCode: "COD",
+      grandTotal: toNumber(result.grandTotal),
+      totalPaid: toNumber(result.totalPaid),
+      paymentMethodCode: selectedPaymentCode,
+      paymentUrl: payment.paymentUrl,
+      paymentRaw: payment.raw,
       raw,
     } satisfies CoopCheckoutOrderResult,
   };

@@ -2860,6 +2860,8 @@ export default function Home() {
           lang={lang}
           alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
           geoAddr={userAddr}
+          geoLat={userLoc?.lat}
+          geoLng={userLoc?.lng}
           defaultAddress={userAddr}
           onClose={() => setBuyOffer(null)}
           onPlaced={(code, chosen) => {
