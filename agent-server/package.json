@@ -4,7 +4,9 @@
   "description": "AI Agentic Web Server using Playwright and WebSockets",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:prod": "bash start.sh",
+    "start:local": "bash start-local.sh"
   },
   "dependencies": {
     "playwright": "^1.49.0",

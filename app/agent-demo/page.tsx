@@ -14,7 +14,7 @@ type LogEntry = {
 
 export default function AgentDemoPage() {
   // Trạng thái kết nối
-  const [wsUrl, setWsUrl] = useState("ws://localhost:8080");
+  const [wsUrl, setWsUrl] = useState(process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080");
   const [connStatus, setConnStatus] = useState<"disconnected" | "connecting" | "connected" | "error">("disconnected");
 
   // Trạng thái đơn hàng
@@ -74,72 +74,91 @@ export default function AgentDemoPage() {
       wsRef.current.close();
     }
 
+    const wsSessionId = `demo-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const separator = wsUrl.includes("?") ? "&" : "?";
+
     addLog(`Đang kết nối tới Agent tại: ${wsUrl}...`, "info");
     setConnStatus("connecting");
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    fetch(`/api/agent/token?sessionId=${wsSessionId}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("API token fetch error");
+        return res.json();
+      })
+      .then((data) => {
+        let finalUrl = `${wsUrl}${separator}sessionId=${wsSessionId}`;
+        if (data.token) {
+          finalUrl += `&timestamp=${data.timestamp}&token=${data.token}`;
+        }
+        const ws = new WebSocket(finalUrl);
+        wsRef.current = ws;
 
-    ws.onopen = () => {
-      setConnStatus("connected");
-      addLog("Kết nối thành công tới AI Agent!", "success");
-      setAgentPhase("Đã kết nối. Sẵn sàng nhận lệnh.");
-    };
+        ws.onopen = () => {
+          setConnStatus("connected");
+          addLog("Kết nối thành công tới AI Agentic!", "success");
+          setAgentPhase("Đã kết nối. Sẵn sàng nhận lệnh.");
+        };
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
 
-        if (msg.type === "screencast") {
-          // Vẽ frame lên canvas
+            if (msg.type === "screencast") {
+              // Vẽ frame lên canvas
+              const canvas = canvasRef.current;
+              if (canvas) {
+                const ctx = canvas.getContext("2d");
+                if (ctx) {
+                  const img = new Image();
+                  img.onload = () => {
+                    // Xóa và vẽ lại theo tỷ lệ phù hợp
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  };
+                  img.src = `data:image/jpeg;base64,${msg.data}`;
+                }
+              }
+            } else if (msg.type === "log") {
+              addLog(msg.message, msg.status);
+            } else if (msg.type === "status") {
+              setAgentPhase(msg.phase);
+              if (msg.phase === "completed") {
+                addLog(`ĐẶT HÀNG THÀNH CÔNG! Đơn hàng hoàn tất tại: ${msg.orderUrl || ""}`, "success");
+              } else if (msg.phase === "failed") {
+                addLog(`ĐẶT HÀNG THẤT BẠI: ${msg.error || ""}`, "error");
+              } else if (msg.phase === "waiting_user_input") {
+                addLog("Trình duyệt đang chờ bạn tương tác nhập OTP hoặc thanh toán trực tiếp trên màn hình.", "warning");
+              }
+            }
+          } catch (err) {
+            console.error("Lỗi parse dữ liệu từ WebSocket:", err);
+          }
+        };
+
+        ws.onerror = (err) => {
+          setConnStatus("error");
+          addLog("Lỗi kết nối WebSocket. Hãy kiểm tra địa chỉ và đảm bảo server agent đang chạy.", "error");
+          console.error(err);
+        };
+
+        ws.onclose = () => {
+          setConnStatus("disconnected");
+          addLog("Đã ngắt kết nối với AI Agentic.", "warning");
+          setAgentPhase("Đã ngắt kết nối");
+
+          // Xóa màn hình canvas
           const canvas = canvasRef.current;
           if (canvas) {
             const ctx = canvas.getContext("2d");
-            if (ctx) {
-              const img = new Image();
-              img.onload = () => {
-                // Xóa và vẽ lại theo tỷ lệ phù hợp
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              };
-              img.src = `data:image/jpeg;base64,${msg.data}`;
-            }
+            ctx?.clearRect(0, 0, canvas.width, canvas.height);
           }
-        } else if (msg.type === "log") {
-          addLog(msg.message, msg.status);
-        } else if (msg.type === "status") {
-          setAgentPhase(msg.phase);
-          if (msg.phase === "completed") {
-            addLog(`ĐẶT HÀNG THÀNH CÔNG! Đơn hàng hoàn tất tại: ${msg.orderUrl || ""}`, "success");
-          } else if (msg.phase === "failed") {
-            addLog(`ĐẶT HÀNG THẤT BẠI: ${msg.error || ""}`, "error");
-          } else if (msg.phase === "waiting_user_input") {
-            addLog("Trình duyệt đang chờ bạn tương tác nhập OTP hoặc thanh toán trực tiếp trên màn hình.", "warning");
-          }
-        }
-      } catch (err) {
-        console.error("Lỗi parse dữ liệu từ WebSocket:", err);
-      }
-    };
-
-    ws.onerror = (err) => {
-      setConnStatus("error");
-      addLog("Lỗi kết nối WebSocket. Hãy kiểm tra địa chỉ và đảm bảo server agent đang chạy.", "error");
-      console.error(err);
-    };
-
-    ws.onclose = () => {
-      setConnStatus("disconnected");
-      addLog("Đã ngắt kết nối với AI Agent.", "warning");
-      setAgentPhase("Đã ngắt kết nối");
-
-      // Xóa màn hình canvas
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        ctx?.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    };
+        };
+      })
+      .catch((err) => {
+        console.error("Lỗi lấy token xác thực:", err);
+        addLog("Lỗi bảo mật khi mở kết nối trình duyệt Co.op", "error");
+        setConnStatus("error");
+      });
   };
 
   const disconnectAgent = () => {
