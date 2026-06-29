@@ -31,9 +31,8 @@ const TOOLS = [
   {
     name: "dismiss_popups",
     description:
-      "Tự động tìm và đóng tất cả popup/modal/overlay bằng nhiều chiến lược: " +
-      "click nút đóng, nhấn Escape, ẩn overlay bằng DOM manipulation. " +
-      "Gọi ngay khi phát hiện popup cản trở thao tác chính.",
+      "CẢNH BÁO: Hạn chế tối đa dùng tool này. Chỉ dùng khi có popup quảng cáo/thông báo thông thường cản trở mà bạn không thể tự click nút tắt (X, Close) bằng công cụ click. " +
+      "TUYỆT ĐỐI KHÔNG dùng khi gặp popup yêu cầu tương tác (như chọn địa chỉ, đăng nhập, hoặc điền form). Khi gặp popup yêu cầu tương tác, hãy tự click/type trực tiếp lên các phần tử của popup đó.",
     parameters: { type: "object", properties: {}, required: [] },
   },
   {
@@ -462,8 +461,125 @@ async function extractInteractiveElements(page) {
 }
 
 async function dismissPopupsHelper(page) {
-  const count = await page.evaluate(() => {
-    let dismissed = 0;
+  const result = await page.evaluate(() => {
+    // 1. Tìm các popup/modal đang hiển thị
+    const popups = [];
+    const allElements = document.querySelectorAll('*');
+    for (const el of allElements) {
+      try {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 150 && rect.height > 100 && rect.top >= 0 && rect.top < window.innerHeight) {
+          const className = typeof el.className === "string" ? el.className.toLowerCase() : "";
+          const role = el.getAttribute("role") || "";
+          const id = el.id ? el.id.toLowerCase() : "";
+          
+          const isPopupClass = className.includes("modal") || className.includes("popup") || className.includes("dialog") || className.includes("overlay") || className.includes("lightbox");
+          const isPopupRole = role === "dialog" || role === "alertdialog";
+          const isPopupId = id.includes("modal") || id.includes("popup") || id.includes("dialog");
+          
+          if (isPopupClass || isPopupRole || isPopupId) {
+            if (el !== document.body && el !== document.documentElement) {
+              popups.push(el);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    
+    // Hàm kiểm tra nút đóng popup
+    const isCloseElement = (el) => {
+      try {
+        const ariaLabel = el.getAttribute("aria-label") || "";
+        const className = typeof el.className === "string" ? el.className : "";
+        const text = el.textContent || "";
+        const id = el.id || "";
+        
+        const closeRegex = /close|đóng|bỏ qua|dismiss/i;
+        if (closeRegex.test(ariaLabel) || closeRegex.test(id)) return true;
+        if (className.toLowerCase().includes("close") || className.toLowerCase().includes("btn-close")) return true;
+        
+        const tagName = el.tagName.toLowerCase();
+        if ((tagName === "button" || tagName === "a" || el.onclick) && closeRegex.test(text.trim())) {
+          if (text.trim().length <= 15) return true;
+        }
+      } catch (e) {}
+      return false;
+    };
+    
+    // Nếu phát hiện có popup hiển thị
+    if (popups.length > 0) {
+      let hasCloseButton = false;
+      let requireAction = false;
+      const closeButtonsToClick = [];
+      
+      for (const popup of popups) {
+        const children = popup.querySelectorAll('*');
+        let popupCloseButtons = [];
+        let hasInputOrSelect = false;
+        
+        for (const child of children) {
+          try {
+            const r = child.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              const tagName = child.tagName.toLowerCase();
+              if (tagName === "input" || tagName === "select" || (tagName === "button" && !isCloseElement(child) && child.textContent.trim().length > 0)) {
+                hasInputOrSelect = true;
+              }
+              if (isCloseElement(child)) {
+                popupCloseButtons.push(child);
+              }
+            }
+          } catch (e) {}
+        }
+        
+        if (popupCloseButtons.length > 0) {
+          hasCloseButton = true;
+          closeButtonsToClick.push(...popupCloseButtons);
+        } else if (hasInputOrSelect) {
+          requireAction = true;
+        }
+      }
+      
+      // Nếu có popup yêu cầu tương tác và hoàn toàn không có nút đóng
+      if (requireAction && closeButtonsToClick.length === 0) {
+        return {
+          status: "require_action",
+          dismissed: 0,
+          message: "Phát hiện popup yêu cầu tương tác (như điền form/địa chỉ) và không tìm thấy nút đóng khả dụng. AI không được dùng dismiss_popups mà hãy tự tương tác trực tiếp lên popup này."
+        };
+      }
+      
+      // Click nút đóng
+      let clickedCount = 0;
+      closeButtonsToClick.forEach((btn) => {
+        try {
+          btn.click();
+          clickedCount++;
+        } catch (e) {}
+      });
+      
+      if (clickedCount > 0) {
+        // Chỉ ẩn overlay/backdrop sau khi click đóng thành công
+        const overlaySelectors = ["[class*='backdrop']", "[class*='overlay']", "[class*='mask']", ".modal-backdrop"];
+        overlaySelectors.forEach((sel) => {
+          document.querySelectorAll(sel).forEach((el) => {
+            try {
+              const r = el.getBoundingClientRect();
+              if (r.width > 200 && r.height > 200) {
+                el.style.display = "none";
+                el.style.pointerEvents = "none";
+              }
+            } catch (e) {}
+          });
+        });
+        document.body.classList.remove("modal-open", "overflow-hidden", "noscroll");
+        document.documentElement.classList.remove("modal-open", "overflow-hidden");
+        return { status: "success", dismissed: clickedCount };
+      }
+    }
+    
+    // Fallback cách cũ nếu không phát hiện popup rõ ràng nhưng vẫn thử đóng bằng selector đóng chung
+    let dismissedFallback = 0;
     const closeSelectors = [
       'button[aria-label*="close" i]', 'button[aria-label*="đóng" i]',
       'button[aria-label*="bỏ qua" i]', '[aria-label*="dismiss" i]',
@@ -477,24 +593,34 @@ async function dismissPopupsHelper(page) {
         document.querySelectorAll(sel).forEach((el) => {
           const rect = el.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.top < window.innerHeight) {
-            el.click(); dismissed++;
+            el.click(); dismissedFallback++;
           }
         });
       } catch (e) {}
     }
-    // Ẩn overlay cản trở
-    ["[class*='backdrop']", "[class*='overlay']", "[class*='mask']", ".modal-backdrop"].forEach((sel) => {
-      document.querySelectorAll(sel).forEach((el) => {
-        const r = el.getBoundingClientRect();
-        if (r.width > 200 && r.height > 200) { el.style.display = "none"; el.style.pointerEvents = "none"; dismissed++; }
+    
+    if (dismissedFallback > 0) {
+      const overlaySelectors = ["[class*='backdrop']", "[class*='overlay']", "[class*='mask']", ".modal-backdrop"];
+      overlaySelectors.forEach((sel) => {
+        document.querySelectorAll(sel).forEach((el) => {
+          try {
+            const r = el.getBoundingClientRect();
+            if (r.width > 200 && r.height > 200) {
+              el.style.display = "none";
+              el.style.pointerEvents = "none";
+            }
+          } catch (e) {}
+        });
       });
-    });
-    document.body.classList.remove("modal-open", "overflow-hidden", "noscroll");
-    document.documentElement.classList.remove("modal-open", "overflow-hidden");
-    return dismissed;
+      document.body.classList.remove("modal-open", "overflow-hidden", "noscroll");
+      document.documentElement.classList.remove("modal-open", "overflow-hidden");
+    }
+    
+    return { status: dismissedFallback > 0 ? "success" : "none", dismissed: dismissedFallback };
   });
+  
   try { await page.keyboard.press("Escape"); } catch (e) {}
-  return count;
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -540,11 +666,16 @@ async function executeTool(toolName, toolArgs = {}, page, { sendLog } = {}) {
       }
 
       case "dismiss_popups": {
-        const count = await dismissPopupsHelper(page);
+        const result = await dismissPopupsHelper(page);
         await page.waitForTimeout(600);
+        if (result.status === "require_action") {
+          log(`dismiss_popups: ${result.message}`, "warning");
+          return { content: JSON.stringify({ success: false, error: "RequireAction", message: result.message }) };
+        }
+        const count = result.dismissed || 0;
         const msg = count > 0 ? `Đã đóng/ẩn ${count} popup/overlay.` : "Không tìm thấy popup để đóng.";
         log(msg, count > 0 ? "success" : "info");
-        return { content: msg };
+        return { content: JSON.stringify({ success: true, dismissedCount: count, message: msg }) };
       }
 
       case "click": {

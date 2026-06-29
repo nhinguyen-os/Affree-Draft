@@ -207,7 +207,7 @@ async function runAgenticToolUseLoop(page, payload, sendLog, sendStatus, options
     sendLog(`Đang mở: ${payload.url}...`);
     try {
       await page.goto(payload.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(4000);
       sendLog("Đã tải xong trang.", "success");
     } catch (gotoErr) {
       sendLog(`Lỗi điều hướng: ${gotoErr.message}`, "error");
@@ -219,9 +219,9 @@ async function runAgenticToolUseLoop(page, payload, sendLog, sendStatus, options
 
   // Thêm user message khởi đầu hoặc resume
   if (history.length === 0) {
-    history.push({ role: "user", content: `Bắt đầu đặt hàng. Hãy gọi get_dom() để xem trạng thái trang hiện tại trước khi hành động.` });
+    history.push({ role: "user", content: `Bắt đầu đặt hàng. Hãy gọi get_dom() và screenshot() cùng lúc để kiểm tra chi tiết trạng thái trang và xem có popup quảng cáo, popup chọn địa chỉ, overlay hay thông báo nào cản trở không. Nếu có, hãy tắt hoặc xử lý chúng trước.` });
   } else {
-    history.push({ role: "user", content: `Người dùng đã hoàn thành thao tác yêu cầu. Hãy gọi get_dom() để tiếp tục từ trạng thái hiện tại.` });
+    history.push({ role: "user", content: `Người dùng đã hoàn thành thao tác yêu cầu. Hãy gọi get_dom() và screenshot() cùng lúc để kiểm tra trạng thái màn hình hiện tại và tiếp tục.` });
   }
 
   // ── Anti-stuck state ──────────────────────────────────────────────────
@@ -249,11 +249,6 @@ async function runAgenticToolUseLoop(page, payload, sendLog, sendStatus, options
       continue;
     }
 
-    // AI kết thúc không gọi tool nào (hiếm gặp)
-    if (response.done) {
-      sendLog("AI hoàn thành mà không gọi thêm tool nào.", "info");
-      break;
-    }
 
     if (response.text) {
       sendLog(`AI: ${response.text.slice(0, 120)}`, "info");

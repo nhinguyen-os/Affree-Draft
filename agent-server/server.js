@@ -807,7 +807,7 @@ wss.on("connection", async (ws) => {
       let playbookResult = null;
       try {
         sendLog(`[Playbook] Kiểm tra playbook cho chain: ${chain.toUpperCase()}`, "info");
-        playbookResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage);
+        playbookResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
       } catch (playbookErr) {
         sendLog(`[Playbook] Thất bại: ${playbookErr.message} → chuyển sang AI Tool-Use`, "warning");
         playbookResult = null;

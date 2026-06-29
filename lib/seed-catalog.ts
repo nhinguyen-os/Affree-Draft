@@ -35,7 +35,7 @@ export const PRODUCT_IMAGES: Record<string, string> = {
 export const PRODUCTS: Product[] = [
   { id: "milk-vnm-1l", name: "Sữa tươi Vinamilk có đường 1L", brand: "Vinamilk", category: "Sữa", unit: "hộp 1L" },
   { id: "oil-tuongan-1l", name: "Dầu ăn Tường An 1L", brand: "Tường An", category: "Gia vị - Dầu ăn", unit: "chai 1L" },
-  { id: "diaper-bobby-m64", name: "Tã dán Bobby size M 64 miếng", brand: "Bobby", category: "Mẹ & Bé", unit: "gói 64" },
+  { id: "diaper-bobby-m64", name: "Tã dán Bobby size M 76 miếng", brand: "Bobby", category: "Mẹ & Bé", unit: "gói 76" },
   { id: "dish-sunlight-750", name: "Nước rửa chén Sunlight Chanh 750g", brand: "Sunlight", category: "Hóa phẩm", unit: "chai 750g" },
   { id: "rice-st25-5kg", name: "Gạo ST25 túi 5kg", brand: "ST25", category: "Gạo - Mì", unit: "túi 5kg" },
   { id: "formula-friso4-850", name: "Sữa bột Friso Gold 4 850g", brand: "Friso", category: "Mẹ & Bé", unit: "lon 850g" },

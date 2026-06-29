@@ -132,22 +132,25 @@ async function openProductCardByName(page, productName, sendLog) {
   return false;
 }
 
-async function run(page, payload, sendLog) {
+async function run(page, payload, sendLog, sendStatus = null, sendMessage = null, sendScreenshotFrame = null) {
   const { url, productName } = payload;
   sendLog("TXNN: bắt đầu bootstrap provider...");
 
   if (url) {
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1200);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
   }
 
   await closeCommonOverlays(page, sendLog);
   await ensureCatalogMode(page, sendLog);
+  if (sendScreenshotFrame) await sendScreenshotFrame();
 
   const currentUrl = page.url();
   const onHome = /tuoixanhnhanhngon\.timdaythay\.com\/?(?:#.*)?$/i.test(currentUrl);
   if (onHome) {
     await openProductCardByName(page, productName, sendLog);
+    if (sendScreenshotFrame) await sendScreenshotFrame();
   }
 
   sendLog("TXNN: bootstrap xong, nhường lại cho DOM-first loop.", "success");

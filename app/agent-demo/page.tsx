@@ -75,6 +75,7 @@ export default function AgentDemoPage() {
     message: string;
   } | null>(null);
   const [resumeNote, setResumeNote] = useState("");
+  const [isPauseContextMinimized, setIsPauseContextMinimized] = useState(false);
 
   // Thêm log mới
   const addLog = (message: string, status: "info" | "success" | "warning" | "error" = "info") => {
@@ -144,15 +145,19 @@ export default function AgentDemoPage() {
               if (msg.phase === "completed") {
                 addLog(`ĐẶT HÀNG THÀNH CÔNG! Đơn hàng hoàn tất tại: ${msg.orderUrl || ""}`, "success");
                 setPauseContext(null);
+                setIsPauseContextMinimized(false);
               } else if (msg.phase === "failed") {
                 addLog(`ĐẶT HÀNG THẤT BẠI: ${msg.error || ""}`, "error");
                 setPauseContext(null);
+                setIsPauseContextMinimized(false);
               } else if (msg.phase === "running") {
                 setPauseContext(null); // Reset khi AI chạy lại
+                setIsPauseContextMinimized(false);
               } else if (msg.phase === "waiting_user_input") {
                 const reason = msg.pauseReason || msg.reason || "other";
                 const message = msg.reason || "Vui lòng thực hiện thao tác thủ công trên màn hình, sau đó bấm Tiếp tục.";
                 setPauseContext({ reason, message });
+                setIsPauseContextMinimized(false);
                 addLog(`⧨ Tạm dừng: ${message}`, "warning");
               }
             }
@@ -314,6 +319,7 @@ export default function AgentDemoPage() {
     addLog(`✅ Đã gửi tín hiệu tiếp tục cho Agent (reason: ${reason}).`, "success");
     setResumeNote("");
     setPauseContext(null);
+    setIsPauseContextMinimized(false);
   };
 
   // Status indicator colors
@@ -589,8 +595,8 @@ export default function AgentDemoPage() {
                 )}
 
                 {/* Smart Pause Panel: hiện khi AI dừng chờ người dùng */}
-                {pauseContext && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-sm p-5 z-10">
+                {pauseContext && !isPauseContextMinimized && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm p-5 z-10">
                     <div className="w-full max-w-sm rounded-2xl border border-amber-500/30 bg-slate-900 shadow-2xl shadow-amber-900/20 overflow-hidden">
                       {/* Header */}
                       <div className="flex items-center gap-3 border-b border-slate-800 bg-amber-500/10 px-4 py-3">
@@ -651,43 +657,98 @@ export default function AgentDemoPage() {
                       </div>
 
                       {/* Action buttons */}
-                      <div className="flex gap-2 border-t border-slate-800 p-3">
-                        {/* Button chính: Tiếp tục */}
-                        <button
-                          onClick={() => resumeAgent()}
-                          className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 active:scale-95 transition-all shadow-lg shadow-emerald-900/30"
-                        >
-                          ▶ Tiếp tục đặt hàng
-                        </button>
+                      <div className="flex flex-col gap-2 border-t border-slate-800 p-3">
+                        <div className="flex gap-2">
+                          {/* Button chính: Tiếp tục */}
+                          <button
+                            onClick={() => {
+                              resumeAgent();
+                              setIsPauseContextMinimized(false);
+                            }}
+                            className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 active:scale-95 transition-all shadow-lg shadow-emerald-900/30"
+                          >
+                            ▶ Tiếp tục đặt hàng
+                          </button>
 
-                        {/* Button xác nhận + click nút cuối (chỉ cho review) */}
-                        {pauseContext.reason === "review" && (
+                          {/* Button xác nhận + click nút cuối (chỉ cho review) */}
+                          {pauseContext.reason === "review" && (
+                            <button
+                              onClick={() => {
+                                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+                                wsRef.current.send(JSON.stringify({ type: "confirm_final_action" }));
+                                addLog("Đã gửi lệnh xác nhận đặt hàng cuối cùng.", "success");
+                                setPauseContext(null);
+                                setIsPauseContextMinimized(false);
+                              }}
+                              className="rounded-xl bg-rose-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-rose-500 active:scale-95 transition-all"
+                            >
+                              🛒 Click Đặt hàng
+                            </button>
+                          )}
+
+                          {/* Button hủy / chuyển thủ công */}
                           <button
                             onClick={() => {
                               if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-                              wsRef.current.send(JSON.stringify({ type: "confirm_final_action" }));
-                              addLog("Đã gửi lệnh xác nhận đặt hàng cuối cùng.", "success");
+                              wsRef.current.send(JSON.stringify({ type: "choose_handoff" }));
                               setPauseContext(null);
+                              setIsPauseContextMinimized(false);
                             }}
-                            className="rounded-xl bg-rose-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-rose-500 active:scale-95 transition-all"
+                            className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 text-xs font-medium text-slate-400 hover:bg-slate-700 active:scale-95 transition-all"
+                            title="Chuyển sang thao tác thủ công"
                           >
-                            🛒 Click Đặt hàng
+                            ✋
                           </button>
-                        )}
+                        </div>
 
-                        {/* Button hủy / chuyển thủ công */}
+                        {/* Button Ẩn tạm thời để người dùng thao tác trực tiếp trên canvas */}
                         <button
-                          onClick={() => {
-                            if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-                            wsRef.current.send(JSON.stringify({ type: "choose_handoff" }));
-                            setPauseContext(null);
-                          }}
-                          className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 text-xs font-medium text-slate-400 hover:bg-slate-700 active:scale-95 transition-all"
-                          title="Chuyển sang thao tác thủ công"
+                          onClick={() => setIsPauseContextMinimized(true)}
+                          className="w-full rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 py-2 text-xs font-semibold text-slate-300 active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                          title="Tạm ẩn hướng dẫn để bạn thao tác giải captcha/click trực tiếp trên màn hình trình duyệt"
                         >
-                          ✋
+                          <span>🤏</span>
+                          <span>Tạm ẩn để thao tác trực tiếp trên màn hình</span>
                         </button>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Minimized smart pause panel floating in top-right */}
+                {pauseContext && isPauseContextMinimized && (
+                  <div className="absolute top-3 right-3 z-20 rounded-xl border border-amber-500/50 bg-slate-900/95 backdrop-blur-sm p-3 shadow-2xl flex flex-col gap-2 max-w-[240px]">
+                    <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                      <span className="text-base">
+                        {pauseContext.reason === "otp" && "📱"}
+                        {pauseContext.reason === "captcha" && "🤖"}
+                        {pauseContext.reason === "payment" && "💳"}
+                        {pauseContext.reason === "address" && "📍"}
+                        {pauseContext.reason === "review" && "✅"}
+                        {pauseContext.reason === "stuck" && "🤔"}
+                        {pauseContext.reason === "other" && "👉"}
+                      </span>
+                      <span className="truncate">AI đang tạm dừng</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300 leading-tight">
+                      {pauseContext.reason === "captcha" ? "Vui lòng giải CAPTCHA trực tiếp trên màn hình." : pauseContext.message}
+                    </p>
+                    <div className="flex gap-1.5 mt-1">
+                      <button
+                        onClick={() => setIsPauseContextMinimized(false)}
+                        className="flex-1 rounded-lg bg-slate-800 hover:bg-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-300 border border-slate-700 transition"
+                      >
+                        🔍 Hiện lại
+                      </button>
+                      <button
+                        onClick={() => {
+                          resumeAgent();
+                          setIsPauseContextMinimized(false);
+                        }}
+                        className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-2 py-1 text-[10px] font-bold text-white transition"
+                      >
+                        ▶ Tiếp tục
+                      </button>
                     </div>
                   </div>
                 )}
