@@ -230,7 +230,7 @@ async function fillAddressAutocomplete(page, sendLog, inputPlaceholder, dropdown
 async function login(page, payload, sendLog, sendMessage) {
   const url = 'https://www.bachhoaxanh.com/dang-nhap'
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(10000);
 
   const { buyerPhone } = payload;
   sendMessage(`Nhập số điện thoại ${buyerPhone}`)
@@ -241,7 +241,7 @@ async function login(page, payload, sendLog, sendMessage) {
       await phoneInput.click();
       await phoneInput.fill(buyerPhone);
       sendLog(`Bach Hoa Xanh: Đã nhập số điện thoại: "${buyerPhone}".`, "success");
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(1000);
     }
   } catch { }
 
@@ -255,7 +255,7 @@ async function login(page, payload, sendLog, sendMessage) {
       const element = await page.locator(selector).first();
       await waitForVisible(element, 10000);
       if (await element.isVisible({ timeout: 3000 })) {
-        await element.click({ timeout: 5000 });
+        // await element.click({ timeout: 5000 });
         sendLog(`Bach Hoa Xanh: Đã click nút "${selector}"`, "success");
 
         sendMessage(`Vui lòng nhập mã OTP đã nhận được qua số điện thoại ${buyerPhone}`, 'input_otp')
