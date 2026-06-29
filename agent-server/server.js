@@ -1042,10 +1042,20 @@ wss.on("connection", async (ws) => {
         sendLog(`Đã nhận được OTP ${content}`)
         
         isAutomating = true;
-        const aiResult = await runAgenticToolUseLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true, resumeHistory: activeResumeHistory }, sendMessage);
-        if (aiResult?.resumeHistory) activeResumeHistory = aiResult.resumeHistory;
-        if (aiResult?.tracer) activeTracer = aiResult.tracer;
-        if (aiResult?.handled) { isAutomating = false; return; }
+        let playbookResult = null;
+        try {
+          sendLog(`[Playbook] Kiểm tra playbook cho chain: ${lastOrderPayload.chain.toUpperCase()}`, "info");
+          playbookResult = await runPlaybook(page, lastOrderPayload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
+        } catch (playbookErr) {
+          sendLog(`[Playbook] Thất bại: ${playbookErr.message} → chuyển sang AI Tool-Use`, "warning");
+          playbookResult = null;
+        }
+        
+        if (playbookResult?.done === true) {
+          sendLog(`[Playbook] Đã xử lý xong đơn hàng.`, "success");
+          isAutomating = false;
+          return;
+        }
       } else {
         const buySelectors = [
           ".icon__cart-footer",
