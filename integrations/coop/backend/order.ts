@@ -8,6 +8,7 @@ const OAUTH_AUTHORIZE_URL = "https://oauth-saigoncoop.oauth.teko.vn/oauth/author
 const OAUTH_TOKEN_URL = "https://oauth-saigoncoop.oauth.teko.vn/oauth/token";
 const CART_API_URL = "https://carts-consumer.tekoapis.com/api/v2/carts";
 const CART_ITEMS_API_URL = "https://carts-consumer.tekoapis.com/api/v2/carts/items";
+const CART_ORDERS_API_URL = "https://carts-consumer.tekoapis.com/api/v1/orders";
 const USER_API_URL = "https://users.tekoapis.com";
 const PAYMENT_BFF_API_URL = "https://payment-consumer-bff.tekoapis.com";
 const COOP_LOG_PATH = path.join(process.cwd(), "logs", "coop-api.log");
@@ -1041,6 +1042,36 @@ export async function clearCoopCart(input: { accessToken: string; terminalCode: 
   });
   const data = await parseJsonResponse(res, { method: "DELETE", request: { terminal: input.terminalCode } });
   return { cartToken: readCartToken(res, input.cartToken), data };
+}
+
+export async function cancelCoopPendingOrder(input: {
+  accessToken: string;
+  terminalCode: string;
+  cartToken: string;
+  orderId: string;
+}) {
+  const url = new URL(CART_ORDERS_API_URL);
+  url.searchParams.set("terminal", input.terminalCode);
+  const payload = { orderId: input.orderId, cancelOrder: true };
+  const res = await coopFetch(url, {
+    method: "POST",
+    headers: cartHeaders(input.accessToken, input.cartToken),
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const data = await parseJsonResponse<{ result?: { cartToken?: string } }>(res, {
+    method: "POST",
+    request: payload,
+  });
+  const cartToken = readCartToken(res, data.result?.cartToken ?? input.cartToken);
+  if (!cartToken) {
+    throw new CoopOrderError("Co.op đã hủy đơn nhưng không trả cart token mới.", {
+      status: 502,
+      code: "COOP_CANCEL_CART_TOKEN_MISSING",
+      detail: data,
+    });
+  }
+  return { cartToken, data };
 }
 
 export async function addCoopCartItem(input: {
