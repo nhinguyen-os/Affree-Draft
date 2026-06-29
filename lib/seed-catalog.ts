@@ -1,5 +1,5 @@
 import type { Catalog, Chain, Offer, Product } from "./types";
-import { STORES, chainSearchUrl } from "./stores";
+import { STORES, ONLINE_STORES, chainSearchUrl } from "./stores";
 
 /**
  * Ảnh sản phẩm thật, lấy từ thẻ og:image trên trang sản phẩm của chuỗi
@@ -29,6 +29,7 @@ export const PRODUCT_IMAGES: Record<string, string> = {
   "formula-friso4-850": "https://concung.com/2026/02/51147-135060-large_mobile/friso-gold-4-2-6-tuoi-800g-giao-bao-bi-ngau-nhien.webp",
   "noodle-haohao-30": "https://lh3.googleusercontent.com/V_fOcljZbXQfZHJ6tmDE0FtalA07ibYXp4kypiB1rTVzADvFth-6aOSiohj1klnN7o2qNd79VoawilZWBsR9mwp0QXBgy0WT",
   "egg-cp-10": "https://lh3.googleusercontent.com/uDF8CbGQPpcIsv2htRy67Wo5wb5DYPZsNvH14i_Tt_abOkCzJ_X3nVRWCMMRlXTT_8qzkRaO4pOq9ZtmC9J_OJo9duyrcBI4",
+  "pnj-ring-gold": "https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=500&q=80",
 };
 
 export const PRODUCTS: Product[] = [
@@ -40,6 +41,7 @@ export const PRODUCTS: Product[] = [
   { id: "formula-friso4-850", name: "Sữa bột Friso Gold 4 850g", brand: "Friso", category: "Mẹ & Bé", unit: "lon 850g" },
   { id: "noodle-haohao-30", name: "Mì Hảo Hảo tôm chua cay thùng 30 gói", brand: "Hảo Hảo", category: "Gạo - Mì", unit: "thùng 30" },
   { id: "egg-cp-10", name: "Trứng gà CP hộp 10 quả", brand: "CP", category: "Trứng - Thịt", unit: "hộp 10" },
+  { id: "pnj-ring-gold", name: "Nhẫn cưới Vàng 18K PNJ", brand: "PNJ", category: "Trang sức", unit: "chiếc" },
 ].map((p) => ({ ...p, image: PRODUCT_IMAGES[p.id] }));
 
 /** Giá nền theo từng chuỗi (VND). Chuỗi nào không bán thì bỏ trống. */
@@ -52,6 +54,7 @@ export const PRICE_BY_CHAIN: Record<string, Partial<Record<Chain, number>>> = {
   "formula-friso4-850": { concung: 449000, bhx: 469000 },
   "noodle-haohao-30": { bhx: 110000, coop: 108000, aeon: 115000 },
   "egg-cp-10": { bhx: 32000, coop: 33000, aeon: 31500 },
+  "pnj-ring-gold": { pnj: 12500000 },
 };
 
 /** Vài cặp (productId|storeId) cố tình hết hàng để minh hoạ trạng thái tồn kho. */
@@ -66,7 +69,8 @@ function buildOffers(): Offer[] {
   const offers: Offer[] = [];
   for (const product of PRODUCTS) {
     const byChain = PRICE_BY_CHAIN[product.id] ?? {};
-    for (const store of STORES) {
+    const allStores = [...STORES, ...ONLINE_STORES];
+    for (const store of allStores) {
       const base = byChain[store.chain];
       if (base == null) continue;
       // chênh nhẹ ±2% giữa các cửa hàng cùng chuỗi cho thực tế

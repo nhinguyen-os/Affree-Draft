@@ -43,3 +43,6 @@ next-env.d.ts
 # Tạm bỏ qua khi push (PAT chưa có scope workflow) — thêm lại khi token có quyền
 .github/workflows/scrape.yml
 /logs
+server.log
+skills/*.json
+fix_tools.py

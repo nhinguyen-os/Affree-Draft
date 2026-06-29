@@ -56,6 +56,7 @@ const SEARCH_URL: Record<string, (q: string) => string> = {
   concung: (q) => `https://concung.com/?s=${encodeURIComponent(q)}`,
   coop: (q) => `https://cooponline.vn/?s=${encodeURIComponent(q)}`,
   aeon: (q) => `https://aeoneshop.com/?s=${encodeURIComponent(q)}`,
+  pnj: (q) => `https://www.pnj.com.vn/catalogsearch/result/?q=${encodeURIComponent(q)}`,
 };
 
 export function chainSearchUrl(chain: Chain, query: string): string {

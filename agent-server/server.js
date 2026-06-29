@@ -37,8 +37,11 @@ loadEnvFile(path.join(__dirname, "..", ".env"));
 
 const { chromium } = require("playwright");
 const WebSocket = require("ws");
-const { runAgenticLoop } = require("./agent-llm");
+const { runPlaybook } = require("./playbooks");
+const { runAgenticToolUseLoop } = require("./agent-llm");
 const cooponlinePlaybook = require("./playbooks/cooponline");
+const { updateSkillFromSession } = require("./skill-updater");
+const { domainFromUrl } = require("./skill-store");
 
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
@@ -49,7 +52,7 @@ console.log(`[Agent Server] Đang chạy tại cổng ${PORT}...`);
 
 wss.on("connection", async (ws) => {
   console.log("[Agent Server] Client mới đã kết nối. Đang khởi tạo trình duyệt...");
-  
+
   let browser = null;
   let context = null;
   let page = null;
@@ -67,6 +70,11 @@ wss.on("connection", async (ws) => {
   const queuedClientMessages = [];
   const boundPaymentPages = new WeakSet();
 
+  let activeTracer = null; // Tracer cho phiên hiện tại (Self-Learning)
+  let activeFilledFields = []; // Lưu lại danh sách field đã điền giữa các phiên pause/resume
+  let activeActionHistory = []; // Lưu lại lịch sử hành động giữa các phiên pause/resume
+  let activeResumeHistory = []; // Lưu conversation history cho Tool-Use mode
+
   // Gửi log về client
   function sendLog(message, status = "info") {
     console.log(`[LOG - ${status}] ${message}`);
@@ -77,13 +85,6 @@ wss.on("connection", async (ws) => {
     }
   }
 
-  // Gửi cập nhật trạng thái đặt hàng về client
-  function sendStatus(phase, details = {}) {
-    try {
-      ws.send(JSON.stringify({ type: "status", phase, ...details }));
-    } catch (e) {}
-  }
-
   // Gửi message tự do về client (BHX dùng để gửi popup chọn giờ/OTP).
   function sendMessage(content, type = "message") {
     try {
@@ -92,6 +93,13 @@ wss.on("connection", async (ws) => {
     } catch (e) {
       // client disconnected
     }
+  }
+
+  // Gửi cập nhật trạng thái đặt hàng về client
+  function sendStatus(phase, details = {}) {
+    try {
+      ws.send(JSON.stringify({ type: "status", phase, ...details }));
+    } catch (e) { }
   }
 
   async function handleClientMessage(messageStr) {
@@ -110,7 +118,7 @@ wss.on("connection", async (ws) => {
             sendLog("Trang đã bắt đầu tải nhưng chưa báo domcontentloaded, vẫn hiển thị màn hình hiện tại.", "warning");
           });
           if (ws.readyState !== WebSocket.OPEN || page.isClosed()) break;
-          await page.waitForTimeout(500).catch(() => {});
+          await page.waitForTimeout(500).catch(() => { });
           if (ws.readyState !== WebSocket.OPEN || page.isClosed()) break;
           await sendScreenshotFrame();
           sendLog(`Đã tải xong trang: ${msg.url}`, "success");
@@ -184,13 +192,13 @@ wss.on("connection", async (ws) => {
 
         case "keydown":
           if (!isAutomating && msg.key) {
-            try { await page.keyboard.down(msg.key); } catch (err) {}
+            try { await page.keyboard.down(msg.key); } catch (err) { }
           }
           break;
 
         case "keyup":
           if (!isAutomating && msg.key) {
-            try { await page.keyboard.up(msg.key); } catch (err) {}
+            try { await page.keyboard.up(msg.key); } catch (err) { }
           }
           break;
 
@@ -290,6 +298,15 @@ wss.on("connection", async (ws) => {
           isAutomating = false;
           sendStatus("failed", { error: "handoff_to_user", orderUrl: page.url() });
           sendLog("Phiên này đã được chuyển sang thao tác thủ công theo yêu cầu orchestrator.", "warning");
+          break;
+
+        case "resume_agent":
+          // Người dùng bấm "Tiếp tục đặt hàng" trên GUI sau khi hoàn thành bước thủ công
+          await resumeAgenticLoop(msg.reason || "manual_resume", async () => {
+            const note = msg.note || "";
+            if (note) sendLog(`Ghi chú người dùng: ${note}`, "info");
+            sendLog("Người dùng đã xác nhận hoàn thành bước thủ công. Tiếp tục...", "success");
+          });
           break;
 
         case "coop_show_cart":
@@ -457,7 +474,7 @@ wss.on("connection", async (ws) => {
         /giao dịch thành công|giao dich thanh cong|thanh toán thành công|thanh toan thanh cong|payment successful|transaction successful/i.test(normalized);
       const orderCodeMatch =
         normalized.match(/(?:mã đơn hàng|ma don hang|mã giao dịch|ma giao dich|đơn hàng|don hang|order|transaction)\s*[:#]?\s*([A-Z0-9][A-Z0-9._-]{5,})/i) ||
-        normalized.match(/\b(SGC|COOP|COOPMART|DH|OD)[-_]?[A-Z0-9]{5,}\b/i);
+        normalized.match(/(SGC|COOP|COOPMART|DH|OD)[-_]?[A-Z0-9]{5,}/i);
       const totalMatch = normalized.match(/(?:thành tiền|thanh tien|tổng cộng|tong cong|total)\s*[: ]\s*([0-9.,]+\s*đ?)/i);
       return {
         orderSuccessText,
@@ -559,7 +576,7 @@ wss.on("connection", async (ws) => {
         return;
       }
       if (targetPage === page && isPaymentGatewayUrl(url)) {
-        await targetPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+        await targetPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
         await sendScreenshotFrame();
       }
     });
@@ -570,7 +587,7 @@ wss.on("connection", async (ws) => {
 
   async function startScreencastForCurrentPage() {
     if (!context || !page || page.isClosed()) return;
-    if (cdpSession) await cdpSession.detach().catch(() => {});
+    if (cdpSession) await cdpSession.detach().catch(() => { });
     cdpSession = await context.newCDPSession(page);
     await cdpSession.send("Page.startScreencast", {
       format: "jpeg",
@@ -588,8 +605,8 @@ wss.on("connection", async (ws) => {
           width: 1024,
           height: 768
         }));
-      } catch (err) {}
-      cdpSession.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+      } catch (err) { }
+      cdpSession.send("Page.screencastFrameAck", { sessionId }).catch(() => { });
     });
   }
 
@@ -597,10 +614,10 @@ wss.on("connection", async (ws) => {
     if (!nextPage || nextPage.isClosed() || nextPage === page || ws.readyState !== WebSocket.OPEN) return;
     page = nextPage;
     bindPaymentPageEvents(page);
-    await page.bringToFront().catch(() => {});
+    await page.bringToFront().catch(() => { });
     await startScreencastForCurrentPage();
-    await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(300).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
+    await page.waitForTimeout(300).catch(() => { });
     await sendScreenshotFrame();
     sendLog("Co.opmart: Đã chuyển stream sang màn hình thanh toán mới.", "info");
     sendStatus("coop_payment_ready", {
@@ -646,7 +663,7 @@ wss.on("connection", async (ws) => {
     await context.grantPermissions(["geolocation"]);
     context.on("page", async (newPage) => {
       bindPaymentPageEvents(newPage);
-      await newPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+      await newPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
       if (isPaymentGatewayUrl(newPage.url())) {
         await switchScreencastPage(newPage, "payment-popup");
       }
@@ -697,9 +714,23 @@ wss.on("connection", async (ws) => {
       }
       sendLog(`Đang tiếp tục quy trình sau bước: ${reason}`, "info");
       sendStatus("running", { reason: `resume:${reason}` });
-      const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true });
+
+      const resumeOpts = { skipInitialGoto: true, existingTracer: activeTracer, resumeHistory: activeResumeHistory };
+      const result = await runAgenticToolUseLoop(page, lastOrderPayload, sendLog, sendStatus, resumeOpts, sendMessage);
+      
+      if (result?.tracer) activeTracer = result.tracer;
+      if (result?.filledFields) activeFilledFields = result.filledFields;
+      if (result?.actionHistory) activeActionHistory = result.actionHistory;
+      if (result?.resumeHistory) activeResumeHistory = result.resumeHistory;
+
+      const aiHandled = result?.handled ?? result;
       if (!aiHandled) {
         sendLog("AI loop không xử lý được tiếp; giữ nguyên màn hình để user tự thao tác.", "warning");
+      }
+      // Trigger skill update nếu phiên đã kết thúc hoàn toàn
+      if (activeTracer?.trace?.endTime) {
+        const domain = domainFromUrl(lastOrderPayload.url || "");
+        updateSkillFromSession(domain, activeTracer, activeTracer.trace.success || false, activeResumeHistory).catch(console.error);
       }
     } catch (err) {
       sendLog(`Lỗi khi tiếp tục quy trình: ${err.message}`, "error");
@@ -711,15 +742,16 @@ wss.on("connection", async (ws) => {
 
   async function resumeAgenticLoopBHX(reason, content = null) {
     try {
-      if (reason === "otp") {
-        lastOrderPayload.step = "otp";
-        lastOrderPayload.otp = content;
-        sendLog(`Đã nhận được OTP ${content}`);
-        const aiHandled = await runAgenticLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
-        if (aiHandled) {
-          isAutomating = false;
-          return;
-        }
+      if (reason === 'otp') {
+        lastOrderPayload.step = 'otp'
+        lastOrderPayload.otp = content
+        sendLog(`Đã nhận được OTP ${content}`)
+        
+        isAutomating = true;
+        const aiResult = await runAgenticToolUseLoop(page, lastOrderPayload, sendLog, sendStatus, { skipInitialGoto: true, resumeHistory: activeResumeHistory }, sendMessage);
+        if (aiResult?.resumeHistory) activeResumeHistory = aiResult.resumeHistory;
+        if (aiResult?.tracer) activeTracer = aiResult.tracer;
+        if (aiResult?.handled) { isAutomating = false; return; }
       } else {
         const buySelectors = [
           ".icon__cart-footer",
@@ -733,7 +765,7 @@ wss.on("connection", async (ws) => {
             try {
               await btn.waitFor({ state: "visible", timeout: 3000 });
               result = true;
-            } catch {}
+            } catch { }
 
             if (result) {
               await btn.scrollIntoViewIfNeeded();
@@ -756,82 +788,64 @@ wss.on("connection", async (ws) => {
     }
   }
 
-  try {
-    ws.send(JSON.stringify({ type: "ready" }));
-  } catch (e) {}
-
   // Tự động hóa tiến trình mua hàng
+  // Chiến lược: Playbook-first → nếu playbook fail hoặc không xử lý xong → Tool-Use AI loop
   async function runAutomatedOrder(payload) {
     isAutomating = true;
+    activeTracer = null;
+    activeResumeHistory = null;
     try {
       sendStatus("running");
-      if (payload.chain === "bhx") {
-        isBachHoaXanhFlow = true;
+      const { chain } = payload;
+      isBachHoaXanhFlow = chain === "bhx";
+
+      if (isBachHoaXanhFlow) {
         sendMessage("Mở website Bách Hóa Xanh.");
-        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus, { skipInitialGoto: true }, sendMessage);
-        if (aiHandled) {
-          isAutomating = false;
-          return;
-        }
+      }
+
+      // ── Bước 1: Thử Playbook ────────────────────────────────────────────────
+      let playbookResult = null;
+      try {
+        sendLog(`[Playbook] Kiểm tra playbook cho chain: ${chain.toUpperCase()}`, "info");
+        playbookResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage);
+      } catch (playbookErr) {
+        sendLog(`[Playbook] Thất bại: ${playbookErr.message} → chuyển sang AI Tool-Use`, "warning");
+        playbookResult = null;
+      }
+
+      // Nếu playbook xử lý hoàn toàn (done: true) → kết thúc
+      if (playbookResult?.done === true) {
+        sendLog(`[Playbook] Đã xử lý xong đơn hàng.`, "success");
+        isAutomating = false;
+        return;
+      }
+
+      // ── Bước 2: AI Tool-Use Loop ────────────────────────────────────────────
+      if (playbookResult === null) {
+        sendLog(`[AI] Không có playbook phù hợp, dùng Agentic Tool-Use Loop.`, "info");
       } else {
-        isBachHoaXanhFlow = false;
-        const aiHandled = await runAgenticLoop(page, payload, sendLog, sendStatus);
-        if (aiHandled) {
-          isAutomating = false;
-          return;
-        }
+        sendLog(`[AI] Playbook đã bootstrap, tiếp tục với Agentic Tool-Use Loop.`, "info");
       }
 
-      const { url, productName, qty, buyerName, buyerPhone, buyerAddress, chain } = payload;
-      if (chain !== "bhx") {
-        sendLog(`BẮT ĐẦU TỰ ĐỘNG ĐẶT HÀNG (CSS FALLBACK): ${productName} (SL: ${qty}) tại ${chain.toUpperCase()}`);
-        sendLog(`Đang truy cập trang sản phẩm: ${url}...`);
-        await page.goto(url, { waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(1500);
-      }
+      const skipGoto = playbookResult !== null;
+      const result = await runAgenticToolUseLoop(page, payload, sendLog, sendStatus, { skipInitialGoto: skipGoto }, sendMessage);
 
-      const buySelectors = [
-        "text=Mua ngay", "text=MUA NGAY", "text=Thêm vào giỏ hàng", "text=THÊM VÀO GIỎ",
-        "button:has-text('Mua')", "button:has-text('Đặt')", ".btn-buy", ".add-to-cart", "a:has-text('Mua')"
-      ];
-      let clickedBuy = false;
-      for (const selector of buySelectors) {
-        try {
-          const btn = page.locator(selector).first();
-          if (await btn.isVisible()) {
-            await btn.scrollIntoViewIfNeeded();
-            await btn.click();
-            clickedBuy = true;
-            sendLog(`Đã click nút mua hàng: "${selector}"`, "success");
-            break;
-          }
-        } catch (e) {}
-      }
-      if (!clickedBuy) {
-        sendLog("Không phát hiện nút mua tự động. Vui lòng click trực tiếp trên màn hình.", "warning");
-        await page.waitForTimeout(3000);
-      }
-      await page.waitForTimeout(2000);
-      sendStatus("waiting_user_input");
-      sendLog("⚠️ AGENT TẠM DỪNG: Cần khách hàng thực hiện OTP hoặc thanh toán trực tiếp trên màn hình!");
-      isAutomating = false;
+      if (result?.tracer) activeTracer = result.tracer;
+      if (result?.resumeHistory) activeResumeHistory = result.resumeHistory;
 
-      let isDone = false;
-      for (let i = 0; i < 300; i++) {
-        const currentUrl = page.url();
-        if (currentUrl.includes("thank-you") || currentUrl.includes("success") || currentUrl.includes("don-hang") || currentUrl.includes("checkout/complete")) {
-          sendLog(`Phát hiện đặt hàng thành công! URL: ${currentUrl}`, "success");
-          sendStatus("completed", { orderUrl: currentUrl });
-          isDone = true;
-          break;
-        }
-        await page.waitForTimeout(1000);
+      // Trigger skill update bất đồng bộ
+      if (activeTracer) {
+        const domain = domainFromUrl(payload.url || "");
+        const isSuccess = activeTracer.trace?.success === true;
+        updateSkillFromSession(domain, activeTracer, isSuccess, activeResumeHistory).catch((e) => {
+          console.error("[Server] Skill update lỗi:", e.message);
+        });
       }
-      if (!isDone) sendLog("Hết thời gian chờ. Vui lòng kiểm tra lại đơn hàng.", "warning");
 
     } catch (err) {
       sendLog(`Lỗi tiến trình đặt hàng: ${err.message}`, "error");
       sendStatus("failed", { error: err.message });
+    } finally {
       isAutomating = false;
     }
   }
@@ -840,9 +854,9 @@ wss.on("connection", async (ws) => {
     console.log("[Agent Server] Đang dọn dẹp tài nguyên phiên...");
     try {
       stopCompletionMonitor();
-      if (cdpSession) await cdpSession.detach().catch(() => {});
-      if (context) await context.close().catch(() => {});
-      if (browser) await browser.close().catch(() => {});
+      if (cdpSession) await cdpSession.detach().catch(() => { });
+      if (context) await context.close().catch(() => { });
+      if (browser) await browser.close().catch(() => { });
     } catch (e) {
       console.error("[Agent Server] Lỗi dọn dẹp:", e);
     }
