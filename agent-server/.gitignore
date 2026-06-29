@@ -44,3 +44,5 @@ next-env.d.ts
 .github/workflows/scrape.yml
 /logs
 server.log
+skills/*.json
+fix_tools.py

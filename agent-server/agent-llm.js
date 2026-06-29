@@ -18,38 +18,32 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-2025100
 const QWEN_API_KEY = process.env.QWEN_API_KEY;
 const QWEN_MODEL = process.env.QWEN_MODEL || "qwen3.5-flash";
 const QWEN_API_URL = process.env.QWEN_API_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-const { buildSkillContext, domainFromUrl } = require("./skill-store");
+const { loadMasterInstruction, loadSkillInstruction, domainFromUrl } = require("./skill-store");
 const { createSessionTracer } = require("./session-tracer");
 const { createSessionLogger } = require("./session-logger");
+const { getToolsForGemini, getToolsForAnthropic, getToolsForOpenAI, buildGeminiContents, buildAnthropicMessages, buildOpenAIMessages, executeTool } = require("./agent-tools");
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// AGENTIC TOOL-USE LOOP — True multi-turn conversation với function calling
-// ═══════════════════════════════════════════════════════════════════════════
-
-const {
-  getToolsForGemini,
-  getToolsForAnthropic,
-  getToolsForOpenAI,
-  buildGeminiContents,
-  buildAnthropicMessages,
-  buildOpenAIMessages,
-  executeTool,
-} = require("./agent-tools");
-
-const { loadSkillInstruction } = require("./skill-store");
 
 const MAX_TOOL_TURNS = 100;        // Tổng số lượt AI gọi tool tối đa
 const MAX_CONSECUTIVE_FAILS = 5;  // Số lần tool liên tiếp thất bại trước khi pause
 
 /**
  * Xây dựng System Prompt cho chế độ Tool-Use.
- * Skills là instruction file domain-specific (plain text/markdown).
+ * Inject master skill (stable) + domain-specific skill (có thể thay đổi) vào prompt.
  */
 function buildToolUseSystemPrompt(payload, skillInstruction) {
   const { productName, qty, buyerName, buyerPhone, buyerAddress, buyerNote, slot, chain } = payload;
   const noteStr = buyerNote ? `\n- Ghi chú: "${buyerNote}"` : "";
   const slotStr = slot ? `\n- Khung giờ giao: "${slot}"` : "";
+
+  const masterInstruction = loadMasterInstruction();
+  const masterSection = masterInstruction
+    ? `\n## HƯỚNG DẪN CHUNG (Master Skill)\n${masterInstruction}\n`
+    : "";
+
+  const domainSection = skillInstruction
+    ? `\n## HƯỚNG DẪN ĐẶC THÙ CHO ${chain.toUpperCase()}\n${skillInstruction}\n`
+    : "";
 
   return `Bạn là AI Agent điều khiển trình duyệt web để đặt hàng tự động cho khách hàng.
 
@@ -58,22 +52,7 @@ function buildToolUseSystemPrompt(payload, skillInstruction) {
 - Người nhận: "${buyerName}" | SĐT: "${buyerPhone}"
 - Địa chỉ giao hàng: "${buyerAddress}"${noteStr}${slotStr}
 - Cửa hàng: ${chain.toUpperCase()}
-
-## CHIẾN LƯỢC HOẠT ĐỘNG
-1. Luôn gọi get_dom() hoặc screenshot() để quan sát trang trước khi hành động
-2. Nếu có popup cản trở → gọi dismiss_popups() ngay
-3. Nếu bị redirect sai trang (ví dụ: bay sang Zalo, mạng xã hội) → gọi navigate() để quay về
-4. Nếu DOM không đủ thông tin để quyết định → gọi screenshot() để thấy giao diện thực tế
-5. Điền thông tin người nhận TỪNG FIELD MỘT, chỉ điền field còn trống
-6. KHÔNG tự click nút "Đặt hàng" / "Xác nhận" cuối cùng — gọi pause_for_human(reason="review")
-7. Nếu cần OTP, CAPTCHA, chọn địa chỉ dropdown phức tạp, thanh toán không phải COD → gọi pause_for_human()
-8. Khi thấy màn hình xác nhận đơn thành công → gọi complete_success()
-
-## KHI BỊ STUCK
-Nếu tool trả về thất bại nhiều lần liên tiếp → đừng lặp lại cùng hành động.
-Thay vào đó: (1) gọi screenshot() để quan sát, (2) thử cách tiếp cận khác, (3) nếu không được → pause_for_human(reason="stuck").
-
-${skillInstruction ? `## HƯỚNG DẪN ĐẶC THÙ CHO ${chain.toUpperCase()}\n${skillInstruction}` : ""}`;
+${masterSection}${domainSection}`;
 }
 
 // ─── LLM callers với Tool-Use ─────────────────────────────────────────────
@@ -409,8 +388,135 @@ async function runAgenticToolUseLoop(page, payload, sendLog, sendStatus, options
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SUBAGENT LOOP — Mini tool-use loop với context độc lập
+// Main agent gọi run_subagent() → runSubagentLoop() → trả kết quả tóm tắt
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Chạy một mini tool-use loop với context riêng biệt để xử lý subtask.
+ * Không có session logger, không có tracer — chỉ tập trung vào task được giao.
+ *
+ * @param {object} page - Playwright page (dùng chung với main agent)
+ * @param {string} task - Mô tả nhiệm vụ cần thực hiện
+ * @param {string} context - Thông tin bổ sung (selectors, giá trị cần điền...)
+ * @param {number} maxTurns - Số lượt tối đa (mặc định 25)
+ * @param {{ sendLog }} opts - Options
+ * @returns {{ success, summary, turns }}
+ */
+async function runSubagentLoop(page, task, context = "", maxTurns = 25, opts = {}) {
+  const { sendLog } = opts;
+  const log = (msg, level = "info") => sendLog ? sendLog(`[Subagent] ${msg}`, level) : console.log(`[Subagent] ${msg}`);
+
+  const systemPrompt = `Bạn là AI Subagent chuyên thực hiện một nhiệm vụ cụ thể trên trình duyệt.
+Nhiệm vụ: ${task}
+Thông tin bổ sung: ${context || "(không có)"}
+
+Quy tắc:
+- Chỉ tập trung vào nhiệm vụ được giao, không làm việc khác
+- Luôn gọi get_dom() hoặc screenshot() trước khi hành động
+- Khi hoàn thành → trả lời bằng text mô tả kết quả (KHÔNG gọi thêm tool nào)
+- Nếu không thể thực hiện → trả lời mô tả lý do thất bại
+- Tối đa ${maxTurns} lượt gọi tool`;
+
+  // Subagent dùng subset tools (không có run_subagent, pause_for_human, complete_success)
+  const { TOOLS } = require("./agent-tools");
+  const BLOCKED = ["run_subagent", "pause_for_human", "complete_success"];
+  const subTools = TOOLS.filter(t => !BLOCKED.includes(t.name));
+  const subToolsGemini = [{ functionDeclarations: subTools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters })) }];
+  const subToolsAnthropic = subTools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+  const subToolsOpenAI = subTools.map(t => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
+
+  let history = [];
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    let toolCalls = [], textContent = "";
+
+    try {
+      if (GEMINI_API_KEY) {
+        // Gemini: history format = [{role, parts}]
+        const contents = buildGeminiContents(history);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ system_instruction: { parts: [{ text: systemPrompt }] }, tools: subToolsGemini, contents, generationConfig: { temperature: 0.1 } }),
+        });
+        if (!res.ok) throw new Error(`Gemini ${res.status}`);
+        const data = await res.json();
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        toolCalls = parts.filter(p => p.functionCall).map((p, i) => ({ id: `${p.functionCall.name}_${i}`, name: p.functionCall.name, args: p.functionCall.args || {} }));
+        textContent = parts.filter(p => p.text).map(p => p.text).join("");
+        // Push model turn to history
+        if (parts.length > 0) history.push({ role: "model", parts });
+
+      } else if (ANTHROPIC_API_KEY) {
+        const messages = buildAnthropicMessages(history);
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 4096, system: systemPrompt, tools: subToolsAnthropic, messages }),
+        });
+        if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+        const data = await res.json();
+        const content = data.content || [];
+        toolCalls = content.filter(c => c.type === "tool_use").map(c => ({ id: c.id, name: c.name, args: c.input || {} }));
+        textContent = content.filter(c => c.type === "text").map(c => c.text).join("");
+        if (content.length > 0) history.push({ role: "assistant", content });
+
+      } else if (QWEN_API_KEY) {
+        const messages = buildOpenAIMessages(history, systemPrompt);
+        const res = await fetch(QWEN_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${QWEN_API_KEY}` },
+          body: JSON.stringify({ model: QWEN_MODEL, messages, tools: subToolsOpenAI, tool_choice: "auto" }),
+        });
+        if (!res.ok) throw new Error(`Qwen ${res.status}`);
+        const data = await res.json();
+        const msg = data.choices?.[0]?.message;
+        toolCalls = (msg?.tool_calls || []).map(tc => ({ id: tc.id, name: tc.function.name, args: JSON.parse(tc.function.arguments || "{}") }));
+        textContent = msg?.content || "";
+        if (msg) history.push({ role: "assistant", content: msg.content || "", tool_calls: msg.tool_calls });
+      } else {
+        return { success: false, summary: "Không có API key được cấu hình", turns: turn };
+      }
+    } catch (e) {
+      log(`API lỗi turn ${turn}: ${e.message}`, "warning");
+      return { success: false, summary: `API error: ${e.message}`, turns: turn };
+    }
+
+    // Nếu AI trả về text mà không gọi tool → đã hoàn thành
+    if (toolCalls.length === 0) {
+      const summary = textContent.trim() || "Subagent đã hoàn thành.";
+      log(`Hoàn thành sau ${turn + 1} lượt.`, "success");
+      return { success: true, summary: summary.slice(0, 300), turns: turn + 1 };
+    }
+
+    // Thực thi tool calls và thêm results vào history
+    const toolResults = [];
+    for (const tc of toolCalls) {
+      log(`Tool: ${tc.name}(${JSON.stringify(tc.args).slice(0, 80)})`, "info");
+      const result = await executeTool(tc.name, tc.args || {}, page, { sendLog });
+      toolResults.push({ id: tc.id, name: tc.name, content: result.content });
+    }
+
+    // Append tool results vào history theo đúng format
+    if (GEMINI_API_KEY) {
+      history.push({ role: "user", parts: toolResults.map(r => ({ functionResponse: { name: r.name, response: { result: r.content } } })) });
+    } else if (ANTHROPIC_API_KEY) {
+      history.push({ role: "user", content: toolResults.map(r => ({ type: "tool_result", tool_use_id: r.id, content: [{ type: "text", text: r.content }] })) });
+    } else {
+      history.push({ role: "tool", content: toolResults.map(r => ({ tool_call_id: r.id, content: r.content })) });
+    }
+  }
+
+  log(`Đạt giới hạn ${maxTurns} lượt.`, "warning");
+  return { success: false, summary: `Subagent đạt giới hạn ${maxTurns} lượt.`, turns: maxTurns };
+}
+
+
+
 module.exports = {
   runAgenticToolUseLoop,
+  runSubagentLoop,
 };
-
-
