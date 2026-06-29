@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PRODUCTS, SEED_CATALOG } from "@/lib/seed-catalog";
-import { chainLabel, STORES } from "@/lib/stores";
+import { chainLabel, STORES, SOURCE_META } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { getProfile } from "@/lib/profile";
 
@@ -43,9 +43,21 @@ export default function AgentDemoPage() {
     if (customUrl) return customUrl;
     if (activeOffer) return activeOffer.productUrl;
     // Fallback URL mặc định
-    const store = STORES.find((s) => s.chain === selectedChain);
-    return store ? store.website : "https://concung.com";
+    return SOURCE_META[selectedChain]?.home || "https://concung.com";
   }, [customUrl, activeOffer, selectedChain]);
+
+  // Khi đổi chuỗi cửa hàng, tự chọn sản phẩm đầu tiên có hỗ trợ chuỗi đó
+  useEffect(() => {
+    const hasOffer = SEED_CATALOG.offers.some(
+      (o) => o.productId === selectedProductId && o.storeId.startsWith(selectedChain)
+    );
+    if (!hasOffer) {
+      const firstValidOffer = SEED_CATALOG.offers.find((o) => o.storeId.startsWith(selectedChain));
+      if (firstValidOffer) {
+        setSelectedProductId(firstValidOffer.productId);
+      }
+    }
+  }, [selectedChain, selectedProductId]);
 
   // Log và Canvas Refs
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -56,6 +68,13 @@ export default function AgentDemoPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement | null>(null);
   const isMouseDownRef = useRef(false);
+
+  // Trạng thái pause / chờ can thiệp từ người dùng
+  const [pauseContext, setPauseContext] = useState<{
+    reason: string;
+    message: string;
+  } | null>(null);
+  const [resumeNote, setResumeNote] = useState("");
 
   // Thêm log mới
   const addLog = (message: string, status: "info" | "success" | "warning" | "error" = "info") => {
@@ -124,10 +143,17 @@ export default function AgentDemoPage() {
               setAgentPhase(msg.phase);
               if (msg.phase === "completed") {
                 addLog(`ĐẶT HÀNG THÀNH CÔNG! Đơn hàng hoàn tất tại: ${msg.orderUrl || ""}`, "success");
+                setPauseContext(null);
               } else if (msg.phase === "failed") {
                 addLog(`ĐẶT HÀNG THẤT BẠI: ${msg.error || ""}`, "error");
+                setPauseContext(null);
+              } else if (msg.phase === "running") {
+                setPauseContext(null); // Reset khi AI chạy lại
               } else if (msg.phase === "waiting_user_input") {
-                addLog("Trình duyệt đang chờ bạn tương tác nhập OTP hoặc thanh toán trực tiếp trên màn hình.", "warning");
+                const reason = msg.pauseReason || msg.reason || "other";
+                const message = msg.reason || "Vui lòng thực hiện thao tác thủ công trên màn hình, sau đó bấm Tiếp tục.";
+                setPauseContext({ reason, message });
+                addLog(`⧨ Tạm dừng: ${message}`, "warning");
               }
             }
           } catch (err) {
@@ -274,6 +300,22 @@ export default function AgentDemoPage() {
     setInputText("");
   };
 
+  // Gửi tín hiệu tiếp tục sau khi người dùng hoàn thành thao tác thủ công
+  const resumeAgent = (reasonOverride?: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const reason = reasonOverride || pauseContext?.reason || "manual_resume";
+    wsRef.current.send(
+      JSON.stringify({
+        type: "resume_agent",
+        reason,
+        note: resumeNote || undefined,
+      })
+    );
+    addLog(`✅ Đã gửi tín hiệu tiếp tục cho Agent (reason: ${reason}).`, "success");
+    setResumeNote("");
+    setPauseContext(null);
+  };
+
   // Status indicator colors
   const statusColorClass = {
     disconnected: "bg-slate-500",
@@ -387,6 +429,7 @@ export default function AgentDemoPage() {
                       <option value="coop">Co.opmart</option>
                       <option value="bhx">Bách Hóa Xanh</option>
                       <option value="aeon">AEON</option>
+                      <option value="pnj">PNJ</option>
                     </select>
                   </div>
                 </div>
@@ -545,15 +588,110 @@ export default function AgentDemoPage() {
                   </div>
                 )}
 
-                {agentPhase === "waiting_user_input" && (
-                  <div className="absolute bottom-4 left-4 right-4 rounded-xl bg-amber-500/90 p-3 text-slate-950 text-xs font-medium backdrop-blur shadow-lg flex items-center gap-3 animate-bounce">
-                    <span className="text-lg">⚠️</span>
-                    <div className="flex-1">
-                      <p className="font-bold">ĐANG CHỜ TƯƠNG TÁC CON NGƯỜI</p>
-                      <p className="text-[11px] opacity-80">Vui lòng nhấp chuột và gõ phím trực tiếp trên khung màn hình ở trên để nhập OTP/thanh toán.</p>
+                {/* Smart Pause Panel: hiện khi AI dừng chờ người dùng */}
+                {pauseContext && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-sm p-5 z-10">
+                    <div className="w-full max-w-sm rounded-2xl border border-amber-500/30 bg-slate-900 shadow-2xl shadow-amber-900/20 overflow-hidden">
+                      {/* Header */}
+                      <div className="flex items-center gap-3 border-b border-slate-800 bg-amber-500/10 px-4 py-3">
+                        <span className="text-2xl">
+                          {pauseContext.reason === "otp" && "📱"}
+                          {pauseContext.reason === "captcha" && "🤖"}
+                          {pauseContext.reason === "payment" && "💳"}
+                          {pauseContext.reason === "address" && "📍"}
+                          {pauseContext.reason === "review" && "✅"}
+                          {pauseContext.reason === "stuck" && "🤔"}
+                          {pauseContext.reason === "other" && "👉"}
+                          {![
+                            "otp","captcha","payment","address","review","stuck","other"
+                          ].includes(pauseContext.reason) && "⏸️"}
+                        </span>
+                        <div>
+                          <p className="text-sm font-bold text-amber-400">
+                            {pauseContext.reason === "otp" && "Nhập mã OTP"}
+                            {pauseContext.reason === "captcha" && "Giải CAPTCHA"}
+                            {pauseContext.reason === "payment" && "Chọn thanh toán"}
+                            {pauseContext.reason === "address" && "Chọn địa chỉ"}
+                            {pauseContext.reason === "review" && "Xem lại đơn hàng"}
+                            {pauseContext.reason === "stuck" && "AI cần hỗ trợ"}
+                            {![
+                              "otp","captcha","payment","address","review","stuck"
+                            ].includes(pauseContext.reason) && "Cần thao tác thủ công"}
+                          </p>
+                          <p className="text-[11px] text-slate-400">AI Agent đang tạm dừng</p>
+                        </div>
+                      </div>
+
+                      {/* Nội dung hướng dẫn */}
+                      <div className="px-4 py-3 text-xs text-slate-300 leading-relaxed">
+                        <p>{pauseContext.message}</p>
+                      </div>
+
+                      {/* Hướng dẫn cụ thể theo reason */}
+                      {pauseContext.reason === "otp" && (
+                        <div className="mx-4 mb-3 rounded-lg bg-slate-800 p-3 text-xs text-slate-400">
+                          Bạn có thể nhập OTP bằng ô văn bản phía dưới màn hình (mục &ldquo;Gửi chữ&rdquo;) hoặc click trực tiếp vào ô nhập trên màn hình trình duyệt.
+                        </div>
+                      )}
+                      {pauseContext.reason === "review" && (
+                        <div className="mx-4 mb-3 rounded-lg bg-emerald-900/30 border border-emerald-700/20 p-3 text-xs text-emerald-400">
+                          Kiểm tra kỹ thông tin đơn hàng. Nếu đồng ý, bấm &ldquo;Xác nhận & Đặt hàng&rdquo; — AI sẽ tự click nút xác nhận cuối.
+                        </div>
+                      )}
+
+                      {/* Ô ghi chú tùy chọn */}
+                      <div className="px-4 pb-3">
+                        <input
+                          type="text"
+                          value={resumeNote}
+                          onChange={(e) => setResumeNote(e.target.value)}
+                          placeholder="Ghi chú cho AI (tùy chọn, ví dụ: đã chọn MoMo)..."
+                          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-300 outline-none focus:border-amber-500 transition"
+                        />
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex gap-2 border-t border-slate-800 p-3">
+                        {/* Button chính: Tiếp tục */}
+                        <button
+                          onClick={() => resumeAgent()}
+                          className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 active:scale-95 transition-all shadow-lg shadow-emerald-900/30"
+                        >
+                          ▶ Tiếp tục đặt hàng
+                        </button>
+
+                        {/* Button xác nhận + click nút cuối (chỉ cho review) */}
+                        {pauseContext.reason === "review" && (
+                          <button
+                            onClick={() => {
+                              if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+                              wsRef.current.send(JSON.stringify({ type: "confirm_final_action" }));
+                              addLog("Đã gửi lệnh xác nhận đặt hàng cuối cùng.", "success");
+                              setPauseContext(null);
+                            }}
+                            className="rounded-xl bg-rose-600 px-3 py-2.5 text-xs font-semibold text-white hover:bg-rose-500 active:scale-95 transition-all"
+                          >
+                            🛒 Click Đặt hàng
+                          </button>
+                        )}
+
+                        {/* Button hủy / chuyển thủ công */}
+                        <button
+                          onClick={() => {
+                            if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+                            wsRef.current.send(JSON.stringify({ type: "choose_handoff" }));
+                            setPauseContext(null);
+                          }}
+                          className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5 text-xs font-medium text-slate-400 hover:bg-slate-700 active:scale-95 transition-all"
+                          title="Chuyển sang thao tác thủ công"
+                        >
+                          ✋
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
+
               </div>
 
               {/* Bảng gõ chữ trực tiếp */}
