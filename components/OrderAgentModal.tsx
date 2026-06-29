@@ -19,6 +19,118 @@ import { type Lang, tr } from "@/lib/i18n";
 
 type StepKind = "auto" | "otp" | "login" | "captcha" | "confirm" | "success";
 type Step = { kind: StepKind; label: string };
+type CoopOrderResult = {
+  phase?: "otp" | "cart" | "ordered";
+  flowId?: string;
+  error?: string;
+  code?: string;
+  productName?: string;
+  lineTotal?: number;
+  minOrderTotal?: number;
+  terminalCode?: string;
+  cartToken?: string;
+  checkoutFlowId?: string;
+  cartUrl?: string;
+  checkoutUrl?: string;
+  alreadyRegistered?: boolean;
+  usedTokenCache?: boolean;
+  browserSession?: {
+    accessToken?: string;
+    tokenType?: string;
+    refreshToken?: string;
+    userId?: string;
+    phone?: string;
+    name?: string;
+    email?: string;
+    address?: string;
+    terminalCode?: string;
+    terminalId?: string;
+    terminalName?: string;
+    terminalAddress?: string;
+    siteId?: number;
+  };
+  deliveryCheck?: {
+    serviceName?: string;
+    requireDeliveryTimeSlot?: string;
+    fullAddress?: string;
+    availableDates?: string[];
+    availableTimeSlots?: Array<{ from: string; to: string; disabled?: boolean }>;
+    availableSlotsByDate?: Record<string, Array<{ from: string; to: string; disabled?: boolean }>>;
+    selectedDate?: string | null;
+    selectedSlotFrom?: string | null;
+    selectedSlotTo?: string | null;
+    message?: string;
+  };
+  paymentCheck?: {
+    selectedMethodCode?: string;
+    selectedMethodName?: string;
+    codAvailable?: boolean;
+    codSelected?: boolean;
+    methods?: Array<{
+      icon?: string;
+      methodCode?: string;
+      methodGroupCode?: string;
+      merchantMethodCode?: string;
+      name?: string;
+      description?: string;
+      isSelected?: boolean;
+      isDisabled?: boolean;
+      warning?: unknown;
+      amount?: number | null;
+      maxTransactionAmount?: number;
+      paymentMethodType?: string;
+    }>;
+    message?: string;
+  };
+  addressSync?: {
+    action?: "created" | "updated" | "existing" | "missing";
+    addressId?: string;
+    isDefault?: boolean;
+  };
+  cartCleared?: boolean;
+  order?: {
+    code?: string;
+    orderId?: string;
+    createdAt?: string;
+    grandTotal?: number;
+    totalPaid?: number;
+    paymentMethodCode?: string;
+    paymentUrl?: string;
+  };
+  paymentUrl?: string;
+};
+
+type CoopStepId = "account" | "otp" | "delivery" | "payment" | "review" | "success";
+
+type CoopTerminalChoice = {
+  terminalId?: number | string;
+  terminalCode?: string;
+  terminalName?: string;
+  name?: string;
+  address?: string;
+  fullAddress?: string;
+  distance?: number | string;
+  distanceKm?: number | string;
+  siteId?: number | string;
+  [key: string]: unknown;
+};
+
+type CoopLocationOption = {
+  id?: string;
+  code: string;
+  name: string;
+  govCode?: string;
+};
+
+type CoopAddressParts = {
+  addressLine: string;
+  provinceCode: string;
+  provinceName: string;
+  districtCode: string;
+  districtName: string;
+  wardCode: string;
+  wardName: string;
+};
 
 const SLOTS = [
   "Trong hôm nay (2–4 giờ)",
@@ -27,13 +139,117 @@ const SLOTS = [
   "Chiều mai (14:00–17:00)",
 ];
 
+const COOP_TIME_SLOTS: Array<{ from: string; to: string; disabled?: boolean }> = [
+  { from: "10:00", to: "12:00" },
+  { from: "12:00", to: "14:00" },
+  { from: "14:00", to: "16:00" },
+  { from: "16:00", to: "18:00" },
+  { from: "18:00", to: "20:00" },
+];
+const COOP_DELIVERY_LEAD_MINUTES = 180;
+const HCM_PROVINCE = { code: "79", name: "Thành phố Hồ Chí Minh" };
+const KNOWN_COOP_LOCATION_CODES: Array<Pick<CoopAddressParts, "provinceCode" | "provinceName" | "districtCode" | "districtName" | "wardCode" | "wardName">> = [
+  { provinceCode: "79", provinceName: "Thành phố Hồ Chí Minh", districtCode: "7907", districtName: "Quận Tân Bình", wardCode: "790701", wardName: "Phường 02" },
+  { provinceCode: "79", provinceName: "Thành phố Hồ Chí Minh", districtCode: "7908", districtName: "Quận Tân Phú", wardCode: "790801", wardName: "Phường Tân Sơn Nhì" },
+];
+
+function normalizeCoopText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCoopProvince(value: string) {
+  const normalized = normalizeCoopText(value);
+  if (normalized === "tphcm" || normalized === "tp.hcm" || normalized === "tp hcm" || normalized.includes("ho chi minh")) {
+    return HCM_PROVINCE.name;
+  }
+  return value.trim();
+}
+
+function normalizeCoopWard(value: string) {
+  const normalized = normalizeCoopText(value);
+  if (normalized.includes("tan son hoa")) return "Phường 02";
+  return value.trim();
+}
+
+function inferCoopDistrictFromWard(wardName: string) {
+  const ward = normalizeCoopText(wardName);
+  if (ward.includes("tan son hoa") || ward === "phuong 2" || ward === "phuong 02") return "Quận Tân Bình";
+  if (ward.includes("tan son nhi")) return "Quận Tân Phú";
+  return "";
+}
+
+function applyKnownCoopLocationCodes(parts: CoopAddressParts): CoopAddressParts {
+  const province = normalizeCoopText(parts.provinceName);
+  const district = normalizeCoopText(parts.districtName);
+  const ward = normalizeCoopText(parts.wardName);
+  const known = KNOWN_COOP_LOCATION_CODES.find(
+    (item) =>
+      normalizeCoopText(item.provinceName) === province &&
+      normalizeCoopText(item.districtName) === district &&
+      normalizeCoopText(item.wardName) === ward,
+  );
+  return known ? { ...parts, ...known } : parts;
+}
+
+function parseCoopAddressParts(fullAddress: string): CoopAddressParts {
+  const parts = fullAddress.split(",").map((item) => item.trim()).filter(Boolean);
+  const provinceName = normalizeCoopProvince(parts.at(-1) || HCM_PROVINCE.name);
+  let districtName = parts.length >= 4 ? parts.at(-2) || "" : "";
+  let wardName = parts.length >= 3 ? normalizeCoopWard(parts.at(-3) || "") : "";
+  let addressLine = parts.length >= 4 ? parts.slice(0, -3).join(", ") : parts[0] || "";
+  if (parts.length === 3) {
+    const middle = normalizeCoopWard(parts[1] || "");
+    wardName = middle;
+    districtName = inferCoopDistrictFromWard(middle);
+    addressLine = parts[0] || "";
+  }
+  if (!districtName && wardName) districtName = inferCoopDistrictFromWard(wardName);
+  const withProvinceCode = normalizeCoopText(provinceName).includes("ho chi minh") ? HCM_PROVINCE.code : "";
+  return applyKnownCoopLocationCodes({
+    addressLine,
+    provinceCode: withProvinceCode,
+    provinceName,
+    districtCode: "",
+    districtName,
+    wardCode: "",
+    wardName,
+  });
+}
+
+function composeCoopFullAddress(parts: CoopAddressParts) {
+  return [parts.addressLine, parts.wardName, parts.districtName, parts.provinceName].map((item) => item.trim()).filter(Boolean).join(", ");
+}
+
+function findCoopLocationByName(items: CoopLocationOption[], name: string) {
+  const normalized = normalizeCoopText(name);
+  return items.find((item) => normalizeCoopText(item.name) === normalized || normalizeCoopText(item.name).includes(normalized));
+}
+
+async function fetchCoopLocations(level: "provinces" | "districts" | "wards", params: Record<string, string> = {}) {
+  const search = new URLSearchParams({ level, ...params });
+  const res = await fetch(`/api/coop/locations?${search.toString()}`, { cache: "no-store" });
+  const data = (await res.json().catch(() => ({}))) as { items?: CoopLocationOption[]; error?: string };
+  if (!res.ok || data.error) throw new Error(data.error || "Không tải được danh mục địa chỉ Co.op.");
+  return data.items || [];
+}
+
 export default function OrderAgentModal({
   offer,
   alternatives = [],
   geoAddr,
+  geoLat,
+  geoLng,
   defaultName,
   defaultPhone,
   defaultAddress,
+  defaultQty,
   onClose,
   onPlaced,
   lang = "vi",
@@ -43,9 +259,13 @@ export default function OrderAgentModal({
   alternatives?: RankedOffer[];
   /** Địa chỉ theo định vị — so với địa chỉ giao để biết có lệch không. */
   geoAddr?: string;
+  /** Toạ độ theo định vị của người dùng — dùng làm fallback khi geocode địa chỉ thất bại. */
+  geoLat?: number;
+  geoLng?: number;
   defaultName?: string;
   defaultPhone?: string;
   defaultAddress?: string;
+  defaultQty?: number;
   onClose: () => void;
   onPlaced: (orderCode: string, chosen: RankedOffer) => void;
   lang?: Lang;
@@ -58,15 +278,31 @@ export default function OrderAgentModal({
   const chain = chainLabel(activeOffer.store.chain);
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
+  const isCoopReal = activeOffer.store.chain === "coop";
+  const isBHXReal = activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
+  const oldCoopAddress = defaultAddress || saved.address;
+  const initialAddress = oldCoopAddress;
+  const initialCoopAddressParts = useMemo(() => parseCoopAddressParts(initialAddress), [initialAddress]);
   const [name, setName] = useState(defaultName || saved.name);
   const [phone, setPhone] = useState(defaultPhone || saved.phone);
-  const [address, setAddress] = useState(defaultAddress || saved.address);
+  const [coopAddressLine, setCoopAddressLine] = useState(initialCoopAddressParts.addressLine);
+  const [coopProvinceCode, setCoopProvinceCode] = useState(initialCoopAddressParts.provinceCode);
+  const [coopProvinceName, setCoopProvinceName] = useState(initialCoopAddressParts.provinceName);
+  const [coopDistrictCode, setCoopDistrictCode] = useState(initialCoopAddressParts.districtCode);
+  const [coopDistrictName, setCoopDistrictName] = useState(initialCoopAddressParts.districtName);
+  const [coopWardCode, setCoopWardCode] = useState(initialCoopAddressParts.wardCode);
+  const [coopWardName, setCoopWardName] = useState(initialCoopAddressParts.wardName);
+  const [address, setAddress] = useState(composeCoopFullAddress(initialCoopAddressParts) || initialAddress);
   const [email, setEmail] = useState("");
-  const [qty, setQty] = useState(1);
+  const [password, setPassword] = useState("");
+  const [qty, setQty] = useState(defaultQty && defaultQty > 0 ? Math.floor(defaultQty) : 1);
   const [slot, setSlot] = useState(SLOTS[0]);
+  const [coopDeliveryDate, setCoopDeliveryDate] = useState("");
+  const [coopSlotFrom, setCoopSlotFrom] = useState("");
+  const [coopSlotTo, setCoopSlotTo] = useState("");
 
   // Cứ gõ là lưu — không cần rời khỏi ô. localStorage tức thì + đẩy lên Sheet (debounce).
   const firstRender = useRef(true);
@@ -86,6 +322,41 @@ export default function OrderAgentModal({
   // hiển thị như "tin nhắn" để bạn nhập thử. KHÔNG phải mã thật từ cửa hàng.
   const [simOtp, setSimOtp] = useState("");
   const [orderCode, setOrderCode] = useState("");
+  const [coopBusy, setCoopBusy] = useState(false);
+  const [coopFlowId, setCoopFlowId] = useState("");
+  const [coopError, setCoopError] = useState("");
+  const [coopResult, setCoopResult] = useState<CoopOrderResult | null>(null);
+  const [coopCheckoutPrepared, setCoopCheckoutPrepared] = useState(false);
+  const [coopStep, setCoopStep] = useState<CoopStepId>("account");
+  const [coopBrowserVisible, setCoopBrowserVisible] = useState(false);
+  const [coopBrowserStatus, setCoopBrowserStatus] = useState("");
+  const [coopBrowserFrame, setCoopBrowserFrame] = useState("");
+  const [coopBrowserSize, setCoopBrowserSize] = useState({ width: 1024, height: 768 });
+  const [coopAddressBusy, setCoopAddressBusy] = useState(false);
+  const [coopAddressChecked, setCoopAddressChecked] = useState(false);
+  const [coopLocationsBusy, setCoopLocationsBusy] = useState(false);
+  const [coopProvinces, setCoopProvinces] = useState<CoopLocationOption[]>([]);
+  const [coopDistricts, setCoopDistricts] = useState<CoopLocationOption[]>([]);
+  const [coopWards, setCoopWards] = useState<CoopLocationOption[]>([]);
+  const [coopTerminals, setCoopTerminals] = useState<CoopTerminalChoice[]>([]);
+  const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
+  const [coopSelectedPaymentCode, setCoopSelectedPaymentCode] = useState("COD");
+  const [coopGeo, setCoopGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [bhxMessages, setBhxMessages] = useState<Array<{ message: string; status?: string }>>([]);
+  const [bhxBusy, setBhxBusy] = useState(false);
+  const [bhxDeliveryHtml, setBhxDeliveryHtml] = useState("");
+  const [bhxSelectedDeliveryText, setBhxSelectedDeliveryText] = useState("");
+  const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
+  const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
+  const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
+  const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
+  const [bhxOtp, setBhxOtp] = useState("");
+  const coopBrowserWsRef = useRef<WebSocket | null>(null);
+  const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
+  const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
+  const lastCoopLookupAddressRef = useRef("");
+  const coopCompletionHandledRef = useRef(false);
+  const bhxBrowserWsRef = useRef<WebSocket | null>(null);
 
   const steps: Step[] = useMemo(() => {
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
@@ -150,6 +421,67 @@ export default function OrderAgentModal({
   }, [phase, stepIndex, current, activeOffer, onPlaced, simOtp]);
 
   const total = activeOffer.price * qty;
+  const coopMinTotal = 200000;
+  const coopBelowMinimum = isCoopReal && total < coopMinTotal;
+  const todayInput = formatDateInput(new Date());
+  const coopDeliveryDates = (coopResult?.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
+  const coopDeliverySlots =
+    (coopDeliveryDate ? coopResult?.deliveryCheck?.availableSlotsByDate?.[coopDeliveryDate] : undefined) ??
+    coopResult?.deliveryCheck?.availableTimeSlots ??
+    [];
+  const coopSavedAddress = coopResult?.deliveryCheck?.fullAddress || "";
+  const coopPaymentMethods = (coopResult?.paymentCheck?.methods ?? []).filter((method) => method.methodCode);
+  const selectedCoopPaymentMethod =
+    coopPaymentMethods.find((method) => method.methodCode === coopSelectedPaymentCode) ??
+    coopPaymentMethods.find((method) => method.isSelected);
+  const coopSelectedPaymentName =
+    selectedCoopPaymentMethod?.name ||
+    coopResult?.paymentCheck?.selectedMethodName ||
+    coopSelectedPaymentCode ||
+    coopResult?.paymentCheck?.selectedMethodCode ||
+    "";
+  const coopSelectedPaymentIsOnline =
+    selectedCoopPaymentMethod?.paymentMethodType === "online" || Boolean(selectedCoopPaymentMethod?.methodCode && selectedCoopPaymentMethod.methodCode !== "COD");
+  const effectiveCoopDeliverySlots = getEffectiveCoopDeliverySlots(
+    coopDeliverySlots.length ? coopDeliverySlots : COOP_TIME_SLOTS,
+    coopDeliveryDate,
+  );
+  const activeCoopTerminalCode = activeOffer.store.id.replace(/^coop-/, "");
+  const coopTerminalCode = coopSelectedTerminalCode || activeCoopTerminalCode;
+  const selectedCoopTerminal =
+    coopTerminals.find((item) => getCoopTerminalCode(item) === coopTerminalCode) ?? null;
+
+  const resetCoopAddressLookup = () => {
+    setCoopAddressChecked(false);
+    setCoopSelectedTerminalCode("");
+    setCoopTerminals([]);
+    setCoopGeo(null);
+    setCoopCheckoutPrepared(false);
+    lastCoopLookupAddressRef.current = "";
+  };
+
+  const coopAddressParts = applyKnownCoopLocationCodes({
+    addressLine: coopAddressLine.trim(),
+    provinceCode: coopProvinceCode,
+    provinceName: coopProvinceName,
+    districtCode: coopDistrictCode,
+    districtName: coopDistrictName,
+    wardCode: coopWardCode,
+    wardName: coopWardName,
+  });
+
+  const updateCoopAddress = (patch: Partial<CoopAddressParts>) => {
+    const next = applyKnownCoopLocationCodes({ ...coopAddressParts, ...patch });
+    setCoopAddressLine(next.addressLine);
+    setCoopProvinceCode(next.provinceCode);
+    setCoopProvinceName(next.provinceName);
+    setCoopDistrictCode(next.districtCode);
+    setCoopDistrictName(next.districtName);
+    setCoopWardCode(next.wardCode);
+    setCoopWardName(next.wardName);
+    setAddress(composeCoopFullAddress(next));
+    resetCoopAddressLookup();
+  };
 
   // Kiểm tra SĐT di động VN: 10 số, đầu 0, số thứ 2 thuộc {3,5,7,8,9}.
   // Chấp nhận cả tiền tố +84 / 84 và khoảng trắng/dấu chấm/gạch.
@@ -159,8 +491,863 @@ export default function OrderAgentModal({
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const emailError = cfg.needEmail && email.trim().length > 0 && !emailValid;
+  const passwordError = isCoopReal && password.length > 0 && password.length < 6;
+  const coopDeliveryReady = !!coopDeliveryDate && !!coopSlotFrom && !!coopSlotTo;
+  const coopStructuredAddressReady = Boolean(
+    coopAddressParts.addressLine &&
+    coopAddressParts.provinceCode &&
+    coopAddressParts.districtCode &&
+    coopAddressParts.wardCode,
+  );
+  const coopCanStart =
+    !!name.trim() &&
+    phoneValid &&
+    password.length >= 6 &&
+    coopStructuredAddressReady &&
+    coopAddressChecked &&
+    !!coopTerminalCode &&
+    !coopBelowMinimum &&
+    qty > 0;
   const canStart =
-    !!name.trim() && phoneValid && !!address.trim() && (!cfg.needEmail || emailValid);
+    !!name.trim() &&
+    phoneValid &&
+    !!address.trim() &&
+    (!cfg.needEmail || emailValid) &&
+    (!isCoopReal || coopCanStart);
+
+  const postCoopOrder = async (payload: Record<string, unknown>) => {
+    const res = await fetch("/api/coop/order", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json().catch(() => ({}))) as CoopOrderResult;
+    if (!res.ok || data.error) {
+      const err = new Error(data.error || t("Co.op đang lỗi, vui lòng thử lại."));
+      (err as Error & { code?: string }).code = data.code;
+      throw err;
+    }
+    return data;
+  };
+
+  const coopPayload = () => ({
+    phone: phoneDigits,
+    password,
+    name,
+    address,
+    addressLine: coopAddressParts.addressLine,
+    provinceId: coopAddressParts.provinceCode,
+    provinceName: coopAddressParts.provinceName,
+    districtId: coopAddressParts.districtCode,
+    districtName: coopAddressParts.districtName,
+    wardId: coopAddressParts.wardCode,
+    wardName: coopAddressParts.wardName,
+    quantity: qty,
+    price: activeOffer.price,
+    sku: activeOffer.productId,
+    productId: activeOffer.product.id,
+    productName: activeOffer.product.name,
+    productUrl: activeOffer.productUrl,
+    terminalCode: coopTerminalCode,
+    allowPasswordLogin: true,
+    terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
+    terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
+    fullAddress: address,
+    siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
+    terminalId: selectedCoopTerminal?.terminalId,
+    lat: coopGeo?.lat,
+    lng: coopGeo?.lng,
+  });
+
+  const applyCoopDeliverySelection = (data: CoopOrderResult) => {
+    const dates = (data.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
+    const selectedDate = data.deliveryCheck?.selectedDate && data.deliveryCheck.selectedDate >= todayInput
+      ? data.deliveryCheck.selectedDate
+      : dates[0] || coopDeliveryDate || "";
+    if (selectedDate) setCoopDeliveryDate(selectedDate);
+
+    const candidateSlots = getEffectiveCoopDeliverySlots(
+      selectedDate && data.deliveryCheck?.availableSlotsByDate?.[selectedDate]?.length
+        ? data.deliveryCheck.availableSlotsByDate[selectedDate]
+        : data.deliveryCheck?.availableTimeSlots?.length
+          ? data.deliveryCheck.availableTimeSlots
+          : COOP_TIME_SLOTS,
+      selectedDate,
+    );
+    const selectedSlot =
+      candidateSlots.find(
+        (item) =>
+          item.from === data.deliveryCheck?.selectedSlotFrom &&
+          item.to === data.deliveryCheck?.selectedSlotTo &&
+          !item.disabled,
+      ) ??
+      candidateSlots.find((item) => !item.disabled) ??
+      candidateSlots[0];
+    if (selectedSlot) {
+      setCoopSlotFrom(selectedSlot.from);
+      setCoopSlotTo(selectedSlot.to);
+    } else {
+      setCoopSlotFrom("");
+      setCoopSlotTo("");
+    }
+  };
+
+  const setCoopCartReady = (data: CoopOrderResult) => {
+    setCoopResult(data);
+    setCoopFlowId("");
+    setOtp("");
+    setCoopCheckoutPrepared(false);
+    setCoopStep("delivery");
+    setStepIndex(2);
+    setCoopSelectedPaymentCode(data.paymentCheck?.selectedMethodCode || "COD");
+    applyCoopDeliverySelection(data);
+  };
+
+  const startBHXOrder = async () => {
+    if (bhxBrowserWsRef.current) {
+      bhxBrowserWsRef.current.close();
+    }
+
+    setStepIndex(0);
+    setOtp("");
+    setOtpError(false);
+    setSimOtp("");
+    setPhase("running");
+    setBhxBusy(true);
+    setBhxMessages([{ message: t("Đang kết nối agent-server…") }]);
+    setBhxDeliveryHtml("");
+    setBhxSelectedDeliveryText("");
+    setBhxBrowserFrame("");
+    setBhxBrowserSize({ width: 1024, height: 768 });
+    setBhxShowScreencast(false);
+    setBhxOtpVisible(false);
+    setBhxOtp("");
+
+    const ws = new WebSocket("ws://localhost:8080");
+    bhxBrowserWsRef.current = ws;
+
+    const sendBHXOrderRequest = () => {
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "run_order",
+            payload: {
+              url: activeOffer.productUrl,
+              productName: activeOffer.product.name,
+              qty,
+              buyerName: name,
+              buyerPhone: phone,
+              buyerAddress: address,
+              chain: activeOffer.store.chain,
+            },
+          }),
+        );
+      } catch (err) {
+        setBhxBusy(false);
+        setBhxMessages((logs) => [
+          ...logs,
+          { message: err instanceof Error ? err.message : String(err), status: "error" },
+        ]);
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(String(event.data)) as {
+          type?: string;
+          message?: string;
+          status?: string;
+          phase?: string;
+          content?: string;
+          data?: string;
+          width?: number;
+          height?: number;
+        };
+        if (message.type === "ready") {
+          setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy BHX."), status: "success" }]);
+          sendBHXOrderRequest();
+        } else if (message.type === "screencast" && message.data) {
+          setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+          if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
+        } else if (message.type === "message" && message.content) {
+          setBhxMessages((logs) => [...logs, { message: message.content || "" }]);
+        } else if (message.type === "status") {
+          if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
+            setBhxBusy(false);
+          }
+        } else if (message.type === "popup_delivery_time" && message.content) {
+          setBhxDeliveryHtml(message.content);
+        } else if (message.type === "order_success" && message.content) {
+          setBhxBusy(false);
+          setBhxShowScreencast(true);
+          setBhxDeliveryHtml("");
+          setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
+        } else if (message.type === "input_otp") {
+          setBhxOtpVisible(true);
+          setBhxOtp("");
+          setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
+        }
+      } catch (err) {
+        console.error("Error handling BHX agent message:", err);
+      }
+    };
+    ws.onerror = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Không kết nối được agent-server BHX."), status: "error" }]);
+    };
+    ws.onclose = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Kết nối agent-server đã đóng."), status: "info" }]);
+    };
+  };
+
+  const handleBHXDeliveryChoice = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+
+    const dateEl = target.closest<HTMLElement>("[data-delivery-date]");
+    const labelEl = target.closest<HTMLElement>("label.radio-wrapper");
+    const optionEl = labelEl || dateEl;
+    if (!optionEl) return;
+
+    const selectedText =
+      labelEl?.querySelector<HTMLElement>(".line-clamp-1")?.textContent?.trim() ||
+      dateEl?.textContent?.trim() ||
+      optionEl.textContent?.trim() ||
+      "";
+    const price = labelEl?.querySelector<HTMLElement>(".text-right")?.textContent?.trim() || "";
+    const deliveryDate = dateEl?.dataset.deliveryDate || "";
+    const kind = dateEl ? "date" : "time";
+    const compactText = selectedText.replace(/\s+/g, " ").trim();
+
+    if (!compactText) return;
+    setBhxSelectedDeliveryText(price ? `${compactText} - ${price}` : compactText);
+
+    if (kind === "time") {
+      const radio = labelEl?.querySelector<HTMLInputElement>('input[type="radio"]');
+      if (radio) radio.checked = true;
+      setBhxMessages((logs) => [
+        ...logs,
+        {
+          message: price
+            ? t("Bạn đã chọn: {choice} - {price}", { choice: compactText, price })
+            : t("Bạn đã chọn: {choice}", { choice: compactText }),
+          status: "success",
+        },
+      ]);
+    }
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi lựa chọn giao hàng."), status: "error" }]);
+      return;
+    }
+    ws.send(
+      JSON.stringify({
+        type: "delivery_time_selected",
+        kind,
+        selectedText: compactText,
+        price,
+        deliveryDate,
+      }),
+    );
+    if (kind === "time") {
+      setBhxDeliveryHtml("");
+    }
+  };
+
+  const submitBHXOtp = () => {
+    const code = bhxOtp.trim();
+    if (!code) return;
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi OTP."), status: "error" }]);
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: "submit_otp", otp: code }));
+    setBhxOtpVisible(false);
+    setBhxMessages((logs) => [...logs, { message: t("Đã gửi OTP tới agent-server."), status: "success" }]);
+  };
+
+  const startCoopOrder = async () => {
+    setCoopBusy(true);
+    setCoopError("");
+    setCoopResult(null);
+    setCoopFlowId("");
+    setCoopCheckoutPrepared(false);
+    setCoopStep("account");
+    setCoopBrowserVisible(false);
+    setCoopBrowserFrame("");
+    setCoopBrowserStatus("");
+    coopCompletionHandledRef.current = false;
+    setOtp("");
+    setOrderCode("");
+    setPhase("running");
+    setStepIndex(0);
+    try {
+      const data = await postCoopOrder({ action: "register", ...coopPayload() });
+      setCoopResult(data);
+      if (data.phase === "otp" && data.flowId) {
+        setCoopResult(data);
+        setCoopFlowId(data.flowId);
+        setCoopStep("otp");
+        setStepIndex(1);
+        return;
+      }
+      if (data.phase === "cart") {
+        setCoopCartReady(data);
+        return;
+      }
+      throw new Error(t("Co.op trả kết quả chưa hỗ trợ."));
+    } catch (err) {
+      setCoopError(err instanceof Error ? err.message : String(err));
+      const code = (err as Error & { code?: string }).code;
+      if (code === "COOP_DEFAULT_ADDRESS_MISSING" || code === "COOP_TOKEN_CACHE_MISSING") {
+        setCoopBrowserStatus(t("Co.op cần cập nhật hồ sơ trước. Đang mở màn hình để tự điền thông tin..."));
+        openCoopBrowserAssist(undefined, "profileSetup");
+      }
+      setPhase("form");
+    } finally {
+      setCoopBusy(false);
+    }
+  };
+
+  const confirmCoopOtp = async () => {
+    if (!coopFlowId || otp.length !== 6) return;
+    setCoopBusy(true);
+    setCoopError("");
+    try {
+      const data = await postCoopOrder({ action: "confirm", flowId: coopFlowId, code: otp });
+      setCoopCartReady(data);
+    } catch (err) {
+      setCoopError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCoopBusy(false);
+    }
+  };
+
+  const resendCoopOtp = async () => {
+    if (!coopFlowId) return;
+    setCoopBusy(true);
+    setCoopError("");
+    try {
+      await postCoopOrder({ action: "resend", flowId: coopFlowId });
+    } catch (err) {
+      setCoopError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCoopBusy(false);
+    }
+  };
+
+  const prepareCoopCheckout = async () => {
+    if (!coopResult?.checkoutFlowId || !coopDeliveryReady) return;
+    setCoopBusy(true);
+    setCoopError("");
+    setCoopCheckoutPrepared(false);
+    try {
+      const data = await postCoopOrder({
+        action: "prepareCheckout",
+        checkoutFlowId: coopResult.checkoutFlowId,
+        deliveryDate: coopDeliveryDate,
+        slotFrom: coopSlotFrom,
+        slotTo: coopSlotTo,
+        paymentMethodCode: coopSelectedPaymentCode || "COD",
+      });
+      const nextResult = { ...(coopResult ?? {}), ...data };
+      setCoopResult(nextResult);
+      applyCoopDeliverySelection(nextResult);
+      setCoopSelectedPaymentCode(nextResult.paymentCheck?.selectedMethodCode || coopSelectedPaymentCode || "COD");
+      setCoopCheckoutPrepared(true);
+      setCoopStep("review");
+      setCoopBrowserStatus("");
+      const preparedPaymentCode = nextResult.paymentCheck?.selectedMethodCode || coopSelectedPaymentCode || "COD";
+      const shouldOpenCheckoutStream = preparedPaymentCode === "COD";
+      if (shouldOpenCheckoutStream) {
+        setCoopBrowserStatus(t("Đã cập nhật lịch giao và COD. Đang mở checkout Co.op để bạn đặt hàng..."));
+        openCoopBrowserAssist(nextResult, "checkout");
+      }
+    } catch (err) {
+      setCoopError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCoopBusy(false);
+    }
+  };
+
+  const placeCoopOrder = async () => {
+    if (!coopResult?.checkoutFlowId || !coopCheckoutPrepared) return;
+    if (!coopSelectedPaymentIsOnline) {
+      setCoopError("");
+      setCoopStep("review");
+      setCoopBrowserStatus(t("Đang mở màn hình checkout Co.op để bạn đặt hàng..."));
+      openCoopBrowserAssist(coopResult, "checkout");
+      return;
+    }
+    setCoopBusy(true);
+    setCoopError("");
+    try {
+      const data = await postCoopOrder({
+        action: "placeOrder",
+        checkoutFlowId: coopResult.checkoutFlowId,
+        confirmFinal: true,
+      });
+      setCoopResult((current) => ({ ...(current ?? {}), ...data }));
+      const code = data.order?.code || data.order?.orderId || `COOP-${Date.now().toString().slice(-6)}`;
+      const paymentUrl = data.paymentUrl || data.order?.paymentUrl;
+      if (paymentUrl) {
+        setOrderCode(code);
+        setCoopStep("review");
+        setCoopBrowserStatus(t("Đang mở màn hình thanh toán để bạn hoàn tất giao dịch..."));
+        openCoopBrowserAssist({ ...(coopResult ?? {}), ...data, paymentUrl }, "paymentScreen");
+        return;
+      }
+      if (coopSelectedPaymentIsOnline) {
+        throw new Error(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng gửi log response để kiểm tra tiếp."));
+      }
+      setOrderCode(code);
+      setCoopStep("success");
+      setPhase("done");
+      onPlaced(code, activeOffer);
+    } catch (err) {
+      setCoopError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCoopBusy(false);
+    }
+  };
+
+  const sendCoopBrowserMessage = (message: Record<string, unknown>) => {
+    const ws = coopBrowserWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    }
+  };
+
+  const openCoopBrowserAssist = (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" | "paymentScreen" = "checkout") => {
+    const result = nextResult ?? coopResult;
+    setCoopBrowserVisible(true);
+    setCoopBrowserStatus(t("Đang mở màn hình thao tác Co.op…"));
+    setCoopBrowserFrame("");
+    try {
+      coopBrowserWsRef.current?.close();
+      const ws = new WebSocket("ws://localhost:8080");
+      coopBrowserWsRef.current = ws;
+      let opened = false;
+      let receivedFrame = false;
+      let commandAcknowledged = false;
+      let commandAttempts = 0;
+      let lastCommandAt = 0;
+      const preparedDeliveryDate = result?.deliveryCheck?.selectedDate || coopDeliveryDate;
+      const preparedSlotFrom = result?.deliveryCheck?.selectedSlotFrom || coopSlotFrom;
+      const preparedSlotTo = result?.deliveryCheck?.selectedSlotTo || coopSlotTo;
+      const buildOpenMessage = () =>
+        mode === "paymentScreen"
+          ? {
+              type: "coop_payment_screen",
+              paymentUrl: result?.paymentUrl || result?.order?.paymentUrl,
+              orderCode: result?.order?.code || result?.order?.orderId || orderCode,
+              paymentMethodCode: result?.order?.paymentMethodCode || coopSelectedPaymentCode,
+              paymentMethodName: coopSelectedPaymentName,
+            }
+          : mode === "profileSetup"
+          ? {
+              type: "coop_profile_setup",
+              phone: phoneDigits,
+              password,
+              name,
+              email,
+              address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
+              terminalCode: coopTerminalCode,
+              terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
+              terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
+              terminalId: selectedCoopTerminal?.terminalId,
+              siteId: getCoopTerminalNumber(selectedCoopTerminal, "siteId"),
+            }
+          : result?.cartToken
+            ? {
+                type: "coop_show_cart",
+              cartToken: result.cartToken,
+              terminalCode: result.terminalCode || coopTerminalCode,
+              terminalName: result.browserSession?.terminalName,
+              terminalAddress: result.browserSession?.terminalAddress,
+              terminalId: result.browserSession?.terminalId,
+              siteId: result.browserSession?.siteId,
+              deliveryDate: preparedDeliveryDate,
+              slotFrom: preparedSlotFrom,
+              slotTo: preparedSlotTo,
+              address,
+              addressLine: coopAddressParts.addressLine,
+              provinceCode: coopAddressParts.provinceCode,
+              provinceName: coopAddressParts.provinceName,
+              districtCode: coopAddressParts.districtCode,
+              districtName: coopAddressParts.districtName,
+              wardCode: coopAddressParts.wardCode,
+              wardName: coopAddressParts.wardName,
+              name,
+              email,
+              phone: phoneDigits,
+              password,
+              checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
+              browserSession: result.browserSession,
+            }
+          : { type: "navigate", url: result?.checkoutUrl || result?.cartUrl || "https://cooponline.vn" };
+      const sendOpenCommand = () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const message = buildOpenMessage();
+        if (mode === "paymentScreen" && !message.paymentUrl) {
+          setCoopBrowserStatus(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán để mở QR."));
+          setCoopError(t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng thử bấm Thanh toán ngay trong trang Co.op."));
+          window.clearInterval(commandRetry);
+          return;
+        }
+        commandAttempts += 1;
+        lastCommandAt = Date.now();
+        ws.send(JSON.stringify(message));
+      };
+      const connectionTimeout = window.setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          setCoopBrowserStatus(t("Chưa thấy agent-server. Chạy `npm run agent-server` rồi bấm mở lại."));
+          ws.close();
+        }
+      }, 2500);
+      const commandRetry = window.setInterval(() => {
+        if (!opened || commandAcknowledged || ws.readyState !== WebSocket.OPEN) return;
+        if (commandAttempts >= 12) {
+          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng Co.op chưa nhận lệnh mở màn hình. Vui lòng bấm Đóng màn hình rồi mở lại."));
+          window.clearInterval(commandRetry);
+          return;
+        }
+        if (commandAttempts === 0 || Date.now() - lastCommandAt > 1500) {
+          sendOpenCommand();
+        }
+      }, 1000);
+      const frameTimeout = window.setTimeout(() => {
+        if (opened && !receivedFrame) {
+          setCoopBrowserStatus(t("Đã kết nối agent-server nhưng chưa nhận được ảnh. Đang thử nạp lại màn hình Co.op…"));
+          sendOpenCommand();
+        }
+      }, 7000);
+      ws.onopen = () => {
+        opened = true;
+        window.clearTimeout(connectionTimeout);
+        setCoopBrowserStatus(t("Đã kết nối agent-server, đang chờ trình duyệt sẵn sàng…"));
+        window.setTimeout(sendOpenCommand, 250);
+      };
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data)) as {
+            type?: string;
+            data?: string;
+            message?: string;
+            status?: string;
+            phase?: string;
+            error?: string;
+            width?: number;
+            height?: number;
+            orderCode?: string;
+            orderUrl?: string;
+            totalText?: string;
+          };
+          if (message.type === "screencast" && message.data) {
+            receivedFrame = true;
+            window.clearTimeout(frameTimeout);
+            setCoopBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+            if (message.width && message.height) setCoopBrowserSize({ width: message.width, height: message.height });
+          }
+          if (message.type === "log" && message.message) {
+            setCoopBrowserStatus(message.message);
+            if (/khởi tạo trình duyệt|khoi tao trinh duyet|browser/i.test(message.message)) {
+              window.setTimeout(sendOpenCommand, 100);
+            }
+            if (/Co\.opmart|Co\.op/i.test(message.message)) {
+              commandAcknowledged = true;
+              window.clearInterval(commandRetry);
+            }
+          }
+          if (message.type === "status" && message.phase === "failed") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            const reason = message.error ? String(message.error) : t("Không mở được màn hình thanh toán Co.op.");
+            setCoopBrowserStatus(reason === "missing_payment_url" ? t("Co.op đã tạo đơn nhưng chưa trả link thanh toán để mở QR.") : reason);
+            setCoopError(reason === "missing_payment_url" ? t("Co.op đã tạo đơn nhưng chưa trả link thanh toán online. Vui lòng thử bấm Thanh toán ngay trong trang Co.op.") : reason);
+          }
+          if (message.type === "status" && message.phase?.startsWith("coop_assist_")) {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            if (message.phase === "coop_assist_ready") {
+              setCoopBrowserStatus(t("Màn hình Co.op đã sẵn sàng, bạn có thể click/gõ trực tiếp tại đây."));
+            }
+            if (message.phase === "coop_assist_manual") {
+              setCoopBrowserStatus(t("Co.op cần bạn thao tác tiếp trên màn hình đang mở."));
+            }
+          }
+          if (message.type === "status" && message.phase === "coop_payment_ready") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            setCoopBrowserStatus(t("Màn hình thanh toán đã sẵn sàng. Affree sẽ tự ghi nhận khi giao dịch thành công."));
+          }
+          if (message.type === "status" && message.phase === "coop_payment_failed") {
+            commandAcknowledged = true;
+            window.clearInterval(commandRetry);
+            setCoopBrowserStatus(t("Giao dịch chưa thành công hoặc đã hủy. Bạn có thể thử lại trên màn hình, hoặc đóng để chọn phương thức khác."));
+            setCoopError(t("Thanh toán Co.op chưa hoàn tất. Vui lòng thử lại hoặc chọn phương thức thanh toán khác."));
+          }
+          if (message.type === "status" && message.phase === "completed" && !coopCompletionHandledRef.current) {
+            coopCompletionHandledRef.current = true;
+            const code = message.orderCode || orderCode || `COOP-${Date.now().toString().slice(-6)}`;
+            setOrderCode(code);
+            setCoopBrowserVisible(false);
+            setCoopBrowserFrame("");
+            setCoopBrowserStatus("");
+            setCoopStep("success");
+            setPhase("done");
+            setCoopResult((current) => ({
+              ...(current ?? {}),
+              phase: "ordered",
+              order: {
+                ...(current?.order ?? {}),
+                code,
+                orderId: code,
+                paymentUrl: message.orderUrl,
+              },
+            }));
+            onPlaced(code, activeOffer);
+            ws.close();
+          }
+        } catch {
+          // Ignore malformed frames from local agent server.
+        }
+      };
+      ws.onerror = () => setCoopBrowserStatus(t("Chưa kết nối được agent-server. Chạy `npm run agent-server` rồi thử lại."));
+      ws.onclose = () => {
+        window.clearTimeout(connectionTimeout);
+        window.clearTimeout(frameTimeout);
+        window.clearInterval(commandRetry);
+        if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
+        coopBrowserWsRef.current = null;
+      };
+    } catch {
+      setCoopBrowserStatus(t("Không mở được màn hình Co.op."));
+    }
+  };
+
+  const getCoopBrowserPoint = (event: { currentTarget: HTMLElement; clientX: number; clientY: number }) => {
+    const image = coopStreamImageRef.current;
+    const rect = (image ?? event.currentTarget).getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const frameAspect = coopBrowserSize.width / coopBrowserSize.height;
+    const boxAspect = rect.width / rect.height;
+    const contentWidth = boxAspect > frameAspect ? rect.height * frameAspect : rect.width;
+    const contentHeight = boxAspect > frameAspect ? rect.height : rect.width / frameAspect;
+    const contentLeft = rect.left + (rect.width - contentWidth) / 2;
+    const contentTop = rect.top + (rect.height - contentHeight) / 2;
+    const relativeX = Math.min(Math.max((event.clientX - contentLeft) / contentWidth, 0), 1);
+    const relativeY = Math.min(Math.max((event.clientY - contentTop) / contentHeight, 0), 1);
+    const x = Math.round(relativeX * coopBrowserSize.width);
+    const y = Math.round(relativeY * coopBrowserSize.height);
+    return { x, y };
+  };
+
+  const clickCoopBrowser = (event: React.MouseEvent<HTMLImageElement>) => {
+    const point = getCoopBrowserPoint(event);
+    if (!point) return;
+    sendCoopBrowserMessage({ type: "click", ...point });
+  };
+
+  const focusCoopBrowser = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.currentTarget.focus();
+  };
+
+  useEffect(() => {
+    if (!coopBrowserVisible) return;
+    const target = coopStreamWheelRef.current;
+    if (!target) return;
+
+    const onWheel = (event: WheelEvent) => {
+      const point = getCoopBrowserPoint({ currentTarget: target, clientX: event.clientX, clientY: event.clientY });
+      if (!point) return;
+      event.preventDefault();
+      event.stopPropagation();
+      sendCoopBrowserMessage({
+        type: "wheel",
+        ...point,
+        deltaX: Math.round(event.deltaX),
+        deltaY: Math.round(event.deltaY),
+      });
+    };
+
+    target.addEventListener("wheel", onWheel, { passive: false });
+    return () => target.removeEventListener("wheel", onWheel);
+  }, [coopBrowserVisible, coopBrowserSize.width, coopBrowserSize.height]);
+
+  const keyCoopBrowser = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!coopBrowserVisible) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key.length === 1) {
+      sendCoopBrowserMessage({ type: "type", text: event.key });
+      event.preventDefault();
+      return;
+    }
+    const supported = new Set(["Enter", "Backspace", "Delete", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+    if (supported.has(event.key)) {
+      sendCoopBrowserMessage({ type: "keypress", key: event.key });
+      event.preventDefault();
+    }
+  };
+
+  const checkCoopAddress = async () => {
+    if (!address.trim()) return;
+    lastCoopLookupAddressRef.current = address.trim();
+    setCoopAddressBusy(true);
+    setCoopAddressChecked(false);
+    setCoopError("");
+    try {
+      const loc =
+        (await safeGeocode(address)) ??
+        (Number.isFinite(geoLat) && Number.isFinite(geoLng) && (geoLat !== 0 || geoLng !== 0)
+          ? { lat: geoLat as number, lng: geoLng as number }
+          : null);
+      setCoopGeo(loc ? { lat: loc.lat, lng: loc.lng } : null);
+      const params = new URLSearchParams({
+        address: address.trim(),
+      });
+      if (loc) {
+        params.set("lat", String(loc.lat));
+        params.set("lng", String(loc.lng));
+      }
+      const res = await fetch(`/api/coop/terminals?${params.toString()}`, { cache: "no-store" });
+      const data = (await res.json().catch(() => ({}))) as {
+        selectedTerminalCode?: string;
+        terminals?: CoopTerminalChoice[];
+        error?: string;
+      };
+      if (!res.ok || data.error) throw new Error(data.error || t("Co.op chưa trả danh sách kho gần địa chỉ này."));
+      const terminals = (data.terminals || []).filter((item) => getCoopTerminalCode(item));
+      if (!terminals.length) throw new Error(t("Không tìm thấy kho Co.op phù hợp với địa chỉ này."));
+      const selectedCode = data.selectedTerminalCode || getCoopTerminalCode(terminals[0]);
+      setCoopTerminals(terminals);
+      setCoopSelectedTerminalCode(selectedCode);
+      setCoopAddressChecked(true);
+      const matchingOffer = alternatives.find(
+        (item) => item.store.chain === "coop" && item.store.id.replace(/^coop-/, "") === selectedCode,
+      );
+      if (matchingOffer) setActiveOffer(matchingOffer);
+    } catch (err) {
+      setCoopTerminals([]);
+      setCoopSelectedTerminalCode("");
+      setCoopError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCoopAddressBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isCoopReal) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("provinces")
+      .then((items) => {
+        if (!alive) return;
+        setCoopProvinces(items);
+        const selected = coopProvinceCode ? items.find((item) => item.code === coopProvinceCode) : findCoopLocationByName(items, coopProvinceName || HCM_PROVINCE.name);
+        if (selected) {
+          setCoopProvinceCode(selected.code);
+          setCoopProvinceName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal]);
+
+  useEffect(() => {
+    if (!isCoopReal || !coopProvinceCode) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("districts", { provinceCode: coopProvinceCode })
+      .then((items) => {
+        if (!alive) return;
+        setCoopDistricts(items);
+        const selected = coopDistrictCode ? items.find((item) => item.code === coopDistrictCode) : findCoopLocationByName(items, coopDistrictName);
+        if (selected) {
+          setCoopDistrictCode(selected.code);
+          setCoopDistrictName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal, coopProvinceCode]);
+
+  useEffect(() => {
+    if (!isCoopReal || !coopDistrictCode) return;
+    let alive = true;
+    setCoopLocationsBusy(true);
+    fetchCoopLocations("wards", { districtCode: coopDistrictCode })
+      .then((items) => {
+        if (!alive) return;
+        setCoopWards(items);
+        const selected = coopWardCode ? items.find((item) => item.code === coopWardCode) : findCoopLocationByName(items, coopWardName);
+        if (selected) {
+          setCoopWardCode(selected.code);
+          setCoopWardName(selected.name);
+        }
+      })
+      .catch((err) => setCoopError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        if (alive) setCoopLocationsBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isCoopReal, coopDistrictCode]);
+
+  useEffect(() => {
+    if (!isCoopReal) return;
+    const nextAddress = composeCoopFullAddress(coopAddressParts);
+    if (nextAddress && nextAddress !== address) setAddress(nextAddress);
+  }, [
+    isCoopReal,
+    coopAddressParts.addressLine,
+    coopAddressParts.provinceCode,
+    coopAddressParts.provinceName,
+    coopAddressParts.districtCode,
+    coopAddressParts.districtName,
+    coopAddressParts.wardCode,
+    coopAddressParts.wardName,
+    address,
+  ]);
+
+  useEffect(() => {
+    const lookupAddress = address.trim();
+    if (!isCoopReal || phase !== "form" || !lookupAddress || coopAddressBusy || coopAddressChecked) return;
+    if (lastCoopLookupAddressRef.current === lookupAddress) return;
+    const timer = window.setTimeout(() => {
+      void checkCoopAddress();
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [address, isCoopReal, phase, coopAddressBusy, coopAddressChecked]);
+
+  useEffect(() => {
+    return () => {
+      coopBrowserWsRef.current?.close();
+    };
+  }, []);
 
   // So địa chỉ giao với địa chỉ định vị (nếu có) để biết có lệch không.
   const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -183,7 +1370,7 @@ export default function OrderAgentModal({
     let alive = true;
     setGeocoding(true);
     const t = setTimeout(async () => {
-      const loc = await geocode(address);
+      const loc = await safeGeocode(address);
       if (!alive) return;
       setDeliveryLoc(loc);
       setGeocoding(false);
@@ -240,10 +1427,677 @@ export default function OrderAgentModal({
 
   const showRepick = shouldGeocode && storeChoices.length > 1;
 
+  useEffect(() => {
+    if (coopDeliveryDate && coopDeliveryDate < todayInput) {
+      setCoopDeliveryDate("");
+      setCoopCheckoutPrepared(false);
+    }
+  }, [coopDeliveryDate, todayInput]);
+
+  useEffect(() => {
+    if (!coopDeliveryDate || !effectiveCoopDeliverySlots.length) return;
+    // Đã có slot đang chọn (do user chọn hoặc prepareCheckout set) → giữ nguyên,
+    // KHÔNG tự xoá và KHÔNG reset coopCheckoutPrepared (tránh disable nút đặt hàng).
+    if (coopSlotFrom && coopSlotTo) return;
+    const nextSlot = effectiveCoopDeliverySlots.find((item) => !item.disabled);
+    if (nextSlot) {
+      setCoopSlotFrom(nextSlot.from);
+      setCoopSlotTo(nextSlot.to);
+    }
+  }, [coopDeliveryDate, effectiveCoopDeliverySlots, coopSlotFrom, coopSlotTo]);
+
+  if (isCoopReal) {
+    const coopWizard = [
+      { id: "account" as CoopStepId, label: "Nhập tài khoản và địa chỉ" },
+      { id: "otp" as CoopStepId, label: "Nhập OTP nếu Co.op gửi" },
+      { id: "delivery" as CoopStepId, label: "Chọn ngày và khung giờ" },
+      { id: "payment" as CoopStepId, label: "Chọn phương thức thanh toán" },
+      { id: "review" as CoopStepId, label: "Xác nhận đặt hàng" },
+    ];
+    const visibleStep = phase === "done" ? "success" : coopStep;
+    const currentCoopRank = coopStepRank(visibleStep);
+    const hasCoopBrowser = coopBrowserVisible;
+    const coopBrowserPanel = (
+      <div
+        className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-950 shadow-sm"
+        tabIndex={0}
+        onKeyDown={keyCoopBrowser}
+        onMouseDown={focusCoopBrowser}
+      >
+        <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-white">
+          <span className="truncate">{coopBrowserStatus || t("Màn hình Co.op")}</span>
+          <button type="button" onClick={() => coopBrowserWsRef.current?.close()} className="shrink-0 rounded bg-white/10 px-2 py-1 font-semibold hover:bg-white/20">
+            {t("Đóng màn hình")}
+          </button>
+        </div>
+        <div
+          ref={coopStreamWheelRef}
+          className="coop-stream-wheel-capture flex min-h-0 flex-1 items-center justify-center bg-white"
+        >
+	          {coopBrowserFrame ? (
+	            <img
+	              ref={coopStreamImageRef}
+	              src={coopBrowserFrame}
+	              alt="Co.op checkout thao tác"
+	              className="h-full max-h-full w-full cursor-crosshair object-contain"
+	              onClick={clickCoopBrowser}
+	            />
+          ) : (
+            <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-slate-500">
+              <Spinner />
+              <span className="ml-2">{t("Đang chờ ảnh từ agent-server…")}</span>
+            </div>
+          )}
+        </div>
+        <div className="border-t border-white/10 px-3 py-2 text-[11px] leading-4 text-white/60">
+          {t("Click trực tiếp vào màn hình để chọn. Khi cần nhập chữ/số, bấm vào khung này rồi gõ bàn phím.")}
+        </div>
+      </div>
+    );
+
+    return (
+      <div
+        className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div
+          className="flex min-h-0 w-full flex-col rounded-t-2xl bg-white sm:rounded-2xl"
+	          style={{
+	            width: hasCoopBrowser ? "min(98vw, 1500px)" : "min(96vw, 620px)",
+	            maxWidth: hasCoopBrowser ? 1500 : 620,
+	            height: hasCoopBrowser ? "min(90dvh, 860px)" : "min(78dvh, 760px)",
+	            maxHeight: "calc(100dvh - 24px)",
+            display: "flex",
+            flexDirection: "column",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-emerald-100 px-3 py-2.5">
+            <div className="min-w-0">
+              <h2 className="truncate text-base font-bold text-emerald-700">
+                {phase === "done" ? "Đã đặt hàng Co.op" : "Đặt hàng Co.op"}
+              </h2>
+              <p className="truncate text-xs text-slate-500">
+                {activeOffer.product.name} · {chain}
+              </p>
+            </div>
+            <button onClick={onClose} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100" aria-label={t("Đóng")}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className={`coop-modal-body min-h-0 flex-1 overflow-hidden ${hasCoopBrowser ? "coop-modal-body--split" : "coop-modal-body--single"}`}>
+            <div className={`coop-popup-scroll min-h-0 overscroll-contain ${hasCoopBrowser ? "coop-left-pane rounded-xl border border-slate-200 bg-white px-3 py-3" : "flex flex-col px-3 py-3"}`}>
+              <div className="space-y-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-sm font-bold text-emerald-700">
+                    {qty}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-slate-900">{activeOffer.product.name}</p>
+                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                      {activeOffer.store.name} · {formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <ol className="grid grid-cols-1 gap-1 rounded-lg bg-slate-50 p-1.5 sm:grid-cols-2">
+                {coopWizard.map((item) => {
+                  const done = currentCoopRank > coopStepRank(item.id);
+                  const active = visibleStep === item.id;
+                  return (
+                    <li key={item.id} className={`flex items-center gap-2 rounded-md px-2 py-1 ${active ? "bg-white shadow-sm" : ""}`}>
+                      <span className="shrink-0">
+                        {done ? <CheckIcon /> : active ? <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">{coopStepRank(item.id) + 1}</span> : <PauseDot />}
+                      </span>
+                      <span className={`truncate text-xs font-semibold ${active ? "text-slate-900" : done ? "text-slate-500" : "text-slate-300"}`}>
+                        {t(item.label)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {phase === "form" && (
+                <div className="space-y-2.5 rounded-lg border border-slate-200 bg-white p-2.5">
+                  <p className="text-sm font-bold text-slate-900">Thông tin Co.op</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Field label={t("Người nhận")}>
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder={t("Họ và tên")}
+                        className="input"
+                      />
+                    </Field>
+                    <Field label={t("Số điện thoại")}>
+                      <input
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        inputMode="tel"
+                        placeholder={t("VD: 0901234567")}
+                        aria-invalid={phoneError}
+                        className="input"
+                        style={phoneError ? { borderColor: "#ef4444" } : undefined}
+                      />
+                      {phoneError && <span className="mt-1 block text-xs text-rose-600">{t("Số điện thoại không hợp lệ.")}</span>}
+                    </Field>
+                  </div>
+                  <Field label={t("Mật khẩu Co.op")}>
+                    <input
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      type="password"
+                      autoComplete="current-password"
+                      placeholder={t("Mật khẩu tài khoản Co.op")}
+                      aria-invalid={passwordError}
+                      className="input"
+                      style={passwordError ? { borderColor: "#ef4444" } : undefined}
+                    />
+                    {passwordError && <span className="mt-1 block text-xs text-rose-600">{t("Mật khẩu Co.op cần tối thiểu 6 ký tự.")}</span>}
+                  </Field>
+
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Field label={t("Tỉnh/Thành phố")}>
+                      <select
+                        value={coopProvinceCode}
+                        onChange={(e) => {
+                          const selected = coopProvinces.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            provinceCode: selected?.code || "",
+                            provinceName: selected?.name || "",
+                            districtCode: "",
+                            districtName: "",
+                            wardCode: "",
+                            wardName: "",
+                          });
+                          setCoopDistricts([]);
+                          setCoopWards([]);
+                        }}
+                        className="input"
+                      >
+                        <option value="">{coopLocationsBusy ? t("Đang tải…") : t("Chọn tỉnh/thành phố")}</option>
+                        {coopProvinces.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Quận/Huyện")}>
+                      <select
+                        value={coopDistrictCode}
+                        onChange={(e) => {
+                          const selected = coopDistricts.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            districtCode: selected?.code || "",
+                            districtName: selected?.name || "",
+                            wardCode: "",
+                            wardName: "",
+                          });
+                          setCoopWards([]);
+                        }}
+                        disabled={!coopProvinceCode}
+                        className="input"
+                      >
+                        <option value="">{coopProvinceCode ? t("Chọn quận/huyện") : t("Chọn tỉnh trước")}</option>
+                        {coopDistricts.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Phường/Xã")}>
+                      <select
+                        value={coopWardCode}
+                        onChange={(e) => {
+                          const selected = coopWards.find((item) => item.code === e.target.value);
+                          updateCoopAddress({
+                            wardCode: selected?.code || "",
+                            wardName: selected?.name || "",
+                          });
+                        }}
+                        disabled={!coopDistrictCode}
+                        className="input"
+                      >
+                        <option value="">{coopDistrictCode ? t("Chọn phường/xã") : t("Chọn quận trước")}</option>
+                        {coopWards.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label={t("Số nhà, tên đường")}>
+                      <input
+                        value={coopAddressLine}
+                        onChange={(e) => updateCoopAddress({ addressLine: e.target.value })}
+                        placeholder={t("VD: 17 Đống Đa")}
+                        className="input"
+                      />
+                    </Field>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={!address.trim() || coopAddressBusy}
+                    onClick={() => void checkCoopAddress()}
+                    className="w-full rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {coopAddressBusy ? t("Đang tìm cửa hàng gần nhất…") : coopAddressChecked ? t("Cập nhật lại cửa hàng gần nhất") : t("Đang tự tìm cửa hàng gần nhất")}
+                  </button>
+
+                  {coopTerminals.length > 0 && (
+                    <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-2">
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
+                        <p className="text-xs font-bold text-emerald-800">Cửa hàng Co.op gần địa chỉ giao</p>
+                        <span className="text-[11px] font-medium text-emerald-700">{coopTerminals.length} cửa hàng</span>
+                      </div>
+                      <div className="coop-store-scroll space-y-1.5 overflow-y-auto overscroll-contain pr-1" style={{ maxHeight: 260 }}>
+                      {coopTerminals.map((terminal) => {
+                        const code = getCoopTerminalCode(terminal);
+                        const active = code === coopTerminalCode;
+                        return (
+                          <button
+                            key={code}
+                            type="button"
+                            onClick={() => {
+                              setCoopSelectedTerminalCode(code);
+                              setCoopAddressChecked(true);
+                              const matchingOffer = alternatives.find(
+                                (item) => item.store.chain === "coop" && item.store.id.replace(/^coop-/, "") === code,
+                              );
+                              if (matchingOffer) setActiveOffer(matchingOffer);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                              active ? "border-emerald-500 bg-white ring-1 ring-emerald-500" : "border-emerald-100 bg-white/70 hover:bg-white"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <span className="min-w-0">
+                                <span className="block truncate text-xs font-semibold text-slate-900">{getCoopTerminalName(terminal)}</span>
+                                <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-slate-500">{getCoopTerminalAddress(terminal)}</span>
+                              </span>
+                              <span className="shrink-0 text-[11px] font-bold text-emerald-700">{getCoopTerminalDistance(terminal)}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                      </div>
+                    </div>
+                  )}
+
+                  <Field label={t("Số lượng")}>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setQty((q) => Math.max(1, q - 1))} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">−</button>
+                      <span className="w-8 text-center text-sm font-semibold">{qty}</span>
+                      <button onClick={() => setQty((q) => q + 1)} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">+</button>
+                    </div>
+                  </Field>
+
+                  <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                    <Row k={t("Kho Co.op")} v={coopAddressChecked ? coopTerminalCode : t("Chưa chọn")} />
+                    <Row k={t("Phương thức thanh toán")} v={t("Chọn ở bước checkout")} />
+                    <Row k={t("Tạm tính")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
+                  </div>
+
+                  {coopBelowMinimum && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      {t("Co.op chỉ cho thanh toán khi đơn từ 200.000đ. Tăng số lượng hoặc chọn sản phẩm khác để tiếp tục.")}
+                    </div>
+                  )}
+                  {coopError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{coopError}</div>}
+                  <button
+                    disabled={!coopCanStart || coopBusy}
+                    onClick={() => {
+                      flushProfile({ name, phone, address });
+                      void startCoopOrder();
+                    }}
+                    className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {coopBusy ? t("Đang kết nối Co.op…") : t("Đăng nhập Co.op và thêm vào giỏ")}
+                  </button>
+                  {!coopCanStart && (
+                    <p className="text-center text-xs text-slate-400">
+                      {t("Nhập đủ tên, số điện thoại, mật khẩu, xem cửa hàng gần nhất và đảm bảo đơn từ 200.000đ.")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {phase === "running" && coopStep === "otp" && (
+                <PauseBox tone="blue" hint={t("Mã này đến từ Co.op. Affree không đọc SMS giúp bạn.")}>
+                  <p className="text-sm font-semibold text-slate-900">{t("Nhập OTP Co.op gửi về {phone}", { phone: phoneDigits })}</p>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      value={otp}
+                      onChange={(e) => {
+                        setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                        setCoopError("");
+                      }}
+                      inputMode="numeric"
+                      placeholder={t("6 SỐ OTP")}
+                      className="input flex-1 text-center text-lg font-semibold tracking-[0.35em]"
+                      autoComplete="one-time-code"
+                      autoFocus
+                    />
+                    <button disabled={otp.length !== 6 || coopBusy} onClick={() => void confirmCoopOtp()} className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50">
+                      {coopBusy ? t("Đang gửi…") : t("Xác thực")}
+                    </button>
+                  </div>
+                  <button type="button" disabled={coopBusy} onClick={() => void resendCoopOtp()} className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50">
+                    {t("Gửi lại OTP")}
+                  </button>
+                  {coopError && <p className="mt-2 text-xs font-medium text-rose-600">{coopError}</p>}
+                </PauseBox>
+              )}
+
+              {phase === "running" && (coopStep === "delivery" || coopStep === "payment" || coopStep === "review") && (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-sm font-bold text-slate-900">{t("Checkout Co.op")}</p>
+                  <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <Row k={t("Người nhận")} v={`${name} · ${phoneDigits}`} />
+                    <Row k={t("Địa chỉ Co.op")} v={coopSavedAddress || address} />
+                    <Row k={t("Kho Co.op")} v={coopResult?.terminalCode || coopTerminalCode} />
+                  </div>
+
+                  <Field label={t("Chọn ngày nhận hàng")}>
+                    <div className="relative max-w-[280px]">
+                      <select
+                        value={coopDeliveryDate}
+                        onChange={(e) => {
+                          setCoopDeliveryDate(e.target.value);
+                          setCoopCheckoutPrepared(false);
+                          setCoopStep("delivery");
+                        }}
+                        className="coop-date-select input h-11 appearance-none text-slate-700"
+                        style={{ paddingLeft: "44px", paddingRight: "40px", WebkitAppearance: "none", appearance: "none" }}
+                      >
+                        <option value="">{t("dd/mm/yyyy")}</option>
+                        {coopDeliveryDates.map((date) => (
+                          <option key={date} value={date}>{formatCoopDate(date)}</option>
+                        ))}
+                      </select>
+                      <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M8 2v4M16 2v4M3 10h18" />
+                        <rect x="3" y="4" width="18" height="18" rx="2" />
+                      </svg>
+                      <svg className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="m7 10 5 5 5-5H7Z" />
+                      </svg>
+                    </div>
+                  </Field>
+
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-slate-500">{t("Chọn khung giờ")}</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {effectiveCoopDeliverySlots.map((timeSlot) => {
+                        const selected = coopSlotFrom === timeSlot.from && coopSlotTo === timeSlot.to;
+                        return (
+                          <button
+                            key={`${timeSlot.from}-${timeSlot.to}`}
+                            type="button"
+                            disabled={timeSlot.disabled}
+                            onClick={() => {
+                              setCoopSlotFrom(timeSlot.from);
+                              setCoopSlotTo(timeSlot.to);
+                              setCoopCheckoutPrepared(false);
+                              setCoopStep("delivery");
+                            }}
+                            className={`h-11 rounded-lg border px-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${
+                              selected ? "border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500" : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {timeSlot.from} - {timeSlot.to}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {coopDeliveryReady && (
+                    <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
+                      <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
+                    </div>
+                  )}
+
+                  {coopPaymentMethods.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-slate-500">{t("Phương thức thanh toán")}</p>
+                      <div className="grid gap-2">
+                        {coopPaymentMethods.map((method) => {
+                          const selected = method.methodCode === coopSelectedPaymentCode;
+                          const disabled = Boolean(method.isDisabled);
+                          return (
+                            <button
+                              key={method.methodCode}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => {
+                                setCoopSelectedPaymentCode(method.methodCode || "COD");
+                                setCoopCheckoutPrepared(false);
+                                setCoopStep("payment");
+                              }}
+                              className={`flex min-h-[58px] items-center gap-3 rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                                selected
+                                  ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"
+                                  : "border-slate-200 bg-white hover:border-slate-300"
+                              }`}
+                            >
+                              {method.icon ? (
+                                <img src={method.icon} alt="" className="h-7 w-7 shrink-0 rounded object-contain" />
+                              ) : (
+                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">
+                                  {method.methodCode === "COD" ? "COD" : "PAY"}
+                                </span>
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-semibold text-slate-800">{method.name || method.methodCode}</span>
+                                {method.description && (
+                                  <span className="mt-0.5 block text-xs text-slate-500">{method.description}</span>
+                                )}
+                                {method.maxTransactionAmount ? (
+                                  <span className="mt-0.5 block text-[11px] text-slate-400">
+                                    {t("Tối đa")} {formatMoney(method.maxTransactionAmount, storeCurrency(activeOffer.store.id))}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span
+                                className={`h-4 w-4 shrink-0 rounded-full border ${
+                                  selected ? "border-emerald-500 bg-emerald-500 shadow-[inset_0_0_0_3px_white]" : "border-slate-300"
+                                }`}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {coopCheckoutPrepared && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã cập nhật lịch giao và phương thức thanh toán. Chưa gửi đơn thật sang Co.op.")}
+                    </div>
+                  )}
+                  {coopError && <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">{coopError}</p>}
+
+                  <button
+                    type="button"
+                    disabled={!coopDeliveryReady || coopBusy || !coopResult?.checkoutFlowId}
+                    onClick={prepareCoopCheckout}
+                    className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
+                  </button>
+
+                </div>
+              )}
+
+              {phase === "running" && coopStep === "review" && (
+                <PauseBox
+                  tone="emerald"
+                  hint={
+                    coopSelectedPaymentIsOnline
+                      ? t("Bấm nút dưới đây mới tạo đơn và mở màn hình thanh toán online.")
+                      : t("Bấm nút dưới đây để mở checkout Co.op; bạn sẽ đặt hàng trực tiếp trên màn hình bên phải.")
+                  }
+                >
+                  <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
+                    <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                    <Row k={t("Giao tới")} v={coopSavedAddress || address} />
+                    <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
+                    <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
+                    <Row k={t("Phương thức thanh toán")} v={coopSelectedPaymentName || t("Đã chọn trên Co.op")} />
+                    <Row k={t("Tổng")} v={formatMoney(coopResult?.lineTotal || total, storeCurrency(activeOffer.store.id))} strong />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={coopBusy || !coopCheckoutPrepared}
+                    onClick={() => void placeCoopOrder()}
+                    className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {coopBusy
+                      ? t("Đang gửi sang Co.op…")
+                      : coopSelectedPaymentIsOnline
+                        ? t("Tạo đơn & mở màn hình thanh toán")
+                        : t("Mở checkout Co.op")}
+                  </button>
+                </PauseBox>
+              )}
+
+              {phase === "done" && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-center">
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  </div>
+                  <h3 className="mt-3 text-lg font-bold text-slate-900">{t("Đặt hàng Co.op thành công")}</h3>
+                  <p className="mt-1 text-sm text-slate-600">{orderCode}</p>
+                  <button onClick={onClose} className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">
+                    {t("Xong")}
+                  </button>
+                </div>
+              )}
+              </div>
+            </div>
+            {hasCoopBrowser && (
+              <div className="coop-stream-pane min-h-0 min-w-0">
+                {coopBrowserPanel}
+              </div>
+            )}
+          </div>
+
+          <style jsx global>{`
+            .coop-modal-body--single {
+              display: flex;
+              flex-direction: column;
+            }
+            .coop-modal-body--single .coop-popup-scroll {
+              overflow-y: auto;
+            }
+	            .coop-modal-body--split {
+	              display: grid;
+	              grid-template-columns: minmax(340px, 390px) minmax(0, 980px);
+	              column-gap: 20px;
+	              align-items: stretch;
+	              justify-content: center;
+	              padding: 14px;
+	              background: #f8fafc;
+	              overscroll-behavior: contain;
+	            }
+            .coop-left-pane {
+              position: relative;
+              max-height: 100%;
+              overflow-y: scroll;
+              scrollbar-gutter: stable;
+            }
+	            .coop-stream-pane {
+	              align-self: center;
+	              width: 100%;
+	              max-width: 960px;
+	              height: auto;
+	              max-height: 100%;
+	              aspect-ratio: 4 / 3;
+	              overflow: hidden;
+	              overscroll-behavior: contain;
+	            }
+	            .coop-stream-pane > div {
+	              height: 100%;
+	            }
+	            .coop-stream-wheel-capture {
+	              overscroll-behavior: contain;
+	              touch-action: none;
+	            }
+            @media (max-width: 900px) {
+              .coop-modal-body--split {
+                grid-template-columns: 1fr;
+                row-gap: 14px;
+                overflow-y: auto;
+              }
+              .coop-left-pane {
+                max-height: none;
+                overflow-y: visible;
+              }
+              .coop-stream-pane {
+                height: min(52dvh, 420px);
+                max-width: none;
+              }
+            }
+            .input {
+              width: 100%;
+              border: 1px solid #cbd5e1;
+              border-radius: 0.75rem;
+              padding: 0.65rem 0.8rem;
+              font-size: 0.875rem;
+              outline: none;
+              transition: border-color 0.15s, box-shadow 0.15s;
+            }
+            .input:focus {
+              border-color: #10b981;
+              box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+            }
+            .coop-date-select {
+              min-width: 240px;
+              background-color: #ffffff;
+              line-height: 1.25rem;
+            }
+            .coop-popup-scroll,
+            .coop-store-scroll {
+              scrollbar-width: thin;
+              scrollbar-color: #cbd5e1 transparent;
+              scrollbar-gutter: stable;
+            }
+            .coop-popup-scroll::-webkit-scrollbar,
+            .coop-store-scroll::-webkit-scrollbar {
+              width: 8px;
+              height: 8px;
+            }
+            .coop-popup-scroll::-webkit-scrollbar-thumb,
+            .coop-store-scroll::-webkit-scrollbar-thumb {
+              background-color: #cbd5e1;
+              border-radius: 4px;
+              border: 2px solid transparent;
+              background-clip: content-box;
+            }
+            .coop-popup-scroll::-webkit-scrollbar-thumb:hover,
+            .coop-store-scroll::-webkit-scrollbar-thumb:hover {
+              background-color: #94a3b8;
+            }
+            .coop-popup-scroll::-webkit-scrollbar-track,
+            .coop-store-scroll::-webkit-scrollbar-track {
+              background: transparent;
+            }
+          `}</style>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-900/50 p-0 sm:items-center sm:p-4"
-      onClick={onClose}
     >
       <div
         className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-2xl"
@@ -253,7 +2107,11 @@ export default function OrderAgentModal({
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-bold text-slate-900">
-              {phase === "done" ? t("Đã đặt hàng") : t("Phục vụ bởi Agentic AI")}
+              {phase === "done"
+                ? isCoopReal
+                  ? t("Đã tạo giỏ Co.op")
+                  : t("Đã đặt hàng")
+                : t("Phục vụ bởi Agentic AI")}
               {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
             </h2>
             <p className="truncate text-xs text-slate-500">
@@ -273,8 +2131,16 @@ export default function OrderAgentModal({
 
         <div className="overflow-y-auto px-4 py-4">
           {/* Banner: bản mô phỏng */}
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            ⚙️ {t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
+          <div
+            className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+              isCoopReal
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-amber-200 bg-amber-50 text-amber-800"
+            }`}
+          >
+            {isCoopReal
+              ? t("Co.op đang dùng luồng thật: dùng token cache hoặc đăng nhập bằng mật khẩu, rồi thêm sản phẩm vào giỏ Co.op.")
+              : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
           </div>
 
           {/* PHASE 1: form thông tin cần có */}
@@ -338,6 +2204,26 @@ export default function OrderAgentModal({
                   {emailError && (
                     <span className="mt-1 block text-xs text-rose-600">
                       {t("Email không hợp lệ.")}
+                    </span>
+                  )}
+                </Field>
+              )}
+
+              {isCoopReal && (
+                <Field label={t("Mật khẩu Co.op")}>
+                  <input
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder={t("Tối thiểu 6 ký tự")}
+                    aria-invalid={passwordError}
+                    className="input"
+                    style={passwordError ? { borderColor: "#ef4444" } : undefined}
+                  />
+                  {passwordError && (
+                    <span className="mt-1 block text-xs text-rose-600">
+                      {t("Mật khẩu Co.op cần tối thiểu 6 ký tự.")}
                     </span>
                   )}
                 </Field>
@@ -443,7 +2329,7 @@ export default function OrderAgentModal({
                 </div>
               )}
 
-              <div className={cfg.needSlot ? "grid grid-cols-2 gap-3" : ""}>
+              <div className={cfg.needSlot && !isCoopReal ? "grid grid-cols-2 gap-3" : ""}>
                 <Field label={t("Số lượng")}>
                   <div className="flex items-center gap-2">
                     <button
@@ -462,7 +2348,7 @@ export default function OrderAgentModal({
                   </div>
                 </Field>
 
-                {cfg.needSlot && (
+                {cfg.needSlot && !isCoopReal && (
                   <Field label={t("Khung giờ giao")}>
                     <select
                       value={slot}
@@ -482,12 +2368,28 @@ export default function OrderAgentModal({
               <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">{t("Thanh toán")}</span>
-                  <span className="font-semibold text-slate-800">{t("COD (tiền mặt khi nhận)")}</span>
+                  <span className="font-semibold text-slate-800">
+                    {isCoopReal ? t("Chọn ở bước checkout") : t("COD (tiền mặt khi nhận)")}
+                  </span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  {t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
+                  {isCoopReal
+                    ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
+                    : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
                 </p>
               </div>
+
+              {coopBelowMinimum && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {t("Co.op chỉ cho thanh toán khi đơn từ 200.000đ. Tăng số lượng hoặc chọn sản phẩm khác để tiếp tục.")}
+                </div>
+              )}
+
+              {coopError && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {coopError}
+                </div>
+              )}
 
               <div className="flex items-center justify-between border-t border-slate-200 pt-3">
                 <span className="text-sm text-slate-500">{t("Tạm tính")}</span>
@@ -495,29 +2397,224 @@ export default function OrderAgentModal({
               </div>
 
               <button
-                disabled={!canStart}
+                disabled={!canStart || coopBusy}
                 onClick={() => {
                   flushProfile({ name, phone, address });
-                  setStepIndex(0);
-                  setOtp("");
-                  setOtpError(false);
-                  setSimOtp("");
-                  setPhase("running");
+                  if (isCoopReal) {
+                    void startCoopOrder();
+                  } else if (isBHXReal) {
+                    startBHXOrder().catch((err) => {
+                      console.error("Bach Hoa Xanh order error:", err);
+                      alert(err instanceof Error ? err.message : String(err));
+                    });
+                  } else {
+                    setStepIndex(0);
+                    setOtp("");
+                    setOtpError(false);
+                    setSimOtp("");
+                    setPhase("running");
+                  }
                 }}
                 className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {t("Để trợ lý đặt giúp →")}
+                {coopBusy
+                  ? t("Đang kết nối Co.op…")
+                  : isCoopReal
+                    ? t("Đăng nhập Co.op và thêm vào giỏ →")
+                    : t("Để trợ lý đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="text-center text-xs text-slate-400">
-                  {t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
+                  {isCoopReal
+                    ? t("Nhập đủ tên, số điện thoại, mật khẩu, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
+                    : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
                 </p>
               )}
             </div>
           )}
 
           {/* PHASE 2: trợ lý chạy */}
-          {phase === "running" && (
+          {phase === "running" && isCoopReal && (
+            <div className="space-y-3">
+              <ol className="space-y-2.5">
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    <CheckIcon />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-400">
+                      {coopResult?.usedTokenCache
+                        ? t("Đã dùng token cache Co.op để vào giỏ")
+                        : coopResult?.alreadyRegistered
+                          ? t("Tài khoản Co.op đã đăng nhập bằng mật khẩu")
+                          : t("Đã gửi yêu cầu đăng nhập Co.op")}
+                    </p>
+                  </div>
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    {coopBusy ? <Spinner /> : <PauseDot />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-800">
+                      {t("Nhập OTP thật Co.op gửi về {phone}", { phone: phoneDigits })}
+                    </p>
+                    <PauseBox tone="blue" hint={t("Mã này đến từ Co.op, Affree không đọc SMS giúp bạn.")}>
+                      <div className="flex gap-2">
+                        <input
+                          value={otp}
+                          onChange={(e) => {
+                            setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                            setCoopError("");
+                          }}
+                          inputMode="numeric"
+                          placeholder={t("6 SỐ OTP")}
+                          className="input flex-1"
+                          autoFocus
+                        />
+                        <button
+                          disabled={otp.length !== 6 || coopBusy}
+                          onClick={() => void confirmCoopOtp()}
+                          className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {coopBusy ? t("Đang gửi…") : t("Xác thực")}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={coopBusy}
+                        onClick={() => void resendCoopOtp()}
+                        className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
+                      >
+                        {t("Gửi lại OTP")}
+                      </button>
+                      {coopError && (
+                        <p className="mt-2 text-xs font-medium text-rose-600">{coopError}</p>
+                      )}
+                    </PauseBox>
+                  </div>
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    <PauseDot />
+                  </span>
+                  <p className="text-sm text-slate-500">
+                    {t("Sau OTP: login OAuth, tạo cart Co.op, add sản phẩm, validate đơn tối thiểu 200.000đ và đọc ngày/khung giờ giao hợp lệ.")}
+                  </p>
+                </li>
+              </ol>
+            </div>
+          )}
+
+          {phase === "running" && isBHXReal && (
+            <div className="space-y-3">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  {bhxBusy ? <Spinner /> : <CheckIcon />}
+                  <p className="text-sm font-semibold text-slate-900">
+                    {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {t("Log từ agent-server sẽ hiển thị bên dưới.")}
+                </p>
+              </div>
+
+              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {bhxMessages.map((log, i) => {
+                  const tone =
+                    log.status === "error"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : log.status === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : log.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-white text-slate-700";
+                  return (
+                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
+                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {bhxOtpVisible && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="mb-2 text-sm font-semibold text-blue-800">
+                    {t("Nhập OTP Bách Hóa Xanh")}
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={bhxOtp}
+                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitBHXOtp();
+                      }}
+                      inputMode="numeric"
+                      placeholder={t("Nhập mã OTP")}
+                      className="input flex-1 bg-white"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      disabled={!bhxOtp.trim()}
+                      onClick={submitBHXOtp}
+                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t("Gửi")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bhxShowScreencast && (
+                <div className="rounded-xl border border-emerald-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Màn hình sau khi đặt hàng")}
+                  </p>
+                  <div
+                    className="overflow-hidden rounded-lg bg-slate-950"
+                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
+                  >
+                    {bhxBrowserFrame ? (
+                      <img
+                        src={bhxBrowserFrame}
+                        alt={t("Màn hình Bách Hóa Xanh")}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
+                        {t("Đang chờ ảnh màn hình...")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {bhxDeliveryHtml && (
+                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Chọn thời gian giao hàng")}
+                  </p>
+                  <div
+                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
+                    onClick={handleBHXDeliveryChoice}
+                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
+                  />
+                  {bhxSelectedDeliveryText && (
+                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {phase === "running" && !isCoopReal && !isBHXReal && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
                 {steps.slice(0, stepIndex + 1).map((s, i) => {
@@ -643,7 +2740,7 @@ export default function OrderAgentModal({
                               <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
                               <Row k={t("Giao tới")} v={address} />
                               {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
-                              {cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
+                              {cfg.needSlot && !isCoopReal && <Row k={t("Khung giờ")} v={t(slot)} />}
                               <Row k={t("Thanh toán")} v="COD" />
                               <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
                             </div>
@@ -671,9 +2768,13 @@ export default function OrderAgentModal({
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
               </div>
-              <h3 className="mt-3 text-lg font-bold text-slate-900">{t("Đặt hàng thành công!")}</h3>
+              <h3 className="mt-3 text-lg font-bold text-slate-900">
+                {isCoopReal ? t("Đã thêm vào giỏ Co.op!") : t("Đặt hàng thành công!")}
+              </h3>
               <p className="mt-1 text-sm text-slate-500">
-                {t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
+                {isCoopReal
+                  ? t("Affree đã login bằng luồng thật và tạo giỏ trong tài khoản {chain}. Mã giỏ:", { chain })
+                  : t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
               </p>
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
@@ -682,14 +2783,179 @@ export default function OrderAgentModal({
                 <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
                 <Row k={t("Giao tới")} v={address} />
                 {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
-                {cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
+                {!isCoopReal && cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
                 <Row k={t("Thanh toán")} v="COD" />
                 <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
+                {isCoopReal && coopResult?.terminalCode && (
+                  <Row k={t("Kho Co.op")} v={coopResult.terminalCode} />
+                )}
               </div>
+
+              {isCoopReal && (
+                <div className="mt-4 w-full rounded-xl border border-slate-200 bg-white p-3 text-left">
+                  <div className="flex items-start gap-2">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                      2
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-900">{t("Checkout Co.op")}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {t("Giỏ đã tạo xong. Chọn ngày nhận hàng và khung giờ trước, bước đặt hàng thật sẽ làm sau.")}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <Field label={t("Chọn ngày nhận hàng")}>
+                      <div className="relative max-w-[260px]">
+                        <select
+                          value={coopDeliveryDate}
+                          onChange={(e) => {
+                            setCoopDeliveryDate(e.target.value);
+                            setCoopCheckoutPrepared(false);
+                          }}
+                          className="coop-date-select input h-11 appearance-none text-slate-700"
+                          style={{
+                            paddingLeft: "44px",
+                            paddingRight: "40px",
+                            WebkitAppearance: "none",
+                            appearance: "none",
+                          }}
+                        >
+                          <option value="">{t("dd/mm/yyyy")}</option>
+                          {(coopDeliveryDates.length ? coopDeliveryDates : [todayInput]).map((date) => (
+                            <option key={date} value={date}>
+                              {formatCoopDate(date)}
+                            </option>
+                          ))}
+                        </select>
+                        <svg
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M8 2v4M16 2v4M3 10h18" />
+                          <rect x="3" y="4" width="18" height="18" rx="2" />
+                        </svg>
+                        <svg
+                          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
+                          <path d="m7 10 5 5 5-5H7Z" />
+                        </svg>
+                      </div>
+                    </Field>
+                  </div>
+
+                  <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    {coopSavedAddress ? (
+                      <Row k={t("Địa chỉ Co.op")} v={coopSavedAddress} />
+                    ) : (
+                      <Row k={t("Địa chỉ Co.op")} v={t("Chưa thấy trong giỏ")} />
+                    )}
+                    <Row
+                      k={t("Thanh toán Co.op")}
+                      v={coopSelectedPaymentName || t("Chưa thấy")}
+                    />
+                    <Row
+                      k={t("COD")}
+                      v={
+                        coopResult?.paymentCheck?.codSelected
+                          ? t("Đang chọn")
+                          : coopResult?.paymentCheck?.codAvailable
+                            ? t("Có hỗ trợ, chưa chọn")
+                            : t("Chưa khả dụng")
+                      }
+                    />
+                  </div>
+
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-medium text-slate-500">{t("Chọn khung giờ")}</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {effectiveCoopDeliverySlots.map((timeSlot) => {
+                        const selected = coopSlotFrom === timeSlot.from && coopSlotTo === timeSlot.to;
+                        return (
+                          <button
+                            key={`${timeSlot.from}-${timeSlot.to}`}
+                            type="button"
+                            disabled={timeSlot.disabled}
+                            onClick={() => {
+                              setCoopSlotFrom(timeSlot.from);
+                              setCoopSlotTo(timeSlot.to);
+                              setCoopCheckoutPrepared(false);
+                            }}
+                            className={`h-11 rounded-lg border px-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                              selected
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500"
+                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            {timeSlot.from} - {timeSlot.to}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {coopDeliveryReady && (
+                    <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
+                      <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
+                    </div>
+                  )}
+
+                  {coopCheckoutPrepared && (
+                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã cập nhật lịch giao và phương thức thanh toán vào giỏ Co.op. Chưa gửi đặt hàng thật sang Co.op.")}
+                    </div>
+                  )}
+
+                  {coopError && (
+                    <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">
+                      {coopError}
+                    </p>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={!coopDeliveryReady || coopBusy || !coopResult?.checkoutFlowId}
+                    onClick={prepareCoopCheckout}
+                    className="mt-3 w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
+                  </button>
+                </div>
+              )}
+
+              {isCoopReal && (
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                  {t("Bước này chỉ cập nhật giỏ/checkout Co.op, chưa bấm Thanh toán và chưa tạo đơn thật.")}
+                </p>
+              )}
+
+              {isCoopReal && coopResult?.cartUrl && (
+                <a
+                  href={coopResult.cartUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  {t("Mở giỏ Co.op")}
+                </a>
+              )}
 
               <button
                 onClick={onClose}
-                className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                className="mt-3 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
               >
                 {t("Xong")}
               </button>
@@ -700,6 +2966,186 @@ export default function OrderAgentModal({
 
       {/* tiện ích style cho input/select/textarea dùng chung */}
       <style jsx global>{`
+        .bhx-delivery-html {
+          color: #020617;
+          font-size: 0.875rem;
+        }
+        .bhx-delivery-html > div {
+          position: static !important;
+          z-index: auto !important;
+          margin-top: 0 !important;
+          max-height: none !important;
+          overflow: visible !important;
+          border-radius: 0.5rem;
+          background: #ffffff;
+        }
+        .bhx-delivery-html > * {
+          max-width: 100%;
+        }
+        .bhx-delivery-html div,
+        .bhx-delivery-html label {
+          box-sizing: border-box;
+        }
+        .bhx-delivery-html .flex {
+          display: flex;
+        }
+        .bhx-delivery-html .flex-col {
+          flex-direction: column;
+        }
+        .bhx-delivery-html .flex-wrap {
+          flex-wrap: wrap;
+        }
+        .bhx-delivery-html .flex-nowrap {
+          flex-wrap: nowrap;
+        }
+        .bhx-delivery-html .items-center {
+          align-items: center;
+        }
+        .bhx-delivery-html .justify-between {
+          justify-content: space-between;
+        }
+        .bhx-delivery-html .justify-start {
+          justify-content: flex-start;
+        }
+        .bhx-delivery-html .gap-1 {
+          gap: 0.25rem;
+        }
+        .bhx-delivery-html .gap-2 {
+          gap: 0.5rem;
+        }
+        .bhx-delivery-html .w-full {
+          width: 100%;
+        }
+        .bhx-delivery-html .overflow-hidden {
+          overflow: hidden;
+        }
+        .bhx-delivery-html .overflow-auto {
+          overflow: auto;
+        }
+        .bhx-delivery-html .whitespace-nowrap {
+          white-space: nowrap;
+        }
+        .bhx-delivery-html .select-none {
+          user-select: none;
+        }
+        .bhx-delivery-html .text-right {
+          text-align: right;
+        }
+        .bhx-delivery-html .font-bold,
+        .bhx-delivery-html b {
+          font-weight: 700;
+        }
+        .bhx-delivery-html .relative {
+          position: relative;
+        }
+        .bhx-delivery-html .inline-block {
+          display: inline-block;
+        }
+        .bhx-delivery-html .bg-basic-100 {
+          background: #f4f6f8;
+        }
+        .bhx-delivery-html .bg-white {
+          background: #ffffff;
+        }
+        .bhx-delivery-html .text-basic-800,
+        .bhx-delivery-html .text-\\[\\#222B45\\] {
+          color: #0f172a;
+        }
+        .bhx-delivery-html .text-primary-400,
+        .bhx-delivery-html .\\!text-\\[\\#FF7B01\\] {
+          color: #059669;
+        }
+        .bhx-delivery-html .border,
+        .bhx-delivery-html .border-basic-400 {
+          border: 1px solid #e2e8f0;
+        }
+        .bhx-delivery-html .rounded-md,
+        .bhx-delivery-html .rounded-\\[8px\\] {
+          border-radius: 0.5rem;
+        }
+        .bhx-delivery-html .p-2 {
+          padding: 0.5rem;
+        }
+        .bhx-delivery-html .py-\\[10px\\] {
+          padding-top: 10px;
+          padding-bottom: 10px;
+        }
+        .bhx-delivery-html .px-3 {
+          padding-left: 0.75rem;
+          padding-right: 0.75rem;
+        }
+        .bhx-delivery-html .mx-2 {
+          margin-left: 0.5rem;
+          margin-right: 0.5rem;
+        }
+        .bhx-delivery-html .mr-2 {
+          margin-right: 0.5rem;
+        }
+        .bhx-delivery-html .line-clamp-1,
+        .bhx-delivery-html .line-clamp-2 {
+          overflow: hidden;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+        }
+        .bhx-delivery-html .line-clamp-1 {
+          -webkit-line-clamp: 1;
+        }
+        .bhx-delivery-html .line-clamp-2 {
+          -webkit-line-clamp: 2;
+        }
+        .bhx-delivery-html .radio-wrapper {
+          position: relative;
+          display: block;
+          min-height: 48px;
+          padding: 0.75rem 0.75rem 0.75rem 2.5rem !important;
+          border-radius: 0.5rem;
+          background: #ffffff;
+        }
+        .bhx-delivery-html .radio-wrapper input[type="radio"] {
+          position: absolute;
+          left: 0.75rem;
+          top: 50%;
+          width: 18px;
+          height: 18px;
+          transform: translateY(-50%);
+        }
+        .bhx-delivery-html .radio-wrapper .checkmark {
+          display: none;
+        }
+        .bhx-delivery-html .no-scrollbar {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0.5rem;
+          overflow: visible;
+          padding-bottom: 0.5rem;
+        }
+        .bhx-delivery-html [data-delivery-date] {
+          border: 1px solid #e2e8f0;
+          border-radius: 0.5rem;
+          background: #ffffff;
+          padding: 0.75rem;
+          text-align: center;
+          color: #0f172a;
+        }
+        .bhx-delivery-html [data-delivery-date]:first-child,
+        .bhx-delivery-html .\\!border-primary-400 {
+          border-color: #10b981;
+          color: #059669;
+        }
+        .bhx-delivery-html label,
+        .bhx-delivery-html [role="button"],
+        .bhx-delivery-html button,
+        .bhx-delivery-html input[type="radio"] {
+          cursor: pointer;
+        }
+        .bhx-delivery-html input[type="radio"] {
+          accent-color: #059669;
+        }
+        .bhx-delivery-html img,
+        .bhx-delivery-html svg {
+          max-width: 100%;
+          height: auto;
+        }
         .input {
           width: 100%;
           border-radius: 0.5rem;
@@ -713,6 +3159,11 @@ export default function OrderAgentModal({
           border-color: #10b981;
           box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
         }
+        .coop-date-select {
+          min-width: 240px;
+          background-color: #ffffff;
+          line-height: 1.25rem;
+        }
       `}</style>
     </div>
   );
@@ -725,6 +3176,85 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+function formatCoopDate(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function formatDateInput(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseSlotStartMinutes(value: string) {
+  const [hour, minute] = value.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return hour * 60 + minute;
+}
+
+function getEffectiveCoopDeliverySlots(
+  slots: Array<{ from: string; to: string; disabled?: boolean }>,
+  selectedDate: string,
+) {
+  if (!selectedDate || selectedDate !== formatDateInput(new Date())) return slots;
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const earliestStartMinutes = currentMinutes + COOP_DELIVERY_LEAD_MINUTES;
+  return slots.map((slot) => ({
+    ...slot,
+    disabled: slot.disabled || parseSlotStartMinutes(slot.from) <= earliestStartMinutes,
+  }));
+}
+
+function coopStepRank(step: CoopStepId | "success") {
+  const order: Array<CoopStepId | "success"> = ["account", "otp", "delivery", "payment", "review", "success"];
+  const index = order.indexOf(step);
+  return index >= 0 ? index : 0;
+}
+
+function getUnknownText(value: unknown) {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
+function getCoopTerminalCode(terminal: CoopTerminalChoice | null | undefined) {
+  return getUnknownText(terminal?.terminalCode) || getUnknownText(terminal?.code);
+}
+
+async function safeGeocode(address: string) {
+  try {
+    return await geocode(address);
+  } catch {
+    return null;
+  }
+}
+
+function getCoopTerminalName(terminal: CoopTerminalChoice | null | undefined) {
+  return (
+    getUnknownText(terminal?.terminalName) ||
+    getUnknownText(terminal?.name) ||
+    getCoopTerminalCode(terminal) ||
+    "Co.opmart"
+  );
+}
+
+function getCoopTerminalAddress(terminal: CoopTerminalChoice | null | undefined) {
+  return getUnknownText(terminal?.fullAddress) || getUnknownText(terminal?.address) || "Co.op Online";
+}
+
+function getCoopTerminalDistance(terminal: CoopTerminalChoice | null | undefined) {
+  const raw = terminal?.distanceKm ?? terminal?.distance;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(n) ? `${n.toFixed(1)} km` : "";
+}
+
+function getCoopTerminalNumber(terminal: CoopTerminalChoice | null | undefined, key: string) {
+  const raw = terminal?.[key];
+  const n = typeof raw === "number" ? raw : Number(getUnknownText(raw));
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {

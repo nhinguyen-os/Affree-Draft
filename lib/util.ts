@@ -1,5 +1,5 @@
 import type { Catalog, Offer, Product, RankedOffer, Store } from "./types";
-import { getStore } from "./stores";
+import { chainLabel, getStore } from "./stores";
 
 export function formatVnd(n: number): string {
   return new Intl.NumberFormat("vi-VN").format(Math.round(n)) + "₫";
@@ -133,15 +133,15 @@ export function rankOffersForProduct(
   const ranked: RankedOffer[] = [];
   for (const offer of catalog.offers) {
     if (offer.productId !== product.id) continue;
-    const store = getStore(offer.storeId);
-    if (!store) continue;
-    const hasCoords = store.lat != null && store.lng != null;
+    const store = getStore(offer.storeId) ?? fallbackStoreFromOffer(offer);
+    const hasCoords = Number.isFinite(store.lat) && Number.isFinite(store.lng);
+    const hasUserLoc = !!userLoc && Number.isFinite(userLoc.lat) && Number.isFinite(userLoc.lng);
     ranked.push({
       ...offer,
       store,
       product,
       distanceKm:
-        userLoc && hasCoords
+        hasUserLoc && hasCoords
           ? distanceKm(userLoc, { lat: store.lat as number, lng: store.lng as number })
           : null,
     });
@@ -153,6 +153,18 @@ export function rankOffersForProduct(
     return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
   });
   return ranked;
+}
+
+function fallbackStoreFromOffer(offer: Offer): Store {
+  const chain = offer.storeId.includes("-") ? offer.storeId.split("-")[0] : offer.storeId;
+  return {
+    id: offer.storeId,
+    chain,
+    name: chainLabel(chain),
+    address: "Mua online",
+    website: offer.productUrl || "",
+    online: true,
+  };
 }
 
 export function cheapestInStock(offers: RankedOffer[]): RankedOffer | null {

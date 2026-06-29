@@ -1565,6 +1565,12 @@ export default function Home() {
             >
               {t("Lịch sử mua")}
             </Link>
+            <Link
+              href="/agent-demo"
+              className="shrink-0 whitespace-nowrap rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-sm font-medium hover:bg-emerald-100 text-emerald-800 sm:px-3"
+            >
+              🤖 Agent Demo
+            </Link>
           </div>
         </div>
       </header>
@@ -2854,6 +2860,8 @@ export default function Home() {
           lang={lang}
           alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
           geoAddr={userAddr}
+          geoLat={userLoc?.lat}
+          geoLng={userLoc?.lng}
           defaultAddress={userAddr}
           onClose={() => setBuyOffer(null)}
           onPlaced={(code, chosen) => {
