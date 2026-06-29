@@ -98,6 +98,7 @@ type CoopOrderResult = {
     paymentUrl?: string;
   };
   paymentUrl?: string;
+  cancelledOrderCode?: string;
 };
 
 type CoopStepId = "account" | "otp" | "delivery" | "payment" | "review" | "success";
@@ -951,6 +952,59 @@ export default function OrderAgentModal({
     }
   };
 
+  const closeCoopBrowser = () => {
+    const ws = coopBrowserWsRef.current;
+    coopBrowserWsRef.current = null;
+    setCoopBrowserVisible(false);
+    setCoopBrowserFrame("");
+    setCoopBrowserStatus("");
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      ws.close();
+    }
+  };
+
+  const selectCoopPaymentMethod = async (paymentMethodCode: string) => {
+    if (!paymentMethodCode || paymentMethodCode === coopSelectedPaymentCode) return;
+    const placedOrderCode = coopResult?.order?.orderId || coopResult?.order?.code;
+    const placedPaymentMethodCode = coopResult?.order?.paymentMethodCode;
+
+    if (placedOrderCode && placedPaymentMethodCode === "COD") {
+      setCoopError(t("Đơn thanh toán khi nhận hàng đã được đặt và không thể đổi phương thức thanh toán."));
+      return;
+    }
+
+    if (placedOrderCode) {
+      if (!coopResult?.checkoutFlowId) return;
+      setCoopBusy(true);
+      setCoopError("");
+      try {
+        const cancelled = await postCoopOrder({
+          action: "cancelOrder",
+          checkoutFlowId: coopResult.checkoutFlowId,
+        });
+        closeCoopBrowser();
+        setCoopResult((current) => ({
+          ...(current ?? {}),
+          ...cancelled,
+          phase: "cart",
+          order: undefined,
+          paymentUrl: undefined,
+        }));
+        setOrderCode("");
+        coopCompletionHandledRef.current = false;
+      } catch (err) {
+        setCoopError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setCoopBusy(false);
+      }
+    }
+
+    setCoopSelectedPaymentCode(paymentMethodCode);
+    setCoopCheckoutPrepared(false);
+    setCoopStep("payment");
+  };
+
   const openCoopBrowserAssist = async (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" | "paymentScreen" = "checkout") => {
     const result = nextResult ?? coopResult;
     setCoopBrowserVisible(true);
@@ -1161,7 +1215,7 @@ export default function OrderAgentModal({
         window.clearTimeout(frameTimeout);
         window.clearInterval(commandRetry);
         if (!opened) setCoopBrowserStatus(t("Agent-server chưa chạy hoặc cổng 8080 chưa mở."));
-        coopBrowserWsRef.current = null;
+        if (coopBrowserWsRef.current === ws) coopBrowserWsRef.current = null;
       };
     } catch {
       setCoopBrowserStatus(t("Không mở được màn hình Co.op."));
@@ -1496,7 +1550,7 @@ export default function OrderAgentModal({
       >
         <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-white">
           <span className="truncate">{coopBrowserStatus || t("Màn hình Co.op")}</span>
-          <button type="button" onClick={() => coopBrowserWsRef.current?.close()} className="shrink-0 rounded bg-white/10 px-2 py-1 font-semibold hover:bg-white/20">
+          <button type="button" onClick={closeCoopBrowser} className="shrink-0 rounded bg-white/10 px-2 py-1 font-semibold hover:bg-white/20">
             {t("Đóng màn hình")}
           </button>
         </div>
@@ -1903,12 +1957,8 @@ export default function OrderAgentModal({
                             <button
                               key={method.methodCode}
                               type="button"
-                              disabled={disabled}
-                              onClick={() => {
-                                setCoopSelectedPaymentCode(method.methodCode || "COD");
-                                setCoopCheckoutPrepared(false);
-                                setCoopStep("payment");
-                              }}
+                              disabled={disabled || coopBusy}
+                              onClick={() => void selectCoopPaymentMethod(method.methodCode || "COD")}
                               className={`flex min-h-[58px] items-center gap-3 rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
                                 selected
                                   ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"

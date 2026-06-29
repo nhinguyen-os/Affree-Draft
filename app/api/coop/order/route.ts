@@ -5,6 +5,7 @@ import {
   CoopOrderError,
   addItemToCoopAccountCart,
   beginCoopOauth,
+  cancelCoopPendingOrder,
   confirmCoopUser,
   exchangeCoopToken,
   getCachedCoopToken,
@@ -649,7 +650,7 @@ export async function POST(req: NextRequest) {
       });
       session.cartToken = placed.cartToken;
       session.createdAt = Date.now();
-      session.orderCode = placed.checkoutResult.code;
+      session.orderCode = placed.checkoutResult.orderId ?? placed.checkoutResult.code;
       return NextResponse.json({
         ok: true,
         phase: "ordered",
@@ -663,6 +664,49 @@ export async function POST(req: NextRequest) {
         paymentUrl: placed.checkoutResult.paymentUrl,
         cartUrl: "https://cooponline.vn/cart",
         checkoutUrl: "https://cooponline.vn/checkout",
+      });
+    }
+
+    if (action === "cancelOrder") {
+      const checkoutFlowId = readString(body.checkoutFlowId);
+      const session = cartSessions.get(checkoutFlowId);
+      if (!session) {
+        throw new CoopOrderError("Phiên checkout Co.op đã hết hạn, không thể đổi phương thức thanh toán.", {
+          status: 410,
+          code: "COOP_CHECKOUT_FLOW_EXPIRED",
+        });
+      }
+      if (!session.orderCode) {
+        throw new CoopOrderError("Chưa có đơn Co.op nào cần hủy.", {
+          status: 400,
+          code: "COOP_ORDER_NOT_PLACED",
+        });
+      }
+      if (session.selectedPaymentMethodCode === "COD") {
+        throw new CoopOrderError("Đơn thanh toán khi nhận hàng đã được đặt và không thể đổi phương thức thanh toán.", {
+          status: 409,
+          code: "COOP_COD_ORDER_CANNOT_CANCEL",
+        });
+      }
+      const cancelledOrderCode = session.orderCode;
+      const cancelled = await cancelCoopPendingOrder({
+        accessToken: session.accessToken,
+        terminalCode: session.terminalCode,
+        cartToken: session.cartToken,
+        orderId: cancelledOrderCode,
+      });
+      session.cartToken = cancelled.cartToken;
+      session.createdAt = Date.now();
+      session.prepared = false;
+      session.orderCode = undefined;
+      session.selectedPaymentMethodCode = undefined;
+      return NextResponse.json({
+        ok: true,
+        phase: "cart",
+        checkoutFlowId,
+        cancelledOrderCode,
+        cartToken: cancelled.cartToken,
+        terminalCode: session.terminalCode,
       });
     }
 
