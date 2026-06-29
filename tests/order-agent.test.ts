@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { validateCreateOrderSessionRequest } from "../lib/order-agent/validators";
+import { validateCreateOrderSessionRequest, validateOrderSessionEvent } from "../lib/order-agent/validators";
 import { createInMemoryOrderSessionStore } from "../lib/order-agent/session-store";
 import { toPublicOrderSessionState } from "../lib/order-agent/public-state";
 import type { CreateOrderSessionRequest, OrderSessionPrivateState } from "../lib/order-agent/types";
@@ -53,6 +53,16 @@ test("validateCreateOrderSessionRequest rejects productUrl outside allowlist", (
   );
 });
 
+test("validateOrderSessionEvent accepts login_completed", () => {
+  const parsed = validateOrderSessionEvent({ type: "login_completed" });
+  assert.deepEqual(parsed, { type: "login_completed" });
+});
+
+test("validateOrderSessionEvent accepts popup_click ratios", () => {
+  const parsed = validateOrderSessionEvent({ type: "popup_click", xRatio: 0.25, yRatio: 0.75 });
+  assert.deepEqual(parsed, { type: "popup_click", xRatio: 0.25, yRatio: 0.75 });
+});
+
 test("session store persists timeline and public state hides private payload", () => {
   const store = createInMemoryOrderSessionStore();
   const now = new Date().toISOString();
@@ -82,6 +92,17 @@ test("session store persists timeline and public state hides private payload", (
 
   store.create(session);
   store.appendEvent(session.id, { type: "confirm_final_action" });
+  store.savePopupState(session.id, {
+    open: true,
+    mode: "popup-focus",
+    kind: "payment",
+    title: "Popup thanh toán",
+    text: "Xác nhận thanh toán",
+    actions: ["Xác nhận", "Đóng"],
+    bounds: { x: 10, y: 20, width: 300, height: 420 },
+    updatedAt: now,
+  });
+  store.savePopupFrame(session.id, "popup-frame-base64", "image/jpeg");
   store.update(session.id, {
     status: "waiting_for_final_confirmation",
     step: "review_order",
@@ -97,5 +118,94 @@ test("session store persists timeline and public state hides private payload", (
   const publicState = toPublicOrderSessionState(saved!);
   assert.equal(publicState.status, "waiting_for_final_confirmation");
   assert.equal(publicState.timeline.at(-1)?.message, "Chờ xác nhận cuối");
+  assert.equal(publicState.popup?.mode, "popup-focus");
+  assert.equal(publicState.popupFrameAvailable, true);
   assert.equal("private" in publicState, false);
+});
+
+test("session store does not append adjacent duplicate timeline entries", () => {
+  const store = createInMemoryOrderSessionStore();
+  const now = new Date().toISOString();
+
+  const session: OrderSessionPrivateState = {
+    id: "session-dedupe-1",
+    provider: "tuoixanhnhanhngon",
+    status: "running",
+    step: "remote_ready",
+    progress: 12,
+    message: "Đã nhận lệnh run_order cho: Táo đỏ",
+    customer: makeRequest().customer,
+    offer: makeRequest().offer,
+    quantity: 1,
+    delivery: makeRequest().delivery,
+    events: [],
+    timeline: [{ at: now, status: "running", message: "Đã nhận lệnh run_order cho: Táo đỏ" }],
+    idempotencyKey: "idem-dedupe-1",
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    private: {},
+  };
+
+  store.create(session);
+  store.update(session.id, {
+    status: "running",
+    step: "dispatch_run_order",
+    progress: 12,
+    message: "Đã nhận lệnh run_order cho: Táo đỏ",
+  });
+  store.update(session.id, {
+    status: "running",
+    step: "dispatch_run_order",
+    progress: 12,
+    message: "Khởi động AI Agentic (Gemini (gemini-3.5-flash))...",
+  });
+
+  const saved = store.get(session.id);
+  assert.ok(saved);
+  assert.equal(saved?.timeline.length, 2);
+  assert.deepEqual(
+    saved?.timeline.map((item) => item.message),
+    [
+      "Đã nhận lệnh run_order cho: Táo đỏ",
+      "Khởi động AI Agentic (Gemini (gemini-3.5-flash))...",
+    ]
+  );
+});
+
+test("session store only appends expired timeline entry once across repeated reads", async () => {
+  const store = createInMemoryOrderSessionStore(5);
+  const now = new Date().toISOString();
+
+  const session: OrderSessionPrivateState = {
+    id: "session-expire-1",
+    provider: "tuoixanhnhanhngon",
+    status: "running",
+    step: "checkout",
+    progress: 60,
+    message: "Đang đặt hàng",
+    customer: makeRequest().customer,
+    offer: makeRequest().offer,
+    quantity: 1,
+    delivery: makeRequest().delivery,
+    events: [],
+    timeline: [{ at: now, status: "running", message: "Đang đặt hàng" }],
+    idempotencyKey: "idem-expire-1",
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: new Date(Date.now() + 5).toISOString(),
+    private: {},
+  };
+
+  store.create(session);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const first = store.get(session.id);
+  const second = store.get(session.id);
+
+  assert.equal(first?.status, "expired");
+  assert.equal(second?.status, "expired");
+  assert.equal(first?.timeline.filter((item) => item.status === "expired").length, 1);
+  assert.equal(second?.timeline.filter((item) => item.status === "expired").length, 1);
+  assert.equal(second?.timeline.length, 2);
 });

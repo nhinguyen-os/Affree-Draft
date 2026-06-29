@@ -16,5 +16,7 @@ export function toPublicOrderSessionState(session: OrderSessionPrivateState): Pu
     expiresAt: session.expiresAt,
     timeline: session.timeline,
     qrCodeAvailable: Boolean(session.private.qrImageBase64),
+    popup: session.private.popupState,
+    popupFrameAvailable: Boolean(session.private.popupFrameBase64),
   };
 }

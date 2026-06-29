@@ -2,8 +2,9 @@
  * Playbook Registry - Chọn playbook phù hợp theo chuỗi cửa hàng và URL.
  * 
  * Cách thêm playbook mới:
- * 1. Tạo file `playbooks/<chainname>.js` export hàm `run(page, payload, sendLog, sendStatus)`
- * 2. Đăng ký chain key trong PLAYBOOKS bên dưới
+ * 1. Tạo file `playbooks/<chainname>.js` export hàm `run(page, payload, sendLog, sendStatus)` cho agentic bootstrap
+ * 2. Nếu chain cần CSS fallback riêng, export thêm `runCss(page, payload, sendLog, sendStatus)`
+ * 3. Đăng ký chain key trong PLAYBOOKS bên dưới
  */
 
 const PLAYBOOKS = {
@@ -13,6 +14,30 @@ const PLAYBOOKS = {
   bhx: require("./bachhoaxanh"),
 };
 
+function resolvePlaybook(payload = {}) {
+  const { chain, url } = payload;
+
+  if (chain) {
+    const key = chain.toLowerCase();
+    if (PLAYBOOKS[key]) {
+      return { key, playbook: PLAYBOOKS[key], source: "chain" };
+    }
+  }
+
+  if (url) {
+    try {
+      const hostname = new URL(url).hostname.replace("www.", "");
+      for (const [key, playbook] of Object.entries(PLAYBOOKS)) {
+        if (hostname.includes(key)) {
+          return { key, playbook, source: "url", hostname };
+        }
+      }
+    } catch { }
+  }
+
+  return null;
+}
+
 /**
  * Tìm và chạy playbook phù hợp cho chain/URL.
  * Trả về { done: true } nếu playbook xử lý toàn bộ,
@@ -20,29 +45,18 @@ const PLAYBOOKS = {
  * Trả về null nếu không có playbook nào phù hợp.
  */
 async function runPlaybook(page, payload, sendLog, sendStatus, sendMessage = null, sendScreenshotFrame = null) {
-  const { chain, url } = payload;
-
-  // 1. Tìm theo chain key trước
-  if (chain && PLAYBOOKS[chain.toLowerCase()]) {
-    const pb = PLAYBOOKS[chain.toLowerCase()];
-    sendLog(`Tìm thấy Playbook cho chuỗi: ${chain.toUpperCase()}`, "info");
-    return pb.run(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
+  const resolved = resolvePlaybook(payload);
+  if (!resolved) {
+    return null; // Không có playbook → dùng AI DOM thuần
   }
 
-  // 2. Tìm theo domain của URL
-  if (url) {
-    try {
-      const hostname = new URL(url).hostname.replace("www.", "");
-      for (const [key, pb] of Object.entries(PLAYBOOKS)) {
-        if (hostname.includes(key)) {
-          sendLog(`Tìm thấy Playbook cho domain: ${hostname}`, "info");
-          return pb.run(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
-        }
-      }
-    } catch {}
+  if (resolved.source === "chain") {
+    sendLog(`Tìm thấy Playbook cho chuỗi: ${resolved.key.toUpperCase()}`, "info");
+  } else {
+    sendLog(`Tìm thấy Playbook cho domain: ${resolved.hostname}`, "info");
   }
 
-  return null; // Không có playbook → dùng AI DOM thuần
+  return resolved.playbook.run(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
 }
 
-module.exports = { runPlaybook };
+module.exports = { runPlaybook, resolvePlaybook };

@@ -577,6 +577,7 @@ export default function Home() {
   const [buyNote, setBuyNote] = useState("");
   const [buySubmitting, setBuySubmitting] = useState(false);
   const [buyOffer, setBuyOffer] = useState<RankedOffer | null>(null);
+  const [txnnLiveOpen, setTxnnLiveOpen] = useState(false);
 
   // Giỏ hàng — mua nhiều sản phẩm từ nhiều cửa hàng cùng lúc.
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
@@ -621,6 +622,31 @@ export default function Home() {
   // Tách giá trị tìm kiếm "trễ" khỏi ô nhập: gõ phím cập nhật input tức thì, còn việc
   // lọc/xếp hạng (nặng khi data lớn) chạy ở mức ưu tiên thấp → không giật khi gõ.
   const deferredQuery = useDeferredValue(query);
+  const txnnLiveOffer = useMemo<RankedOffer>(() => ({
+    productId: "txnn-live-tui-don-ghep",
+    storeId: "tuoixanhnhanhngon",
+    price: 0,
+    inStock: true,
+    productUrl: "https://tuoixanhnhanhngon.timdaythay.com/",
+    lastChecked: new Date(0).toISOString(),
+    distanceKm: null,
+    product: {
+      id: "txnn-live-tui-don-ghep",
+      name: "Túi Đơn Ghép TXNN",
+      brand: "Tươi Xanh Nhanh Ngon",
+      category: "Thực phẩm",
+      group: "Đồ ăn",
+      unit: "giỏ",
+    },
+    store: {
+      id: "tuoixanhnhanhngon",
+      chain: "tuoixanhnhanhngon",
+      name: "Tươi Xanh Nhanh Ngon",
+      address: "Website chính thức TXNN",
+      website: "https://tuoixanhnhanhngon.timdaythay.com",
+      online: true,
+    },
+  }), []);
 
   // Đo chiều cao header để ô tìm kiếm dính ngay bên dưới khi cuộn (không cần số cố định).
   const headerRef = useRef<HTMLElement>(null);
@@ -1571,6 +1597,12 @@ export default function Home() {
             >
               🤖 Agent Demo
             </Link>
+            <button
+              onClick={() => setTxnnLiveOpen(true)}
+              className="shrink-0 whitespace-nowrap rounded-full border border-teal-300 bg-teal-50 px-2.5 py-1.5 text-sm font-medium text-teal-800 hover:bg-teal-100 sm:px-3"
+            >
+              🛒 Mua hàng TXNN
+            </button>
           </div>
         </div>
       </header>
@@ -2867,6 +2899,21 @@ export default function Home() {
           onPlaced={(code, chosen) => {
             recordBuy(chosen);
             setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
+            setTimeout(() => setToast(""), 4000);
+          }}
+        />
+      )}
+
+      {txnnLiveOpen && (
+        <OrderAgentModal
+          offer={txnnLiveOffer}
+          lang={lang}
+          geoAddr={userAddr}
+          defaultAddress={userAddr}
+          onClose={() => setTxnnLiveOpen(false)}
+          onPlaced={(code, chosen) => {
+            recordBuy(chosen);
+            setToast(t("TXNN đã hoàn tất · {code}", { code }));
             setTimeout(() => setToast(""), 4000);
           }}
         />
