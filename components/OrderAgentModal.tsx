@@ -240,6 +240,23 @@ async function fetchCoopLocations(level: "provinces" | "districts" | "wards", pa
   return data.items || [];
 }
 
+async function getAgentWsUrl(sessionId: string) {
+  const baseUrl = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080";
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  try {
+    const res = await fetch(`/api/agent/token?sessionId=${sessionId}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.token) {
+        return `${baseUrl}${separator}sessionId=${sessionId}&timestamp=${data.timestamp}&token=${data.token}`;
+      }
+    }
+  } catch (err) {
+    console.error("Error fetching agent token:", err);
+  }
+  return `${baseUrl}${separator}sessionId=${sessionId}`;
+}
+
 export default function OrderAgentModal({
   offer,
   alternatives = [],
@@ -623,7 +640,9 @@ export default function OrderAgentModal({
     setBhxOtpVisible(false);
     setBhxOtp("");
 
-    const ws = new WebSocket("ws://localhost:8080");
+    const wsSessionId = `bhx-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const wsUrl = await getAgentWsUrl(wsSessionId);
+    const ws = new WebSocket(wsUrl);
     bhxBrowserWsRef.current = ws;
 
     const sendBHXOrderRequest = () => {
@@ -923,14 +942,16 @@ export default function OrderAgentModal({
     }
   };
 
-  const openCoopBrowserAssist = (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" | "paymentScreen" = "checkout") => {
+  const openCoopBrowserAssist = async (nextResult?: CoopOrderResult, mode: "checkout" | "profileSetup" | "paymentScreen" = "checkout") => {
     const result = nextResult ?? coopResult;
     setCoopBrowserVisible(true);
     setCoopBrowserStatus(t("Đang mở màn hình thao tác Co.op…"));
     setCoopBrowserFrame("");
     try {
       coopBrowserWsRef.current?.close();
-      const ws = new WebSocket("ws://localhost:8080");
+      const wsSessionId = `coop-assist-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+      const wsUrl = await getAgentWsUrl(wsSessionId);
+      const ws = new WebSocket(wsUrl);
       coopBrowserWsRef.current = ws;
       let opened = false;
       let receivedFrame = false;

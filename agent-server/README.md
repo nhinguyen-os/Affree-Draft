@@ -69,6 +69,8 @@ Script tự động:
 
 ## Chạy trên Production / Docker Pod
 
+> 📄 **Xem chi tiết:** Hướng dẫn đầy đủ và các lưu ý cấu hình Reverse Proxy, bảo mật token, và cấp quyền Docker socket tại [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
+
 Dùng `start.sh` để khởi động **Orchestrator** — tự động tạo Docker container độc lập cho mỗi session:
 
 ```bash
