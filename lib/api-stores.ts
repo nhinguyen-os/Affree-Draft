@@ -36,6 +36,7 @@ export async function fetchNearbyStores(options: {
 
   const headers: Record<string, string> = {
     "Accept-Language": "vi",
+    "Cache-Control": "public, max-age=300, s-maxage=300"
   };
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;

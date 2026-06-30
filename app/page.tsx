@@ -1993,7 +1993,7 @@ export default function Home() {
       .slice(0, 10);
   }, [catalog, selected, priceStats]);
 
-  const center: [number, number] = userLoc ? [userLoc.lat, userLoc.lng] : HCM_CENTER;
+  const center: [number, number] = userLoc && userLoc.lat ? [userLoc.lat, userLoc.lng] : HCM_CENTER;
 
   const markers: MapMarker[] = useMemo(() => {
     if (selected && offers.length) {
