@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getMetrics, type SiteTotals } from "@/lib/metrics";
+import { getMetrics, reportCatalogSnapshot, type SiteTotals } from "@/lib/metrics";
 
 /**
  * Dải "thống kê nhỏ" tạo niềm tin, đặt cuối trang chủ (trên footer).
@@ -79,6 +79,12 @@ export function SiteStats({ t, products, stores, brands }: Props) {
   useEffect(() => {
     getMetrics().then(setTotals);
   }, []);
+
+  useEffect(() => {
+    if (products > 0 || stores > 0 || brands > 0) {
+      reportCatalogSnapshot(products, stores, brands);
+    }
+  }, [products, stores, brands]);
 
   // Chạy count-up khi dải lọt vào màn hình; fallback: tự chạy sau 1.2s nếu observer
   // không kích hoạt (đảm bảo số luôn hiện đúng, không kẹt ở 0).

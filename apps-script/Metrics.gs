@@ -31,8 +31,14 @@ function handleMetrics_(action, event) {
   if (!sh) {
     sh = ss.insertSheet("Metrics");
     sh.getRange("A1:B1").setValues([["key", "value"]]);
-    sh.getRange("A2:A4").setValues([["visits"], ["orders"], ["carts"]]);
-    sh.getRange("B2:B4").setValues([[0], [0], [0]]);
+    sh.getRange("A2:A7").setValues([["visits"], ["orders"], ["carts"], ["products"], ["stores"], ["brands"]]);
+    sh.getRange("B2:B7").setValues([[0], [0], [0], [0], [0], [0]]);
+  } else {
+    // Đảm bảo 3 row mới tồn tại nếu sheet cũ chỉ có 3 dòng.
+    if (!sh.getRange(5, 1).getValue()) {
+      sh.getRange("A5:A7").setValues([["products"], ["stores"], ["brands"]]);
+      sh.getRange("B5:B7").setValues([[0], [0], [0]]);
+    }
   }
 
   var row = { visit: 2, order: 3, cart: 4 };
@@ -41,10 +47,20 @@ function handleMetrics_(action, event) {
     c.setValue((Number(c.getValue()) || 0) + 1);
   }
 
+  // Snapshot: cập nhật số sản phẩm / điểm bán / nhãn hiệu từ catalog.
+  if (action === "metrics_snapshot") {
+    if (event && event.products !== undefined) sh.getRange(5, 2).setValue(Number(event.products) || 0);
+    if (event && event.stores !== undefined)   sh.getRange(6, 2).setValue(Number(event.stores)   || 0);
+    if (event && event.brands !== undefined)   sh.getRange(7, 2).setValue(Number(event.brands)   || 0);
+  }
+
   var totals = {
-    visits: Number(sh.getRange(2, 2).getValue()) || 0,
-    orders: Number(sh.getRange(3, 2).getValue()) || 0,
-    carts: Number(sh.getRange(4, 2).getValue()) || 0,
+    visits:   Number(sh.getRange(2, 2).getValue()) || 0,
+    orders:   Number(sh.getRange(3, 2).getValue()) || 0,
+    carts:    Number(sh.getRange(4, 2).getValue()) || 0,
+    products: Number(sh.getRange(5, 2).getValue()) || 0,
+    stores:   Number(sh.getRange(6, 2).getValue()) || 0,
+    brands:   Number(sh.getRange(7, 2).getValue()) || 0,
   };
 
   try { lock.releaseLock(); } catch (e) {}

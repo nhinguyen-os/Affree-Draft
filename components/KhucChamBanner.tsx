@@ -182,7 +182,7 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
         onClick={() => setOpen(true)}
         aria-label={t("Mở Khúc Chạm Channel")}
         title={t(cfg.channelName)}
-        className="fixed right-2 top-1/2 z-40 flex h-14 w-14 -translate-y-1/2 items-center justify-center rounded-full shadow-2xl transition hover:scale-110"
+        className="fixed right-0 top-1/2 z-40 flex -translate-y-1/2 items-center justify-center rounded-l-2xl bg-white/80 px-1.5 py-2 shadow-xl ring-1 ring-orange-200 backdrop-blur-sm transition hover:bg-white"
       >
         <span className="pointer-events-none absolute inset-0 rounded-full bg-orange-400 opacity-40 animate-ping" aria-hidden="true" />
         {/* eslint-disable-next-line @next/next/no-img-element */}

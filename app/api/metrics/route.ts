@@ -20,14 +20,21 @@ export const revalidate = 0;
 const CAN_INCR = ALLOW_SHEET_WRITE;
 
 const EVENTS = new Set(["visit", "order", "cart"]);
-type Totals = { visits: number; orders: number; carts: number };
-const EMPTY: Totals = { visits: 0, orders: 0, carts: 0 };
+type Totals = { visits: number; orders: number; carts: number; products: number; stores: number; brands: number };
+const EMPTY: Totals = { visits: 0, orders: 0, carts: 0, products: 0, stores: 0, brands: 0 };
 
 function parseTotals(text: string): Totals {
   try {
     const j = JSON.parse(text);
     const t = j.totals ?? j;
-    return { visits: Number(t.visits) || 0, orders: Number(t.orders) || 0, carts: Number(t.carts) || 0 };
+    return {
+      visits:   Number(t.visits)   || 0,
+      orders:   Number(t.orders)   || 0,
+      carts:    Number(t.carts)    || 0,
+      products: Number(t.products) || 0,
+      stores:   Number(t.stores)   || 0,
+      brands:   Number(t.brands)   || 0,
+    };
   } catch {
     return { ...EMPTY };
   }
@@ -54,17 +61,31 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  let event = "";
+  let body: { event?: string; snapshot?: { products: number; stores: number; brands: number } };
   try {
-    event = String(((await req.json()) as { event?: string })?.event || "");
+    body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }
+
+  // Snapshot catalog counts (products / stores / brands) — chỉ ghi production.
+  if (body.snapshot) {
+    if (!CAN_INCR) return NextResponse.json({ ok: true, wrote: false, totals: EMPTY });
+    try {
+      return NextResponse.json({
+        ok: true, wrote: true,
+        totals: await callWebhook({ action: "metrics_snapshot", event: body.snapshot }),
+      });
+    } catch (err) {
+      return NextResponse.json({ ok: false, totals: EMPTY, error: String(err) });
+    }
+  }
+
+  const event = String(body.event || "");
   if (!EVENTS.has(event)) {
     return NextResponse.json({ ok: false, error: "unknown event" }, { status: 400 });
   }
   try {
-    // Không phải production thật → không cộng (tránh bẩn số), chỉ trả số hiện tại.
     const action = CAN_INCR ? "metric_incr" : "metrics_get";
     return NextResponse.json({ ok: true, wrote: CAN_INCR, totals: await callWebhook({ action, event }) });
   } catch (err) {

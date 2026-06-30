@@ -94,14 +94,18 @@ const _geoRevCache = new Map<string, { label: string; area: string; cc: string; 
 
 // Phân định vùng cho Affree: cc=vn → suy ra tỉnh/thành (áp dụng MỌI vùng, không riêng HCM).
 // HCM trả "TPHCM" (gọn, ổn định sau sáp nhập); tỉnh/thành khác lấy từ `state`, bỏ tiền tố
-// "Thành phố"/"Tỉnh" (vd "Thành phố Hà Nội" → "Hà Nội", "Tỉnh Đồng Nai" → "Đồng Nai"). Ngoài VN → rỗng.
+// "Thành phố"/"Tỉnh" (vd "Thành phố Hà Nội" → "Hà Nội", "Tỉnh Đồng Nai" → "Đồng Nai").
+// Ngoài VN → lấy city/town/state (vd "Mississauga", "Toronto", "Ontario").
 function regionForAddress(a: Record<string, string> | undefined): string {
   if (!a) return "";
   const cc = (a.country_code ?? "").toLowerCase();
-  if (cc !== "vn") return "";
-  if (isHCMC(a)) return "TPHCM";
-  const state = (a.state || a.region || a.city || "").trim();
-  return state.replace(/^(thành phố|tỉnh)\s+/i, "").trim();
+  if (cc === "vn") {
+    if (isHCMC(a)) return "TPHCM";
+    const state = (a.state || a.region || a.city || "").trim();
+    return state.replace(/^(thành phố|tỉnh)\s+/i, "").trim();
+  }
+  // Nước ngoài: ưu tiên city > town > county > state
+  return (a.city || a.town || a.county || a.state || "").trim();
 }
 
 async function reverseGeocode(
@@ -663,6 +667,9 @@ export default function Home() {
   const [locOpen, setLocOpen] = useState(false);
   const [verOpen, setVerOpen] = useState(false);
   const [expandedVer, setExpandedVer] = useState<string | null>(null);
+  // sub-version mới nhất trong VERSION_HISTORY[0] mở sẵn, còn lại thu gọn
+  const latestSubVersion = VERSION_HISTORY[0]?.children[0]?.subVersion ?? null;
+  const [expandedSub, setExpandedSub] = useState<string | null>(latestSubVersion);
   const [addrQuery, setAddrQuery] = useState("");
   const [addrResults, setAddrResults] = useState<GeoResult[]>([]);
   const [addrSearching, setAddrSearching] = useState(false);
@@ -1593,7 +1600,7 @@ export default function Home() {
   // Chỉ lấy sp có ≥2 nơi bán còn hàng và chênh ≥5% (mới đáng gọi là "giá hời").
   const areaDeals = useMemo(() => {
     if (!catalog) return [] as {
-      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; km: number | null;
+      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; km: number | null; store: Store | undefined;
     }[];
     const storeById = new Map(getStores().map((s) => [s.id, s]));
     const rows = [];
@@ -1642,6 +1649,7 @@ export default function Home() {
         currency: s.currency,
         storeName: bestStore?.name ?? "",
         km: bestKm,
+        store: bestStore,
       });
     }
     // Đã định vị → xếp theo điểm gộp "rẻ + gần" (giá hời cao và càng gần càng tốt);
@@ -1911,6 +1919,25 @@ export default function Home() {
     [orderedMatches, page]
   );
 
+  // Nhóm theo product.category khi xem "Xem tất cả" 1 tệp (activeTep, không search/filter)
+  const byCatInTep = useMemo(() => {
+    if (!activeTep || query.trim() || activeCat || activeBrand || activeChain || quickFilter) return null;
+    const map = new Map<string, Product[]>();
+    for (const p of orderedMatches) {
+      const cat = (p.category || "").trim() || categoryGroup(p) || "Khác";
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(p);
+    }
+    const tepOrder = CATEGORY_GROUPS.map((x) => x.label);
+    const sorted = [...map.keys()].sort((a, b) => {
+      const ta = tepOrder.indexOf(categoryGroup(a) || a);
+      const tb = tepOrder.indexOf(categoryGroup(b) || b);
+      if (ta !== tb) return (ta === -1 ? 999 : ta) - (tb === -1 ? 999 : tb);
+      return a.localeCompare(b, "vi");
+    });
+    return sorted.map((name) => ({ name, products: map.get(name)! }));
+  }, [activeTep, query, activeCat, activeBrand, activeChain, quickFilter, orderedMatches]);
+
   // Nhóm sản phẩm theo tệp — dùng cho layout section ở trang chủ (không search/filter).
   // CHỈ hiển thị section khai báo trong tab DanhMuc của Google Sheet. Sản phẩm rơi vào
   // tệp không có trong DanhMuc (vd "Khác" tự sinh do group trống/không match) → bị ẨN
@@ -2128,6 +2155,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady]);
 
+  // Markers cho bản đồ Giá hời — mỗi deal lấy store của nơi bán rẻ nhất.
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
   async function recordBuy(o: RankedOffer) {
     setToast(t("Đã ghi nhận mua {product} tại {store}", { product: o.product.name, store: o.store.name }));
@@ -2668,11 +2696,11 @@ export default function Home() {
           onClick={() => setVerOpen(false)}
         >
           <div
-            className="liquid-glass max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-3xl p-5"
+            className="liquid-glass flex flex-col max-h-[85vh] w-full max-w-lg rounded-3xl"
             onClick={(e) => e.stopPropagation()}
             style={{ WebkitBackdropFilter: "blur(32px)" }}
           >
-            <div className="mb-1 flex items-start justify-between gap-3">
+            <div className="mb-1 flex items-start justify-between gap-3 shrink-0 px-5 pt-5">
               <div className="flex items-center gap-2">
                 <Logo size={30} />
                 <div>
@@ -2699,6 +2727,7 @@ export default function Home() {
               </button>
             </div>
 
+            <div className="overflow-y-auto px-5 pb-5">
             {VERSION_HISTORY[0] && (
               <>
                 <p className="mt-3 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -2710,25 +2739,43 @@ export default function Home() {
                     <span className="text-xs font-normal text-slate-400">· {VERSION_HISTORY[0].date}</span>
                   )}
                 </p>
-                <div className="mb-1 flex flex-col gap-3">
-                  {VERSION_HISTORY[0].children.map((sub) => (
-                    <div key={sub.subVersion} className="flex flex-col gap-1.5">
-                      <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                          v{sub.subVersion}
-                        </span>
-                        {sub.date && <span className="font-normal text-slate-400">· {sub.date}</span>}
-                      </p>
-                      <ol className="flex flex-col gap-1 pl-1">
-                        {sub.highlights.map((it, i) => (
-                          <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
-                            <span className="shrink-0 font-mono text-[11px] font-semibold text-emerald-600">{i + 1}.</span>
-                            <span>{it}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  ))}
+                <div className="mb-1 flex flex-col gap-1.5">
+                  {VERSION_HISTORY[0].children.map((sub, si) => {
+                    const isSubOpen = expandedSub === sub.subVersion;
+                    const isLatestSub = si === 0;
+                    return (
+                      <div key={sub.subVersion} className={`rounded-xl border ${isLatestSub ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-white'}`}>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSub(isSubOpen ? null : sub.subVersion)}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] font-bold ${isLatestSub ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                              v{sub.subVersion}
+                            </span>
+                            {sub.date && <span className="text-xs font-normal text-slate-400">· {sub.date}</span>}
+                          </span>
+                          <span className="flex items-center gap-1 text-xs font-normal text-slate-500">
+                            {isSubOpen ? t("Thu gọn") : t("Xem chi tiết")}
+                            <svg className={`transition ${isSubOpen ? "rotate-180" : ""}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="m6 9 6 6 6-6" />
+                            </svg>
+                          </span>
+                        </button>
+                        {isSubOpen && (
+                          <ol className="flex flex-col gap-1 border-t border-slate-100 px-3 pb-2.5 pt-2">
+                            {sub.highlights.map((it, i) => (
+                              <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                                <span className="shrink-0 font-mono text-[11px] font-semibold text-emerald-600">{i + 1}.</span>
+                                <span>{it}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -2821,6 +2868,7 @@ export default function Home() {
             <p className="mt-4 text-center text-[11px] text-slate-400">
               {t("Cảm ơn bạn đã dùng Affree 💚")}
             </p>
+            </div>
           </div>
         </div>
       )}
@@ -3116,6 +3164,26 @@ export default function Home() {
                 {/* Đổ bóng kính 2 mép (liquid glass): hiện cả 2 bên khi hàng còn cuộn được. */}
                 {brandArrows.left && <div className={GLASS_FADE_LEFT} />}
                 {brandArrows.right && <div className={GLASS_FADE_RIGHT} />}
+                {brandArrows.left && (
+                  <button
+                    type="button"
+                    aria-label={t("Cuộn về trước")}
+                    onClick={() => brandScrollRef.current?.scrollBy({ left: -(brandScrollRef.current?.clientWidth ?? 260), behavior: "smooth" })}
+                    className="absolute left-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  >
+                    ‹
+                  </button>
+                )}
+                {brandArrows.right && (
+                  <button
+                    type="button"
+                    aria-label={t("Cuộn về sau")}
+                    onClick={() => brandScrollRef.current?.scrollBy({ left: brandScrollRef.current?.clientWidth ?? 260, behavior: "smooth" })}
+                    className="absolute right-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
+                  >
+                    ›
+                  </button>
+                )}
               <div
                 ref={brandScrollRef}
                 onScroll={updateBrandArrows}
@@ -3134,7 +3202,7 @@ export default function Home() {
                           ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
                       <span className="relative">
                         <span
-                          className={`flex h-20 w-20 items-center justify-center overflow-hidden ${TILE_GLASS}`}
+                          className={`flex h-20 w-20 items-center justify-center overflow-hidden p-2 ${TILE_GLASS}`}
                           // Vuông 80×80 đồng kích thước với tile 'Dịch vụ quanh đây' để 2 section
                           // đồng phong cách. Logo tự dò màu nền brand + trim lề rỗng (TrimmedLogo).
                           style={{
@@ -3220,8 +3288,8 @@ export default function Home() {
                 </span>
               </div>
               {userLoc && (
-                <div className="mb-2 flex items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {/* Đồng bộ style với bộ filter "Bán kính" trên bản đồ. */}
+                <div className="mb-2 flex items-center gap-1.5 overflow-x-auto rounded-xl border border-slate-100 bg-white px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {/* Đồng bộ style với bộ filter "Bán kính" trên bản đồ (nền trắng + viền + padding). */}
                   <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
@@ -3229,7 +3297,7 @@ export default function Home() {
                     </svg>
                     {t("Bán kính")}
                   </span>
-                  {[0.5, 1, 2, 3, 5].map((r) => (
+                  {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
                     <button
                       key={r}
                       type="button"
@@ -3394,9 +3462,17 @@ export default function Home() {
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <button
-                        onClick={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
+                        onClick={() => {
+                          // Lùi 1 CẤP (khác nút tròn ở header — nút đó về thẳng trang chủ).
+                          // Bóc bộ lọc sâu nhất: ngành con → nhãn → tệp; ở cấp trên cùng thì về trang chủ.
+                          setPage(1);
+                          if (activeCat && (activeTep || activeBrand)) { setActiveCat(null); return; }
+                          if (activeBrand && activeTep) { setActiveBrand(null); return; }
+                          // Chỉ còn 1 cấp (tệp/ngành/nhãn/chuỗi đơn lẻ) hoặc tìm kiếm/lọc nhanh → về trang chủ.
+                          setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery("");
+                        }}
                         className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 active:scale-95"
-                        aria-label={t("Quay lại trang chủ")}
+                        aria-label={t("Quay lại")}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M15 18l-6-6 6-6"/>
@@ -3522,6 +3598,77 @@ export default function Home() {
                       </li>
                     ))}
                   </ul>
+                  ) : byCatInTep ? (
+                  <div className="space-y-6">
+                    {byCatInTep.map(({ name: catName, products: catProducts }) => {
+                      const preview = catProducts.slice(0, 6);
+                      return (
+                        <section key={catName}>
+                          <div className="mb-2.5 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-slate-700">
+                              {CAT_EMOJI[catName] ?? "🛒"} {catName}
+                              <span className="ml-1.5 text-xs font-normal text-slate-400">({catProducts.length})</span>
+                            </h3>
+                            <button
+                              onClick={() => { setActiveCat(catName); setPage(1); }}
+                              className="text-xs font-medium text-emerald-600 hover:underline"
+                            >
+                              {t("Xem tất cả →")}
+                            </button>
+                          </div>
+                          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                            {preview.map((p) => {
+                              const st = priceStats.get(p.id);
+                              const tags = recoTags.get(p.id) ?? [];
+                              const compare = canCompare(p);
+                              return (
+                                <li key={p.id}>
+                                  <div
+                                    className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]"
+                                    onClick={() => openProduct(p)}
+                                  >
+                                    <div className="mb-3 flex min-h-[20px] flex-wrap items-start gap-1">
+                                      {tags.map((tag) => (
+                                        <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                      ))}
+                                    </div>
+                                    <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                      <ProductThumb product={p} fill />
+                                    </div>
+                                    <span className="mb-1.5 block h-[10px]" />
+                                    <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
+                                    <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {t(p.unit)}</span>
+                                    {st && st.stores > 0 ? (
+                                      <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
+                                        <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                                        {formatMoney(st.min, st.currency)}
+                                      </span>
+                                    ) : st && st.outOfStock ? (
+                                      <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
+                                    ) : (
+                                      <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
+                                    )}
+                                    <span className="mt-auto flex gap-1 pt-2.5">
+                                      <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); addToCart(p); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }} className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100">
+                                        +
+                                        {cartQtyFor(p.id) > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyFor(p.id)}</span>}
+                                      </span>
+                                      <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 py-2 text-xs font-semibold text-white transition-colors duration-200 ${compare ? "bg-emerald-600 group-hover:bg-emerald-700" : "bg-amber-500 hover:bg-amber-600"}`}>
+                                        {compare ? <>{t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></> : t("Mua ngay")}
+                                      </span>
+                                    </span>
+                                  </div>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </section>
+                      );
+                    })}
+                    {orderedMatches.length === 0 && (
+                      <p className="text-sm text-slate-500">{t("Không tìm thấy sản phẩm phù hợp.")}</p>
+                    )}
+                  </div>
                   ) : (<>
                   <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                     {pageItems.map((p) => {
@@ -3586,32 +3733,14 @@ export default function Home() {
                             ) : (
                               <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                             )}
-                            <span className="mt-auto block w-full pt-2.5">
-                              {compare ? (
-                                <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
-                                  {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                                </span>
-                              ) : (
-                                <span className="flex gap-1">
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={(e) => { e.stopPropagation(); addToCart(p); }}
-                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }}
-                                    className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
-                                  >
-                                    +
-                                    {cartQtyFor(p.id) > 0 && (
-                                      <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                        {cartQtyFor(p.id)}
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span onClick={(e) => { e.stopPropagation(); openBuyAgent(p); }} className="flex flex-1 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
-                                    {t("Mua ngay")}
-                                  </span>
-                                </span>
-                              )}
+                            <span className="mt-auto flex gap-1 pt-2.5">
+                              <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); addToCart(p); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }} className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100">
+                                +
+                                {cartQtyFor(p.id) > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyFor(p.id)}</span>}
+                              </span>
+                              <span onClick={(e) => { e.stopPropagation(); compare ? openProduct(p) : openBuyAgent(p); }} className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 py-2 text-xs font-semibold text-white transition-colors duration-200 ${compare ? "bg-emerald-600 group-hover:bg-emerald-700" : "bg-amber-500 group-hover:bg-amber-600"}`}>
+                                {compare ? <>{t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></> : t("Mua ngay")}
+                              </span>
                             </span>
                           </div>
                         </li>
@@ -3861,17 +3990,14 @@ export default function Home() {
                                 ) : (
                                   <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                                 )}
-                                <span className="mt-auto block w-full pt-2.5">
-                                  {compare ? (
-                                    <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
-                                      {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                                    </span>
-                                  ) : (
-                                    <span onClick={(e) => { e.stopPropagation(); openBuyForm(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
-                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                      {t("Vào mua")}
-                                    </span>
-                                  )}
+                                <span className="mt-auto flex gap-1 pt-2.5">
+                                  <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); addToCart(p); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }} className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100">
+                                    +
+                                    {cartQtyFor(p.id) > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyFor(p.id)}</span>}
+                                  </span>
+                                  <span onClick={(e) => { e.stopPropagation(); compare ? openProduct(p) : openBuyForm(p); }} className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 py-2 text-xs font-semibold text-white transition-colors duration-200 ${compare ? "bg-emerald-600 group-hover:bg-emerald-700" : "bg-amber-500 group-hover:bg-amber-600"}`}>
+                                    {compare ? <>{t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></> : t("Mua ngay")}
+                                  </span>
                                 </span>
                               </div>
                             </li>
@@ -3941,32 +4067,14 @@ export default function Home() {
                                 ) : (
                                   <span className="mt-1.5 text-xs text-slate-400">{t("Chưa có giá")}</span>
                                 )}
-                                <span className="mt-auto block w-full pt-2">
-                                  {compare ? (
-                                    <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1 rounded-lg border border-slate-200 bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
-                                      {t("So sánh")}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                                    </span>
-                                  ) : (
-                                    <span className="flex gap-1">
-                                      <span
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={(e) => { e.stopPropagation(); addToCart(p); }}
-                                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }}
-                                        className="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-base font-bold text-amber-600 hover:bg-amber-100"
-                                      >
-                                        +
-                                        {cartQtyFor(p.id) > 0 && (
-                                          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                            {cartQtyFor(p.id)}
-                                          </span>
-                                        )}
-                                      </span>
-                                      <span onClick={(e) => { e.stopPropagation(); openBuyAgent(p); }} className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-slate-200 bg-amber-500 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
-                                        {t("Mua ngay")}
-                                      </span>
-                                    </span>
-                                  )}
+                                <span className="mt-auto flex gap-1 pt-2">
+                                  <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); addToCart(p); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }} className="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-base font-bold text-amber-600 hover:bg-amber-100">
+                                    +
+                                    {cartQtyFor(p.id) > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyFor(p.id)}</span>}
+                                  </span>
+                                  <span onClick={(e) => { e.stopPropagation(); compare ? openProduct(p) : openBuyAgent(p); }} className={`flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-slate-200 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 ${compare ? "bg-emerald-600 group-hover:bg-emerald-700" : "bg-amber-500 group-hover:bg-amber-600"}`}>
+                                    {compare ? <>{t("So sánh")}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></> : t("Mua ngay")}
+                                  </span>
                                 </span>
                               </div>
                             </div>
@@ -4340,17 +4448,6 @@ export default function Home() {
 
                               <div className="flex items-center gap-2">
                                 <button
-                                  onClick={() => setBuyOffer(o)}
-                                  className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
-                                >
-                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <circle cx="9" cy="21" r="1" />
-                                    <circle cx="20" cy="21" r="1" />
-                                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                                  </svg>
-                                  {t("Mua ngay")}
-                                </button>
-                                <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
                                   className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
@@ -4363,6 +4460,17 @@ export default function Home() {
                                       {cartQtyFor(o.product.id)}
                                     </span>
                                   )}
+                                </button>
+                                <button
+                                  onClick={() => setBuyOffer(o)}
+                                  className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
+                                >
+                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="9" cy="21" r="1" />
+                                    <circle cx="20" cy="21" r="1" />
+                                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                                  </svg>
+                                  {t("Mua ngay")}
                                 </button>
                               </div>
                             </div>
@@ -4826,6 +4934,44 @@ export default function Home() {
                 boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
               }}
             >
+              {isLove ? (
+              /* ── Header riêng cho "Gửi lời yêu thương" — tông ấm amber/rose như Khúc Chạm ── */
+              <div className="relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-rose-400 px-5 pb-5 pt-5">
+                {/* decor circles */}
+                <span className="pointer-events-none absolute -right-6 -top-6 h-28 w-28 rounded-full bg-white/10" />
+                <span className="pointer-events-none absolute -bottom-4 left-4 h-16 w-16 rounded-full bg-white/10" />
+                <button
+                  onClick={() => setContactOpen(false)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-white/80 pr-9">
+                  {t("Khúc Chạm Channel")}
+                </p>
+                <h3 className="mt-1 text-xl font-extrabold leading-snug text-white pr-9">
+                  {t("Gửi lời yêu thương 💚")}
+                </h3>
+                <p className="mt-1.5 text-[12px] leading-relaxed text-white/90 pr-9">
+                  {t("Lời nhắn của bạn có thể được Khúc Chạm phát độc quyền vào buổi sáng hôm sau 🎙️")}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <a
+                    href="https://zalo.me/0888803998"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-bold text-blue-600 shadow transition hover:bg-blue-50"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.953 9.953 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2Z"/></svg>
+                    {t("Nhắn Zalo: 0888 803 998")}
+                  </a>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1.5 text-[11px] font-semibold text-white">
+                    🎰 {t("Vòng quay may mắn")}
+                  </span>
+                </div>
+              </div>
+              ) : (
               <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
                 <button
                   onClick={() => setContactOpen(false)}
@@ -4835,18 +4981,17 @@ export default function Home() {
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
-                  {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
+                  {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : t("Liên hệ Affree")}
                 </p>
                 <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
-                  {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
+                  {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : t("Để lại liên hệ")}
                 </h3>
-                {!isLove && (
-                  <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                    {t("Phản hồi trong 24h")}
-                  </p>
-                )}
+                <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                  {t("Phản hồi trong 24h")}
+                </p>
               </div>
+              )}
 
               {isLove && loveSent ? (
                 <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
@@ -5229,6 +5374,8 @@ export default function Home() {
               setStoreProducts(null);
               setBuyOffer(ranked);
             }}
+            onAddToCart={(product) => addToCart(product)}
+            cartQtyFor={cartQtyFor}
           />
         );
       })()}

@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.4";
+export const APP_VERSION = "1.3.5";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,15 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.5",
+      date: "30.06.2026",
+      highlights: [
+        "Form 'Gửi lời yêu thương' ghi rõ: lời nhắn sẽ được kênh gắn lên bài hát — dịch vụ có tính phí, và bạn có cơ hội được miễn phí",
+        "Nút 'Quay lại' khi đang xem danh mục/nhãn hàng giờ lùi từng cấp (vd từ ngành con về nhãn) thay vì nhảy thẳng về trang chủ; nút mũi tên ở đầu trang vẫn về trang chủ",
+        "Khu 'Giá hời quanh đây': bỏ nút xem bản đồ trùng lặp, gọn hơn",
+        "Bộ lọc bán kính ở 'Giá hời quanh đây' đồng bộ mức với bản đồ (50m → 1km)",
+      ],
+    }, {
       subVersion: "1.3.4",
       date: "29.06.2026",
       highlights: [

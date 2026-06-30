@@ -4,7 +4,7 @@
 // - bumpMetric("order" | "cart"): đếm theo sự kiện thật.
 // - getMetrics(): đọc tổng để hiển thị.
 
-export type SiteTotals = { visits: number; orders: number; carts: number };
+export type SiteTotals = { visits: number; orders: number; carts: number; products: number; stores: number; brands: number };
 
 export async function getMetrics(): Promise<SiteTotals | null> {
   try {
@@ -15,6 +15,23 @@ export async function getMetrics(): Promise<SiteTotals | null> {
   } catch {
     return null;
   }
+}
+
+/** Gửi snapshot số catalog lên sheet (1 lần/phiên, chỉ production ghi). */
+export function reportCatalogSnapshot(products: number, stores: number, brands: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (sessionStorage.getItem("gqd_catalog_snapshot") === "1") return;
+    sessionStorage.setItem("gqd_catalog_snapshot", "1");
+  } catch { /* ignore */ }
+  try {
+    fetch("/api/metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ snapshot: { products, stores, brands } }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* ignore */ }
 }
 
 export function bumpMetric(event: "visit" | "order" | "cart"): void {

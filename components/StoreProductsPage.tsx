@@ -3,8 +3,9 @@
 import { useState, useMemo } from "react";
 import type { Offer, Product, RankedOffer, Store } from "@/lib/types";
 import { storeCurrency } from "@/lib/stores";
-import { distanceKm, formatMoney } from "@/lib/util";
+import { distanceKm } from "@/lib/util";
 import { ChainBadge } from "@/components/ChainBadge";
+import { ProductCard } from "@/components/ProductCard";
 import { categoryGroup, GROUP_TILE, CATEGORY_GROUPS, DEFAULT_TILE_EMOJIS } from "@/lib/categories";
 import { type Lang, tr } from "@/lib/i18n";
 
@@ -19,26 +20,12 @@ interface Props {
   groupEmoji?: Record<string, string>;
   onClose: () => void;
   onBuy: (offer: RankedOffer) => void;
+  onAddToCart?: (product: Product) => void;
+  cartQtyFor?: (productId: string) => number;
 }
 
-function Thumb({ product }: { product: Product }) {
-  const [failed, setFailed] = useState(false);
-  if (product.image && !failed) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={product.image}
-        alt=""
-        loading="lazy"
-        onError={() => setFailed(true)}
-        className="h-full w-full object-contain"
-      />
-    );
-  }
-  return <span className="flex h-full w-full items-center justify-center text-3xl">🛒</span>;
-}
 
-export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, onClose, onBuy }: Props) {
+export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, onClose, onBuy, onAddToCart, cartQtyFor }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
   // Emoji của 1 danh mục: ưu tiên sheet (tab "tệp") → GROUP_TILE → emoji mặc định theo index.
   const emojiFor = (name: string, idx: number) =>
@@ -52,24 +39,27 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
     [offers, productMap],
   );
 
-  // Group by category, ordered like CATEGORY_GROUPS
+  // Group by product.category (granular), fallback to categoryGroup tệp nếu category trống.
+  // Sắp xếp: tệp-level theo CATEGORY_GROUPS order, rồi sort alpha trong từng tệp.
   const sections = useMemo(() => {
     const byGroup = new Map<string, { offer: Offer; product: Product }[]>();
     for (const item of items) {
-      const g = categoryGroup(item.product);
+      const cat = (item.product.category || "").trim();
+      const g = cat || categoryGroup(item.product) || "Khác";
       if (!byGroup.has(g)) byGroup.set(g, []);
       byGroup.get(g)!.push(item);
     }
-    const canonical = CATEGORY_GROUPS.map((x) => x.label);
-    const result: { name: string; items: { offer: Offer; product: Product }[] }[] = [];
-    for (const label of canonical) {
-      if (byGroup.has(label)) result.push({ name: label, items: byGroup.get(label)! });
-    }
-    byGroup.forEach((list, label) => {
-      if (!canonical.includes(label) && label !== "Khác") result.push({ name: label, items: list });
+    // Sắp xếp các category theo tệp cha (CATEGORY_GROUPS order), rồi alpha trong tệp
+    const tepOrder = CATEGORY_GROUPS.map((x) => x.label);
+    const sorted = [...byGroup.keys()].sort((a, b) => {
+      const ta = tepOrder.indexOf(categoryGroup(a) || a);
+      const tb = tepOrder.indexOf(categoryGroup(b) || b);
+      const ta2 = ta === -1 ? 999 : ta;
+      const tb2 = tb === -1 ? 999 : tb;
+      if (ta2 !== tb2) return ta2 - tb2;
+      return a.localeCompare(b, "vi");
     });
-    if (byGroup.has("Khác")) result.push({ name: "Khác", items: byGroup.get("Khác")! });
-    return result;
+    return sorted.map((name) => ({ name, items: byGroup.get(name)! }));
   }, [items]);
 
   // null = trang danh mục chính, string = tên danh mục đang xem toàn bộ
@@ -130,7 +120,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                   {t("Quay lại")}
                 </button>
                 <h2 className="text-sm font-semibold text-slate-800">
-                  <span className="mr-1">{activeEmoji}</span>{activeSection}
+                  <span className="mr-1">{activeEmoji}</span>{t(activeSection!)}
                 </h2>
               </div>
               <span className="text-xs text-slate-400">{activeSectionData.items.length} {t("sản phẩm")}</span>
@@ -138,31 +128,17 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
           <ul className="grid grid-cols-2 gap-3 px-3 pb-3 sm:grid-cols-3">
             {activeSectionData.items.map(({ offer: o, product: p }) => (
               <li key={p.id}>
-                <div className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500">
-                  <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-slate-50">
-                    <Thumb product={p} />
-                  </div>
-                  <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
-                  <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${t(p.unit)}` : ""}</span>
-                  {o.inStock ? (
-                    <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-emerald-600">
-                      {formatMoney(o.price, storeCurrency(o.storeId))}
-                    </span>
-                  ) : (
-                    <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
-                  )}
-                  <span className="mt-auto block w-full pt-2.5">
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
-                      onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && o.inStock) onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer); }}
-                      className={`flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold text-white transition-colors duration-200 ${o.inStock ? "cursor-pointer bg-amber-500 hover:bg-amber-600" : "cursor-not-allowed bg-slate-100 text-slate-400"}`}
-                    >
-                      {t("Mua")}
-                    </span>
-                  </span>
-                </div>
+                <ProductCard
+                  product={p}
+                  price={o.price}
+                  currency={storeCurrency(o.storeId)}
+                  outOfStock={!o.inStock}
+                  cartQty={cartQtyFor?.(p.id) ?? 0}
+                  onBuy={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
+                  onAddToCart={onAddToCart ? () => onAddToCart(p) : undefined}
+                  lang={lang}
+                  variant="grid"
+                />
               </li>
             ))}
           </ul>
@@ -181,7 +157,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                   <section key={name} className="mb-5">
                     <div className="mb-2.5 flex items-center justify-between">
                       <h2 className="text-sm font-semibold text-slate-700">
-                        <span className="mr-1">{emoji}</span>{name}
+                        <span className="mr-1">{emoji}</span>{t(name)}
                         <span className="ml-1.5 text-xs font-normal text-slate-400">({secItems.length})</span>
                       </h2>
                       <button
@@ -195,31 +171,17 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     <div className="flex gap-3 overflow-x-auto pb-2 pt-1 touch-pan-x [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       {secItems.slice(0, 12).map(({ offer: o, product: p }) => (
                         <div key={p.id} className="w-36 shrink-0">
-                          <div className="group relative flex h-full w-full flex-col rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-1 hover:border-emerald-500">
-                            <div className="relative mb-1 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-slate-50">
-                              <Thumb product={p} />
-                            </div>
-                            <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
-                            <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand}{p.unit ? ` · ${t(p.unit)}` : ""}</span>
-                            {o.inStock ? (
-                              <span className="mt-1.5 text-sm font-bold text-emerald-600">
-                                {formatMoney(o.price, storeCurrency(o.storeId))}
-                              </span>
-                            ) : (
-                              <span className="mt-1.5 text-sm text-slate-400">{t("Hết hàng")}</span>
-                            )}
-                            <span className="mt-auto block w-full pt-2.5">
-                              <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
-                                onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && o.inStock) onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer); }}
-                                className={`flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold text-white transition-colors duration-200 ${o.inStock ? "cursor-pointer bg-amber-500 hover:bg-amber-600" : "cursor-not-allowed bg-slate-100 text-slate-400"}`}
-                              >
-                                {t("Mua")}
-                              </span>
-                            </span>
-                          </div>
+                          <ProductCard
+                            product={p}
+                            price={o.price}
+                            currency={storeCurrency(o.storeId)}
+                            outOfStock={!o.inStock}
+                            cartQty={cartQtyFor?.(p.id) ?? 0}
+                            onBuy={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
+                            onAddToCart={onAddToCart ? () => onAddToCart(p) : undefined}
+                            lang={lang}
+                            variant="scroll"
+                          />
                         </div>
                       ))}
                     </div>
