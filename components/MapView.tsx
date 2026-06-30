@@ -193,8 +193,13 @@ export default function MapView({
   const [hiddenChains, setHiddenChains] = useState<Set<Chain>>(new Set());
 
   const recenter = useCallback(() => {
-    if (!userLoc || !map) return;
-    map.flyTo([userLoc.lat, userLoc.lng], 15, { duration: 0.5 });
+    if (!userLoc || !map || userLoc.lat == null || userLoc.lng == null || isNaN(userLoc.lat) || isNaN(userLoc.lng)) return;
+    const size = map.getSize();
+    if (size.x > 0 && size.y > 0) {
+      map.flyTo([userLoc.lat, userLoc.lng], 15, { duration: 0.5 });
+    } else {
+      map.setView([userLoc.lat, userLoc.lng], 15);
+    }
   }, [userLoc, map]);
 
   // initialViewState CHỈ áp 1 lần lúc mount → khi đổi vị trí (vd search địa chỉ mới, kể cả
@@ -203,12 +208,14 @@ export default function MapView({
   // sync với chip "Bỏ giới hạn", không kẹt lại ở zoom cao của bán kính nhỏ trước đó.
   const [centerLat, centerLng] = center;
   useEffect(() => {
-    if (!map) return;
-    map.flyTo(
-      [centerLat, centerLng],
-      zoomForRadius(radiusKm) ?? 13,
-      { duration: 0.6 }
-    );
+    if (!map || centerLat == null || centerLng == null || isNaN(centerLat) || isNaN(centerLng)) return;
+    const size = map.getSize();
+    const zoom = zoomForRadius(radiusKm) ?? 13;
+    if (size.x > 0 && size.y > 0) {
+      map.flyTo([centerLat, centerLng], zoom, { duration: 0.6 });
+    } else {
+      map.setView([centerLat, centerLng], zoom);
+    }
   }, [centerLat, centerLng, radiusKm, map]);
 
   // Popup pin dùng position:fixed portal vào body → set 1 lần lúc click sẽ không theo map khi

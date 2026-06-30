@@ -4669,7 +4669,7 @@ export default function Home() {
             alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
             geoAddr={userAddr}
             defaultAddress={userAddr}
-            initialQty={cartQtyFor(buyOffer.product.id) || 1}
+            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
             onClose={() => setBuyOffer(null)}
             onPlaced={(code, chosen) => {
               recordBuy(chosen);
