@@ -9,6 +9,7 @@ import {
   Circle,
   AttributionControl,
   Marker,
+  ZoomControl,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -51,15 +52,6 @@ function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight
     iconSize: [size, size],
     iconAnchor: [0, 0],
   });
-}
-
-function Recenter({ center, zoom }: { center: [number, number]; zoom?: number }) {
-  const map = useMap();
-  useEffect(() => {
-    if (zoom != null) map.flyTo(center, zoom, { duration: 0.6 });
-    else map.flyTo(center, map.getZoom(), { duration: 0.6 });
-  }, [center, zoom, map]);
-  return null;
 }
 
 function zoomForRadius(km?: number | null): number | undefined {
@@ -277,13 +269,14 @@ export default function MapView({
         scrollWheelZoom
         style={{ height: "100%", width: "100%" }}
         attributionControl={false}
+        zoomControl={false}
       >
+        <AttributionControl prefix={false} />
+        <ZoomControl position="bottomright" />
         <TileLayer
           attribution='<span style="font-family: Roboto, Arial, sans-serif; font-size: 10px; user-select: none; white-space: nowrap; color: #000000; direction: ltr; line-height: 14px;">© One Solution | <a href="https://www.openstreetmap.org/" target="_blank" style="color: black">OSM</a></span>'
           url={resolvedTileUrl}
         />
-        <AttributionControl prefix={false} />
-        <Recenter center={center} zoom={zoomForRadius(radiusKm)} />
         <AutoResize />
 
         {userLoc && radiusKm && (
@@ -367,11 +360,11 @@ export default function MapView({
           title={t("Về vị trí của tôi")}
           style={{
             position: "absolute",
-            top: 60,
-            right: 12,
+            bottom: 110,
+            right: 9,
             zIndex: 1000,
-            width: 40,
-            height: 40,
+            width: 36,
+            height: 36,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
