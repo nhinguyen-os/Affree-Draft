@@ -188,6 +188,18 @@ export function parseMasterCsv(csv: string): Catalog {
       (c.chungLoai >= 0 ? r[c.chungLoai] : "").trim() ||
       "Khác";
 
+    // Giá niêm yết (MSRP) — cột GIA_BAO_BI. Nếu sheet không có thì để undefined.
+    const listedPrice = c.giaGoc >= 0 ? parsePriceK(r[c.giaGoc]) : 0;
+    // % khuyến mãi — cột %_KHUYEN_MAI. Sheet ghi dạng "22" / "22%" / "0.22" → chuyển về 0..1.
+    let discountPct: number | undefined;
+    if (c.km >= 0) {
+      const raw = (r[c.km] || "").trim().replace("%", "").replace(",", ".");
+      const n = parseFloat(raw);
+      if (isFinite(n) && n > 0) discountPct = n > 1 ? n / 100 : n;
+    }
+    if (discountPct == null && listedPrice > 0 && price > 0 && price < listedPrice) {
+      discountPct = (listedPrice - price) / listedPrice;
+    }
     products.push({
       id: sku,
       name,
@@ -195,9 +207,14 @@ export function parseMasterCsv(csv: string): Catalog {
       category,
       unit: packsize || uom,
       image,
+      listedPrice: listedPrice > 0 ? listedPrice : undefined,
+      discountPct,
     });
 
     const buyUrl = url || SOURCE_META[chain]?.home || "";
+    // Dùng timestamp thực từ scraper (cột CHECKED_AT) nếu có, fallback về thời điểm parse sheet.
+    const rawChecked = c.lastCheckedLive >= 0 ? (r[c.lastCheckedLive] || "").trim() : "";
+    const lastChecked = rawChecked || ts;
     const physical = physicalStoresOfChain(chain);
     if (physical.length) {
       // Chuỗi có cửa hàng vật lý: giá online áp cho mọi điểm bán.
@@ -208,7 +225,7 @@ export function parseMasterCsv(csv: string): Catalog {
           price,
           inStock,
           productUrl: buyUrl,
-          lastChecked: ts,
+          lastChecked,
         });
       }
     } else {
@@ -219,7 +236,7 @@ export function parseMasterCsv(csv: string): Catalog {
         price,
         inStock,
         productUrl: buyUrl,
-        lastChecked: ts,
+        lastChecked,
       });
     }
   }
