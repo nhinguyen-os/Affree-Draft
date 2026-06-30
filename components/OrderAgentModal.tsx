@@ -700,6 +700,8 @@ export default function OrderAgentModal({
   const popupFrameSrc = sessionId && popupFrameTs
     ? `/api/order-sessions/${sessionId}/popup-frame?ts=${encodeURIComponent(popupFrameTs)}`
     : null;
+  const popupCurrentView = serverState?.popup?.view || (serverState?.popupFrameAvailable ? "full" : undefined);
+  const popupShowingQr = popupCurrentView !== "confirm";
 
   useEffect(() => {
     if (!popupViewerOpen) return;
@@ -726,6 +728,10 @@ export default function OrderAgentModal({
     const xRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const yRatio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
     void sendSessionEvent({ type: "popup_click", xRatio, yRatio });
+  }
+
+  async function switchPopupView(view: "qr" | "confirm" | "full") {
+    await sendSessionEvent({ type: "popup_switch_view", view });
   }
 
 
@@ -2918,379 +2924,399 @@ export default function OrderAgentModal({
           }
 
           {/* PHASE 2: trợ lý chạy */}
-          {
-            phase === "running" && isCoopReal && (
-              <div className="space-y-3">
-                <ol className="space-y-2.5">
-                  <li className="flex items-start gap-2.5">
-                    <span className="mt-0.5 shrink-0">
-                      <CheckIcon />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-slate-400">
-                        {coopResult?.usedTokenCache
-                          ? t("Đã dùng token cache Co.op để vào giỏ")
-                          : coopResult?.alreadyRegistered
-                            ? t("Tài khoản Co.op đã đăng nhập bằng mật khẩu")
-                            : t("Đã gửi yêu cầu đăng nhập Co.op")}
-                      </p>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2.5">
-                    <span className="mt-0.5 shrink-0">
-                      {coopBusy ? <Spinner /> : <PauseDot />}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800">
-                        {t("Nhập OTP thật Co.op gửi về {phone}", { phone: phoneDigits })}
-                      </p>
-                      <PauseBox tone="blue" hint={t("Mã này đến từ Co.op, Affree không đọc SMS giúp bạn.")}>
-                        <div className="flex gap-2">
-                          <input
-                            value={otp}
-                            onChange={(e) => {
-                              setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
-                              setCoopError("");
-                            }}
-                            inputMode="numeric"
-                            placeholder={t("6 SỐ OTP")}
-                            className="input flex-1"
-                            autoFocus
-                          />
-                          <button
-                            disabled={otp.length !== 6 || coopBusy}
-                            onClick={() => void confirmCoopOtp()}
-                            className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-                          >
-                            {coopBusy ? t("Đang gửi…") : t("Xác thực")}
-                          </button>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={coopBusy}
-                          onClick={() => void resendCoopOtp()}
-                          className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
-                        >
-                          {t("Gửi lại OTP")}
-                        </button>
-                        {coopError && (
-                          <p className="mt-2 text-xs font-medium text-rose-600">{coopError}</p>
-                        )}
-                      </PauseBox>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2.5">
-                    <span className="mt-0.5 shrink-0">
-                      <PauseDot />
-                    </span>
-                    <p className="text-sm text-slate-500">
-                      {t("Sau OTP: login OAuth, tạo cart Co.op, add sản phẩm, validate đơn tối thiểu 200.000đ và đọc ngày/khung giờ giao hợp lệ.")}
-                    </p>
-                  </li>
-                </ol>
-              </div>
-            )
-          }
-
-          {
-            phase === "running" && isBHXReal && (
-              <div className="space-y-3">
-                <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                  <div className="flex items-center gap-2">
-                    {bhxBusy ? <Spinner /> : <CheckIcon />}
-                    <p className="text-sm font-semibold text-slate-900">
-                      {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
+          {phase === "running" && isCoopReal && (
+            <div className="space-y-3">
+              <ol className="space-y-2.5">
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    <CheckIcon />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-400">
+                      {coopResult?.usedTokenCache
+                        ? t("Đã dùng token cache Co.op để vào giỏ")
+                        : coopResult?.alreadyRegistered
+                          ? t("Tài khoản Co.op đã đăng nhập bằng mật khẩu")
+                          : t("Đã gửi yêu cầu đăng nhập Co.op")}
                     </p>
                   </div>
-                  <p className="mt-1 text-xs text-slate-600">
-                    {t("Log từ agent-server sẽ hiển thị bên dưới.")}
-                  </p>
-                </div>
-
-                <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                  {bhxMessages.map((log, i) => {
-                    const tone =
-                      log.status === "error"
-                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                        : log.status === "warning"
-                          ? "border-amber-200 bg-amber-50 text-amber-800"
-                          : log.status === "success"
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-slate-200 bg-white text-slate-700";
-                    return (
-                      <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
-                        <div className="flex items-start gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
-                          <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-
-                {bhxOtpVisible && (
-                  <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                    <p className="mb-2 text-sm font-semibold text-blue-800">
-                      {t("Nhập OTP Bách Hóa Xanh")}
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    {coopBusy ? <Spinner /> : <PauseDot />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-800">
+                      {t("Nhập OTP thật Co.op gửi về {phone}", { phone: phoneDigits })}
                     </p>
-                    <div className="flex gap-2">
-                      <input
-                        value={bhxOtp}
-                        onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") submitBHXOtp();
-                        }}
-                        inputMode="numeric"
-                        placeholder={t("Nhập mã OTP")}
-                        className="input flex-1 bg-white"
-                        autoFocus
-                      />
+                    <PauseBox tone="blue" hint={t("Mã này đến từ Co.op, Affree không đọc SMS giúp bạn.")}>
+                      <div className="flex gap-2">
+                        <input
+                          value={otp}
+                          onChange={(e) => {
+                            setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                            setCoopError("");
+                          }}
+                          inputMode="numeric"
+                          placeholder={t("6 SỐ OTP")}
+                          className="input flex-1"
+                          autoFocus
+                        />
+                        <button
+                          disabled={otp.length !== 6 || coopBusy}
+                          onClick={() => void confirmCoopOtp()}
+                          className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {coopBusy ? t("Đang gửi…") : t("Xác thực")}
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        disabled={!bhxOtp.trim()}
-                        onClick={submitBHXOtp}
-                        className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={coopBusy}
+                        onClick={() => void resendCoopOtp()}
+                        className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
                       >
-                        {t("Gửi")}
+                        {t("Gửi lại OTP")}
                       </button>
-                    </div>
-                  </div>
-                )}
-
-                {bhxShowScreencast && (
-                  <div className="rounded-xl border border-emerald-200 bg-white p-2">
-                    <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                      {t("Màn hình sau khi đặt hàng")}
-                    </p>
-                    <div
-                      className="overflow-hidden rounded-lg bg-slate-950"
-                      style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
-                    >
-                      {bhxBrowserFrame ? (
-                        <img
-                          src={bhxBrowserFrame}
-                          alt={t("Màn hình Bách Hóa Xanh")}
-                          className="h-full w-full object-contain"
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
-                          {t("Đang chờ ảnh màn hình...")}
-                        </div>
+                      {coopError && (
+                        <p className="mt-2 text-xs font-medium text-rose-600">{coopError}</p>
                       )}
-                    </div>
+                    </PauseBox>
                   </div>
-                )}
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0">
+                    <PauseDot />
+                  </span>
+                  <p className="text-sm text-slate-500">
+                    {t("Sau OTP: login OAuth, tạo cart Co.op, add sản phẩm, validate đơn tối thiểu 200.000đ và đọc ngày/khung giờ giao hợp lệ.")}
+                  </p>
+                </li>
+              </ol>
+            </div>
+          )}
 
-                {bhxDeliveryHtml && (
-                  <div className="rounded-xl border border-slate-200 bg-white p-2">
-                    <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                      {t("Chọn thời gian giao hàng")}
-                    </p>
-                    <div
-                      className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
-                      onClick={handleBHXDeliveryChoice}
-                      dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
+          {phase === "running" && isBHXReal && (
+            <div className="space-y-3">
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  {bhxBusy ? <Spinner /> : <CheckIcon />}
+                  <p className="text-sm font-semibold text-slate-900">
+                    {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {t("Log từ agent-server sẽ hiển thị bên dưới.")}
+                </p>
+              </div>
+
+              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {bhxMessages.map((log, i) => {
+                  const tone =
+                    log.status === "error"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : log.status === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : log.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-white text-slate-700";
+                  return (
+                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
+                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {bhxOtpVisible && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="mb-2 text-sm font-semibold text-blue-800">
+                    {t("Nhập OTP Bách Hóa Xanh")}
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={bhxOtp}
+                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitBHXOtp();
+                      }}
+                      inputMode="numeric"
+                      placeholder={t("Nhập mã OTP")}
+                      className="input flex-1 bg-white"
+                      autoFocus
                     />
-                    {bhxSelectedDeliveryText && (
-                      <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                        {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
-                      </p>
+                    <button
+                      type="button"
+                      disabled={!bhxOtp.trim()}
+                      onClick={submitBHXOtp}
+                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t("Gửi")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bhxShowScreencast && (
+                <div className="rounded-xl border border-emerald-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Màn hình sau khi đặt hàng")}
+                  </p>
+                  <div
+                    className="overflow-hidden rounded-lg bg-slate-950"
+                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
+                  >
+                    {bhxBrowserFrame ? (
+                      <img
+                        src={bhxBrowserFrame}
+                        alt={t("Màn hình Bách Hóa Xanh")}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
+                        {t("Đang chờ ảnh màn hình...")}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
-            )
-          }
+                </div>
+              )}
 
-          {
-            phase === "running" && !isCoopReal && !isBHXReal && (
-              <div className="space-y-1">
-                <ol className="space-y-2.5">
-                  {visibleSteps.map((s, i) => {
-                    const isCurrent = i === currentStepIndex;
-                    const done = i < currentStepIndex;
-                    return (
-                      <li key={i} className="flex items-start gap-2.5">
-                        <span className="mt-0.5 shrink-0">
-                          {done ? (
-                            <CheckIcon />
-                          ) : isCurrent && s.kind === "auto" ? (
-                            <Spinner />
-                          ) : (
-                            <PauseDot />
-                          )}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className={`text-sm ${done ? "text-slate-400" : "font-medium text-slate-800"
-                              }`}
-                          >
-                            {s.label}
-                          </p>
+              {bhxDeliveryHtml && (
+                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Chọn thời gian giao hàng")}
+                  </p>
+                  <div
+                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
+                    onClick={handleBHXDeliveryChoice}
+                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
+                  />
+                  {bhxSelectedDeliveryText && (
+                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
-                          {/* Khối tương tác khi tới bước cần người */}
-                          {isCurrent && s.kind === "login" && (
-                            <PauseBox tone="blue" hint={t("🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
+          {phase === "running" && !isCoopReal && !isBHXReal && (
+            <div className="space-y-1">
+              <ol className="space-y-2.5">
+                {visibleSteps.map((s, i) => {
+                  const isCurrent = i === currentStepIndex;
+                  const done = i < currentStepIndex;
+                  return (
+                    <li key={i} className="flex items-start gap-2.5">
+                      <span className="mt-0.5 shrink-0">
+                        {done ? (
+                          <CheckIcon />
+                        ) : isCurrent && s.kind === "auto" ? (
+                          <Spinner />
+                        ) : (
+                          <PauseDot />
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className={`text-sm ${done ? "text-slate-400" : "font-medium text-slate-800"
+                            }`}
+                        >
+                          {s.label}
+                        </p>
+
+                        {/* Khối tương tác khi tới bước cần người */}
+                        {isCurrent && s.kind === "login" && (
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
+                            <button
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "login_completed" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
+                              className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+                            >
+                              {t("Tôi đã đăng nhập xong →")}
+                            </button>
+                          </PauseBox>
+                        )}
+
+                        {isCurrent && s.kind === "otp" && (
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
+                            {!usesServerTimeline && !simOtp ? (
+                              <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
+                                <Spinner />
+                                {t("Đang chờ {chain} gửi mã…", { chain })}
+                              </div>
+                            ) : !usesServerTimeline && simOtp ? (
+                              <div className="mb-2 rounded-lg border border-blue-200 bg-white px-2.5 py-2">
+                                <p className="text-[11px] text-slate-500">
+                                  💬 {t("Tin nhắn mô phỏng từ {chain}", { chain })}
+                                </p>
+                                <div className="mt-1 flex items-center justify-between gap-2">
+                                  <span className="font-mono text-lg font-bold tracking-[0.3em] text-slate-900">
+                                    {simOtp}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOtp(simOtp);
+                                      setOtpError(false);
+                                    }}
+                                    className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                                  >
+                                    {t("Điền giúp")}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mb-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                {t("Nhập OTP thật bạn vừa nhận được rồi bấm Gửi để worker tiếp tục.")}
+                              </div>
+                            )}
+                            <div className="flex gap-2">
+                              <input
+                                value={otp}
+                                onChange={(e) => {
+                                  setOtp(e.target.value.replace(/\D/g, "").slice(0, 8));
+                                  setOtpError(false);
+                                }}
+                                inputMode="numeric"
+                                placeholder={t("Nhập mã OTP")}
+                                className="input flex-1"
+                                autoFocus
+                              />
                               <button
+                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp)}
                                 onClick={() => {
-                                  if (usesServerTimeline) {
-                                    void sendSessionEvent({ type: "login_completed" });
+                                  if (!usesServerTimeline && otp !== simOtp) {
+                                    setOtpError(true);
                                     return;
                                   }
+                                  const submittedOtp = otp;
+                                  setOtp("");
+                                  setOtpError(false);
+                                  if (usesServerTimeline) {
+                                    void sendSessionEvent({ type: "otp_submitted", otp: submittedOtp });
+                                    return;
+                                  }
+                                  setSimOtp("");
                                   setStepIndex((x) => x + 1);
                                 }}
-                                className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+                                className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
                               >
-                                {t("Tôi đã đăng nhập xong →")}
+                                {t("Gửi")}
                               </button>
-                            </PauseBox>
-                          )}
+                            </div>
+                            {otpError && !usesServerTimeline && (
+                              <p className="mt-1.5 text-xs font-medium text-rose-600">
+                                {t("Mã chưa đúng — nhập đúng {otp} (hoặc bấm “Điền giúp”).", { otp: simOtp })}
+                              </p>
+                            )}
+                          </PauseBox>
+                        )}
 
-                          {isCurrent && s.kind === "otp" && (
-                            <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
-                              {!usesServerTimeline && !simOtp ? (
-                                <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
-                                  <Spinner />
-                                  {t("Đang chờ {chain} gửi mã…", { chain })}
-                                </div>
-                              ) : !usesServerTimeline && simOtp ? (
-                                <div className="mb-2 rounded-lg border border-blue-200 bg-white px-2.5 py-2">
-                                  <p className="text-[11px] text-slate-500">
-                                    💬 {t("Tin nhắn mô phỏng từ {chain}", { chain })}
-                                  </p>
-                                  <div className="mt-1 flex items-center justify-between gap-2">
-                                    <span className="font-mono text-lg font-bold tracking-[0.3em] text-slate-900">
-                                      {simOtp}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setOtp(simOtp);
-                                        setOtpError(false);
-                                      }}
-                                      className="shrink-0 rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                                    >
-                                      {t("Điền giúp")}
-                                    </button>
+                        {isCurrent && s.kind === "captcha" && (
+                          <PauseBox tone="amber" hint={t("🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
+                            <button
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "captcha_completed" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-left text-sm hover:bg-slate-50"
+                            >
+                              <span className="flex h-5 w-5 items-center justify-center rounded border-2 border-slate-400 text-emerald-600">
+                                ✓
+                              </span>
+                              {t("Tôi không phải là người máy")}
+                            </button>
+                          </PauseBox>
+                        )}
+
+                        {isCurrent && s.kind === "qr" && (
+                          <PauseBox tone="amber" hint={popupShowingQr
+                            ? t("💳 Bước 1: worker đang ưu tiên cast vùng QR ở đầu popup để bạn quét/thanh toán trước.")
+                            : t("✅ Bước 2: sau khi thanh toán, worker đang focus vùng cuối popup để bạn bấm nút xác nhận trên website thật.")}>
+                            <div className="mb-2 space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                              <p className="text-sm font-semibold text-slate-700">{t("Thông tin đặt hàng")}</p>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="block text-xs font-medium text-slate-500">
+                                  {t("Tên người đặt")}
+                                  <input value={name} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
+                                </label>
+                                <label className="block text-xs font-medium text-slate-500">
+                                  {t("Số điện thoại")}
+                                  <input value={phone} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
+                                </label>
+                              </div>
+                              <p className="text-[11px] text-slate-400">
+                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
+                              </p>
+                            </div>
+
+                            {serverState?.popupFrameAvailable && serverState.popup && sessionId ? (
+                              <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                                <div className="mb-2 flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-800">
+                                      {popupShowingQr
+                                        ? (serverState.popup.title || t("Bước 1: mã QR thanh toán"))
+                                        : t("Bước 2: nút xác nhận cuối")}
+                                    </p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {popupShowingQr
+                                        ? t("Worker đang crop vùng QR trong popup thật. Quét/chuyển khoản xong thì bấm nút chuyển xuống nút xác nhận.")
+                                        : t("Popup đang focus vùng cuối. Bạn có thể click trực tiếp vào ảnh bên dưới để bấm nút xác nhận trên website thật.")}
+                                    </p>
                                   </div>
+                                  <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                    {serverState.popup.view || "popup-focus"}
+                                  </span>
                                 </div>
-                              ) : (
-                                <div className="mb-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-slate-600">
-                                  {t("Nhập OTP thật bạn vừa nhận được rồi bấm Gửi để worker tiếp tục.")}
-                                </div>
-                              )}
-                              <div className="flex gap-2">
-                                <input
-                                  value={otp}
-                                  onChange={(e) => {
-                                    setOtp(e.target.value.replace(/\D/g, "").slice(0, 8));
-                                    setOtpError(false);
-                                  }}
-                                  inputMode="numeric"
-                                  placeholder={t("Nhập mã OTP")}
-                                  className="input flex-1"
-                                  autoFocus
+                                <img
+                                  src={popupFrameSrc || undefined}
+                                  alt={serverState.popup.title || t("Popup thanh toán")}
+                                  className={`mx-auto max-h-[26rem] w-auto rounded-lg border border-slate-200 bg-white ${popupViewerOpen ? "cursor-zoom-in opacity-75" : "cursor-crosshair"}`}
+                                  onClick={handlePopupFrameClick}
                                 />
-                                <button
-                                  disabled={otp.length < 4 || (!usesServerTimeline && !simOtp)}
-                                  onClick={() => {
-                                    if (!usesServerTimeline && otp !== simOtp) {
-                                      setOtpError(true);
-                                      return;
-                                    }
-                                    const submittedOtp = otp;
-                                    setOtp("");
-                                    setOtpError(false);
-                                    if (usesServerTimeline) {
-                                      void sendSessionEvent({ type: "otp_submitted", otp: submittedOtp });
-                                      return;
-                                    }
-                                    setSimOtp("");
-                                    setStepIndex((x) => x + 1);
-                                  }}
-                                  className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-                                >
-                                  {t("Gửi")}
-                                </button>
-                              </div>
-                              {otpError && !usesServerTimeline && (
-                                <p className="mt-1.5 text-xs font-medium text-rose-600">
-                                  {t("Mã chưa đúng — nhập đúng {otp} (hoặc bấm “Điền giúp”).", { otp: simOtp })}
-                                </p>
-                              )}
-                            </PauseBox>
-                          )}
-
-                          {isCurrent && s.kind === "captcha" && (
-                            <PauseBox tone="amber" hint={t("🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
-                              <button
-                                onClick={() => {
-                                  if (usesServerTimeline) {
-                                    void sendSessionEvent({ type: "captcha_completed" });
-                                    return;
-                                  }
-                                  setStepIndex((x) => x + 1);
-                                }}
-                                className="flex w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-left text-sm hover:bg-slate-50"
-                              >
-                                <span className="flex h-5 w-5 items-center justify-center rounded border-2 border-slate-400 text-emerald-600">
-                                  ✓
-                                </span>
-                                {t("Tôi không phải là người máy")}
-                              </button>
-                            </PauseBox>
-                          )}
-
-                          {isCurrent && s.kind === "qr" && (
-                            <PauseBox tone="amber" hint={t("💳 Worker đang cast popup thanh toán thật để bạn thao tác trực tiếp. Nếu popup không hiện đúng, vẫn có thể mở trang nguồn hoặc dùng fallback xác nhận thủ công.")}>
-                              <div className="mb-2 space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-                                <p className="text-sm font-semibold text-slate-700">{t("Thông tin đặt hàng")}</p>
-                                <div className="grid gap-2 sm:grid-cols-2">
-                                  <label className="block text-xs font-medium text-slate-500">
-                                    {t("Tên người đặt")}
-                                    <input value={name} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
-                                  </label>
-                                  <label className="block text-xs font-medium text-slate-500">
-                                    {t("Số điện thoại")}
-                                    <input value={phone} readOnly className="input mt-1 bg-slate-50 text-slate-700" />
-                                  </label>
-                                </div>
-                                <p className="text-[11px] text-slate-400">
-                                  {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
-                                </p>
-                              </div>
-
-                              {serverState?.popupFrameAvailable && serverState.popup && sessionId ? (
-                                <div className="rounded-lg border border-emerald-200 bg-white p-3">
-                                  <div className="mb-2 flex items-start justify-between gap-3">
-                                    <div>
-                                      <p className="text-sm font-semibold text-slate-800">
-                                        {serverState.popup.title || t("Popup thanh toán thật")}
-                                      </p>
-                                      <p className="mt-1 text-xs text-slate-500">
-                                        {t("Click trực tiếp vào ảnh popup bên dưới để bấm các nút như Xác nhận / Đóng trên website thật.")}
-                                      </p>
-                                    </div>
-                                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                                      popup-focus
-                                    </span>
-                                  </div>
-                                  <img
-                                    src={popupFrameSrc || undefined}
-                                    alt={serverState.popup.title || t("Popup thanh toán")}
-                                    className={`mx-auto max-h-[26rem] w-auto rounded-lg border border-slate-200 bg-white ${popupViewerOpen ? "cursor-zoom-in opacity-75" : "cursor-crosshair"}`}
-                                    onClick={handlePopupFrameClick}
-                                  />
-                                  <div className="mt-2 space-y-1">
-                                    {serverState.popup.text && (
-                                      <p className="rounded-lg bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
-                                        {serverState.popup.text}
-                                      </p>
+                                <div className="mt-2 space-y-1">
+                                  {serverState.popup.text && (
+                                    <p className="rounded-lg bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
+                                      {serverState.popup.text}
+                                    </p>
+                                  )}
+                                  {serverState.popup.actions.length > 0 && (
+                                    <p className="text-[11px] text-slate-500">
+                                      {t("Nút phát hiện trong popup")}: {serverState.popup.actions.join(" · ")}
+                                    </p>
+                                  )}
+                                  <div className="flex flex-wrap gap-2 pt-1">
+                                    {!popupShowingQr && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void switchPopupView("qr")}
+                                        className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                      >
+                                        {t("Hiện mã QR")}
+                                      </button>
                                     )}
-                                    {serverState.popup.actions.length > 0 && (
-                                      <p className="text-[11px] text-slate-500">
-                                        {t("Nút phát hiện trong popup")}: {serverState.popup.actions.join(" · ")}
-                                      </p>
+                                    {popupShowingQr && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void switchPopupView("confirm")}
+                                        className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                      >
+                                        {t("Chuyển xuống nút xác nhận")}
+                                      </button>
                                     )}
                                     <button
                                       type="button"
@@ -3301,284 +3327,289 @@ export default function OrderAgentModal({
                                     </button>
                                   </div>
                                 </div>
-                              ) : serverState?.qrCodeAvailable && sessionId ? (
-                                <div className="rounded-lg bg-white p-3">
-                                  <img
-                                    src={`/api/order-sessions/${sessionId}/qrcode?ts=${encodeURIComponent(serverState.updatedAt)}`}
-                                    alt={t("Mã QR thanh toán")}
-                                    className="mx-auto max-h-72 w-auto rounded-lg border border-slate-200 bg-white"
-                                  />
-                                  <p className="mt-2 text-center text-xs text-slate-500">
-                                    {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.")}
-                                  </p>
-                                </div>
-                              ) : (
-                                <div className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800">
-                                  {t("Chưa lấy được popup-focus frame từ worker. Bạn có thể mở trang nguồn để thanh toán thủ công rồi quay lại báo hoàn tất.")}
-                                </div>
-                              )}
-
-                              <div className="mt-2 space-y-2">
-                                <button
-                                  onClick={() => void submitPaymentConfirmed()}
-                                  disabled={paymentConfirmBusy}
-                                  className="w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
-                                >
-                                  {paymentConfirmBusy
-                                    ? t("Đang kiểm tra thanh toán...")
-                                    : serverState?.popupFrameAvailable
-                                      ? t("Popup chưa tự đóng? Báo đã thanh toán xong")
-                                      : t("Tôi đã thanh toán xong")}
-                                </button>
-                                <a
-                                  href={serverState?.handoffUrl || activeOffer.productUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                                >
-                                  {t("Mở trang nguồn")}
-                                </a>
                               </div>
-                            </PauseBox>
-                          )}
-
-                          {isCurrent && s.kind === "confirm" && (
-                            <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}>
-                              <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
-                                <Row k={t("Tên người đặt")} v={name} />
-                                <Row k={t("Số điện thoại")} v={phone} />
-                                <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
-                                <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
-                                <Row k={t("Giao tới")} v={address} />
-                                {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
-                                {cfg.needSlot && !isCoopReal && <Row k={t("Khung giờ")} v={t(slot)} />}
-                                <Row k={t("Thanh toán")} v={paymentLabel} />
-                                <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
+                            ) : serverState?.qrCodeAvailable && sessionId ? (
+                              <div className="rounded-lg bg-white p-3">
+                                <img
+                                  src={`/api/order-sessions/${sessionId}/qrcode?ts=${encodeURIComponent(serverState.updatedAt)}`}
+                                  alt={t("Mã QR thanh toán")}
+                                  className="mx-auto max-h-72 w-auto rounded-lg border border-slate-200 bg-white"
+                                />
+                                <p className="mt-2 text-center text-xs text-slate-500">
+                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.")}
+                                </p>
                               </div>
+                            ) : (
+                              <div className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-800">
+                                {t("Chưa lấy được popup-focus frame từ worker. Bạn có thể mở trang nguồn để thanh toán thủ công rồi quay lại báo hoàn tất.")}
+                              </div>
+                            )}
+
+                            <div className="mt-2 space-y-2">
                               <button
                                 onClick={() => {
-                                  if (usesServerTimeline) {
-                                    void sendSessionEvent({ type: "confirm_final_action" });
+                                  if (popupShowingQr) {
+                                    void switchPopupView("confirm");
                                     return;
                                   }
-                                  setStepIndex((x) => x + 1);
+                                  void submitPaymentConfirmed();
                                 }}
-                                className="mt-2 w-full rounded-lg border border-slate-200 bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                                disabled={paymentConfirmBusy}
+                                className="w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
                               >
-                                {t("Xác nhận đặt hàng")}
+                                {paymentConfirmBusy
+                                  ? t("Đang kiểm tra thanh toán...")
+                                  : popupShowingQr
+                                    ? t("Tôi đã thanh toán xong, xuống nút xác nhận")
+                                    : t("Đã bấm xác nhận xong, bắt đầu kiểm tra")}
                               </button>
-                            </PauseBox>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </div>
-            )
-          }
+                              <a
+                                href={serverState?.handoffUrl || activeOffer.productUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                {t("Mở trang nguồn")}
+                              </a>
+                            </div>
+                          </PauseBox>
+                        )}
+
+                        {isCurrent && s.kind === "confirm" && (
+                          <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}>
+                            <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
+                              <Row k={t("Tên người đặt")} v={name} />
+                              <Row k={t("Số điện thoại")} v={phone} />
+                              <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                              <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
+                              <Row k={t("Giao tới")} v={address} />
+                              {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
+                              {cfg.needSlot && !isCoopReal && <Row k={t("Khung giờ")} v={t(slot)} />}
+                              <Row k={t("Thanh toán")} v={paymentLabel} />
+                              <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (usesServerTimeline) {
+                                  void sendSessionEvent({ type: "confirm_final_action" });
+                                  return;
+                                }
+                                setStepIndex((x) => x + 1);
+                              }}
+                              className="mt-2 w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                            >
+                              {t("Xác nhận đặt hàng")}
+                            </button>
+                          </PauseBox>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          )}
 
           {/* PHASE 3: thành công */}
-          {
-            phase === "done" && (
-              <div className="flex flex-col items-center py-4 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-                  <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                </div>
-                <h3 className="mt-3 text-lg font-bold text-slate-900">
-                  {isCoopReal ? t("Đã thêm vào giỏ Co.op!") : t("Đặt hàng thành công!")}
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  {isCoopReal
-                    ? t("Affree đã login bằng luồng thật và tạo giỏ trong tài khoản {chain}. Mã giỏ:", { chain })
-                    : t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
-                </p>
-                <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
+          {phase === "done" && (
+            <div className="flex flex-col items-center py-4 text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              </div>
+              <h3 className="mt-3 text-lg font-bold text-slate-900">
+                {isCoopReal ? t("Đã thêm vào giỏ Co.op!") : t("Đặt hàng thành công!")}
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                {isCoopReal
+                  ? t("Affree đã login bằng luồng thật và tạo giỏ trong tài khoản {chain}. Mã giỏ:", { chain })
+                  : t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
+              </p>
+              <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
-                <div className="mt-4 w-full space-y-1.5 rounded-xl bg-slate-50 p-3 text-left text-sm">
-                  <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
-                  <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
-                  <Row k={t("Giao tới")} v={address} />
-                  {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
-                  {!isCoopReal && cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
-                  <Row k={t("Thanh toán")} v="COD" />
-                  <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
-                  {isCoopReal && coopResult?.terminalCode && (
-                    <Row k={t("Kho Co.op")} v={coopResult.terminalCode} />
-                  )}
-                </div>
+              <div className="mt-4 w-full space-y-1.5 rounded-xl bg-slate-50 p-3 text-left text-sm">
+                <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
+                <Row k={t("Giao tới")} v={address} />
+                {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
+                {!isCoopReal && cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
+                <Row k={t("Thanh toán")} v="COD" />
+                <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
+                {isCoopReal && coopResult?.terminalCode && (
+                  <Row k={t("Kho Co.op")} v={coopResult.terminalCode} />
+                )}
+              </div>
 
-                {isCoopReal && (
-                  <div className="mt-4 w-full rounded-xl border border-slate-200 bg-white p-3 text-left">
-                    <div className="flex items-start gap-2">
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                        2
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-slate-900">{t("Checkout Co.op")}</p>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {t("Giỏ đã tạo xong. Chọn ngày nhận hàng và khung giờ trước, bước đặt hàng thật sẽ làm sau.")}
-                        </p>
-                      </div>
+              {isCoopReal && (
+                <div className="mt-4 w-full rounded-xl border border-slate-200 bg-white p-3 text-left">
+                  <div className="flex items-start gap-2">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                      2
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-900">{t("Checkout Co.op")}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {t("Giỏ đã tạo xong. Chọn ngày nhận hàng và khung giờ trước, bước đặt hàng thật sẽ làm sau.")}
+                      </p>
                     </div>
+                  </div>
 
-                    <div className="mt-4">
-                      <Field label={t("Chọn ngày nhận hàng")}>
-                        <div className="relative max-w-[260px]">
-                          <select
-                            value={coopDeliveryDate}
-                            onChange={(e) => {
-                              setCoopDeliveryDate(e.target.value);
+                  <div className="mt-4">
+                    <Field label={t("Chọn ngày nhận hàng")}>
+                      <div className="relative max-w-[260px]">
+                        <select
+                          value={coopDeliveryDate}
+                          onChange={(e) => {
+                            setCoopDeliveryDate(e.target.value);
+                            setCoopCheckoutPrepared(false);
+                          }}
+                          className="coop-date-select input h-11 appearance-none text-slate-700"
+                          style={{
+                            paddingLeft: "44px",
+                            paddingRight: "40px",
+                            WebkitAppearance: "none",
+                            appearance: "none",
+                          }}
+                        >
+                          <option value="">{t("dd/mm/yyyy")}</option>
+                          {(coopDeliveryDates.length ? coopDeliveryDates : [todayInput]).map((date) => (
+                            <option key={date} value={date}>
+                              {formatCoopDate(date)}
+                            </option>
+                          ))}
+                        </select>
+                        <svg
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M8 2v4M16 2v4M3 10h18" />
+                          <rect x="3" y="4" width="18" height="18" rx="2" />
+                        </svg>
+                        <svg
+                          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
+                          <path d="m7 10 5 5 5-5H7Z" />
+                        </svg>
+                      </div>
+                    </Field>
+                  </div>
+
+                  <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    {coopSavedAddress ? (
+                      <Row k={t("Địa chỉ Co.op")} v={coopSavedAddress} />
+                    ) : (
+                      <Row k={t("Địa chỉ Co.op")} v={t("Chưa thấy trong giỏ")} />
+                    )}
+                    <Row
+                      k={t("Thanh toán Co.op")}
+                      v={coopSelectedPaymentName || t("Chưa thấy")}
+                    />
+                    <Row
+                      k={t("COD")}
+                      v={
+                        coopResult?.paymentCheck?.codSelected
+                          ? t("Đang chọn")
+                          : coopResult?.paymentCheck?.codAvailable
+                            ? t("Có hỗ trợ, chưa chọn")
+                            : t("Chưa khả dụng")
+                      }
+                    />
+                  </div>
+
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-medium text-slate-500">{t("Chọn khung giờ")}</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {effectiveCoopDeliverySlots.map((timeSlot) => {
+                        const selected = coopSlotFrom === timeSlot.from && coopSlotTo === timeSlot.to;
+                        return (
+                          <button
+                            key={`${timeSlot.from}-${timeSlot.to}`}
+                            type="button"
+                            disabled={timeSlot.disabled}
+                            onClick={() => {
+                              setCoopSlotFrom(timeSlot.from);
+                              setCoopSlotTo(timeSlot.to);
                               setCoopCheckoutPrepared(false);
                             }}
-                            className="coop-date-select input h-11 appearance-none text-slate-700"
-                            style={{
-                              paddingLeft: "44px",
-                              paddingRight: "40px",
-                              WebkitAppearance: "none",
-                              appearance: "none",
-                            }}
+                            className={`h-11 rounded-lg border px-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${selected
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500"
+                              : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
+                              }`}
                           >
-                            <option value="">{t("dd/mm/yyyy")}</option>
-                            {(coopDeliveryDates.length ? coopDeliveryDates : [todayInput]).map((date) => (
-                              <option key={date} value={date}>
-                                {formatCoopDate(date)}
-                              </option>
-                            ))}
-                          </select>
-                          <svg
-                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
-                            width="18"
-                            height="18"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M8 2v4M16 2v4M3 10h18" />
-                            <rect x="3" y="4" width="18" height="18" rx="2" />
-                          </svg>
-                          <svg
-                            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="currentColor"
-                          >
-                            <path d="m7 10 5 5 5-5H7Z" />
-                          </svg>
-                        </div>
-                      </Field>
+                            {timeSlot.from} - {timeSlot.to}
+                          </button>
+                        );
+                      })}
                     </div>
-
-                    <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                      {coopSavedAddress ? (
-                        <Row k={t("Địa chỉ Co.op")} v={coopSavedAddress} />
-                      ) : (
-                        <Row k={t("Địa chỉ Co.op")} v={t("Chưa thấy trong giỏ")} />
-                      )}
-                      <Row
-                        k={t("Thanh toán Co.op")}
-                        v={coopSelectedPaymentName || t("Chưa thấy")}
-                      />
-                      <Row
-                        k={t("COD")}
-                        v={
-                          coopResult?.paymentCheck?.codSelected
-                            ? t("Đang chọn")
-                            : coopResult?.paymentCheck?.codAvailable
-                              ? t("Có hỗ trợ, chưa chọn")
-                              : t("Chưa khả dụng")
-                        }
-                      />
-                    </div>
-
-                    <div className="mt-4">
-                      <p className="mb-2 text-xs font-medium text-slate-500">{t("Chọn khung giờ")}</p>
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        {effectiveCoopDeliverySlots.map((timeSlot) => {
-                          const selected = coopSlotFrom === timeSlot.from && coopSlotTo === timeSlot.to;
-                          return (
-                            <button
-                              key={`${timeSlot.from}-${timeSlot.to}`}
-                              type="button"
-                              disabled={timeSlot.disabled}
-                              onClick={() => {
-                                setCoopSlotFrom(timeSlot.from);
-                                setCoopSlotTo(timeSlot.to);
-                                setCoopCheckoutPrepared(false);
-                              }}
-                              className={`h-11 rounded-lg border px-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${selected
-                                ? "border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500"
-                                : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"
-                                }`}
-                            >
-                              {timeSlot.from} - {timeSlot.to}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {coopDeliveryReady && (
-                      <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                        <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
-                        <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
-                      </div>
-                    )}
-
-                    {coopCheckoutPrepared && (
-                      <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                        {t("Đã cập nhật lịch giao và phương thức thanh toán vào giỏ Co.op. Chưa gửi đặt hàng thật sang Co.op.")}
-                      </div>
-                    )}
-
-                    {coopError && (
-                      <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">
-                        {coopError}
-                      </p>
-                    )}
-
-                    <button
-                      type="button"
-                      disabled={!coopDeliveryReady || coopBusy || !coopResult?.checkoutFlowId}
-                      onClick={prepareCoopCheckout}
-                      className="mt-3 w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
-                    </button>
                   </div>
-                )}
 
-                {isCoopReal && (
-                  <p className="mt-3 text-xs leading-relaxed text-slate-500">
-                    {t("Bước này chỉ cập nhật giỏ/checkout Co.op, chưa bấm Thanh toán và chưa tạo đơn thật.")}
-                  </p>
-                )}
+                  {coopDeliveryReady && (
+                    <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
+                      <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
+                    </div>
+                  )}
 
-                {isCoopReal && coopResult?.cartUrl && (
-                  <a
-                    href={coopResult.cartUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                  {coopCheckoutPrepared && (
+                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã cập nhật lịch giao và phương thức thanh toán vào giỏ Co.op. Chưa gửi đặt hàng thật sang Co.op.")}
+                    </div>
+                  )}
+
+                  {coopError && (
+                    <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">
+                      {coopError}
+                    </p>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={!coopDeliveryReady || coopBusy || !coopResult?.checkoutFlowId}
+                    onClick={prepareCoopCheckout}
+                    className="mt-3 w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {t("Mở giỏ Co.op")}
-                  </a>
-                )}
+                    {coopBusy ? t("Đang cập nhật Co.op…") : t("Cập nhật lịch giao & phương thức thanh toán")}
+                  </button>
+                </div>
+              )}
 
-                <button
-                  onClick={handleCloseModal}
-                  className="mt-4 w-full rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+              {isCoopReal && (
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                  {t("Bước này chỉ cập nhật giỏ/checkout Co.op, chưa bấm Thanh toán và chưa tạo đơn thật.")}
+                </p>
+              )}
+
+              {isCoopReal && coopResult?.cartUrl && (
+                <a
+                  href={coopResult.cartUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 w-full rounded-xl border border-emerald-200 bg-emerald-50 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
                 >
-                  {t("Xong")}
-                </button>
-              </div>
-            )
+                  {t("Mở giỏ Co.op")}
+                </a>
+              )}
+
+              <button
+                onClick={handleCloseModal}
+                className="mt-4 w-full rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+              >
+                {t("Xong")}
+              </button>
+            </div>
+          )
           }
         </div >
 
@@ -3684,13 +3715,31 @@ export default function OrderAgentModal({
                   </div>
 
                   <div className="space-y-2">
+                    {!popupShowingQr && (
+                      <button
+                        type="button"
+                        onClick={() => void switchPopupView("qr")}
+                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                      >
+                        {t("Hiện lại mã QR")}
+                      </button>
+                    )}
+                    {popupShowingQr && (
+                      <button
+                        type="button"
+                        onClick={() => void switchPopupView("confirm")}
+                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                      >
+                        {t("Tôi đã thanh toán xong, xuống nút xác nhận")}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void submitPaymentConfirmed()}
-                      disabled={paymentConfirmBusy}
+                      disabled={paymentConfirmBusy || popupShowingQr}
                       className="w-full rounded-lg bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
                     >
-                      {paymentConfirmBusy ? t("Đang kiểm tra thanh toán...") : t("Tôi đã thanh toán xong")}
+                      {paymentConfirmBusy ? t("Đang kiểm tra thanh toán...") : t("Đã bấm xác nhận xong, bắt đầu kiểm tra")}
                     </button>
                     <a
                       href={serverState.handoffUrl || activeOffer.productUrl}

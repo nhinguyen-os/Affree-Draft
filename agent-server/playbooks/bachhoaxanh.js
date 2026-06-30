@@ -233,7 +233,7 @@ async function login(page, payload, sendLog, sendMessage) {
   await page.waitForTimeout(10000);
 
   const { buyerPhone } = payload;
-  sendMessage(`Nhập số điện thoại ${buyerPhone}`)
+  sendMessage('Tiến hành đăng nhập.')
 
   try {
     const phoneInput = page.locator('input#phone, input[placeholder*="Nhập số điện thoại"], input[name*="phone"]').first();
@@ -241,6 +241,7 @@ async function login(page, payload, sendLog, sendMessage) {
       await phoneInput.click();
       await phoneInput.fill(buyerPhone);
       sendLog(`Bach Hoa Xanh: Đã nhập số điện thoại: "${buyerPhone}".`, "success");
+      sendMessage(`Đã nhập số điện thoại ${buyerPhone}.`)
       await page.waitForTimeout(1000);
     }
   } catch { }
@@ -257,8 +258,7 @@ async function login(page, payload, sendLog, sendMessage) {
       if (await element.isVisible({ timeout: 3000 })) {
         await element.click({ timeout: 5000 });
         sendLog(`Bach Hoa Xanh: Đã click nút "${selector}"`, "success");
-
-        sendMessage(`Vui lòng nhập mã OTP đã nhận được qua số điện thoại ${buyerPhone}`, 'input_otp')
+        sendMessage(`Vui lòng nhập mã OTP đã nhận được qua số điện thoại ${buyerPhone}.`, 'input_otp')
         break;
       }
     } catch (e) {
@@ -271,7 +271,7 @@ async function login(page, payload, sendLog, sendMessage) {
 
 async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
 
-  sendMessage("Thêm sản phẩm vào giỏ hàng");
+  sendMessage("Thêm sản phẩm vào giỏ hàng.");
 
   const buySelector = [
     'button.cursor-pointer.gap-2:has-text("Mua")',
@@ -340,7 +340,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
   const { buyerAddress } = payload;
 
   await page.goto(payload.url, { waitUntil: "load", timeout: 30000 });
-  sendMessage("Đi tới trang sản phẩm");
+  sendMessage("Đi tới trang sản phẩm.");
 
   await page.waitForTimeout(10000);
 
@@ -348,6 +348,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
     'div:has-id("btn_choose_location")',
     'i[class*="icon__location"]',
     'span:has-text("Chọn vị trí giao gần bạn")',
+    'span:has-text("Xác nhận địa chỉ nhận hàng")',
   ];
 
   for (const selector of addressSelector) {
@@ -373,10 +374,9 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
   for (const selector of deleteSelector) {
     try {
       const element = await page.locator(selector).first();
-      console.log(element)
       if (await element.isVisible({ timeout: 3000 })) {
         await element.click({ timeout: 5000 });
-        sendLog(`Bach Hoa Xanh: Đã click nút chọn địa chỉ "${selector}"`, "success");
+        sendLog(`Bach Hoa Xanh: Đã click nút xóa địa chỉ "${selector}"`, "success");
         break;
       }
     } catch (e) {
@@ -396,7 +396,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
       const element = await page.locator(selector).first();
       if (await element.isVisible({ timeout: 3000 })) {
         await element.click({ timeout: 5000 });
-        sendLog(`Bach Hoa Xanh: Đã click nút chọn địa chỉ "${selector}"`, "success");
+        sendLog(`Bach Hoa Xanh: Đã click nút chọn đồng ý xóa địa chỉ "${selector}"`, "success");
         break;
       }
     } catch (e) {
@@ -409,7 +409,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
   // Phân tích địa chỉ thành các thành phần
   const addr = parseAddress(buyerAddress);
   sendLog(`Bach Hoa Xanh: Điền địa chỉ: Tỉnh="${addr.province}" | Phường="${addr.ward}" | Đường="${addr.street}"`);
-  sendMessage(`Đang điền địa chỉ giao hàng: ${addr.street}, ${addr.ward}, ${addr.province}`);
+  sendMessage(`Đang điền địa chỉ giao hàng: ${addr.street}, ${addr.ward}, ${addr.province}.`);
 
   const provinceSelector = [
     `p:has-text("${addr.province}")`,
@@ -421,6 +421,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
       if (await element.isVisible({ timeout: 3000 })) {
         await element.click({ timeout: 5000 });
         sendLog(`Bach Hoa Xanh: Đã click nút chọn tỉnh "${selector}"`, "success");
+        sendMessage(`Đã chọn tỉnh ${addr.province}`)
         break;
       }
     } catch (e) {
@@ -440,6 +441,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
       if (await element.isVisible({ timeout: 3000 })) {
         await element.click({ timeout: 5000 });
         sendLog(`Bach Hoa Xanh: Đã click nút chọn phường "${selector}"`, "success");
+        sendMessage(`Đã chọn phường/xã ${addr.ward}`)
         break;
       }
     } catch (e) {
@@ -457,6 +459,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
       await streetInput.click();
       await streetInput.fill(addr.street);
       sendLog(`Bach Hoa Xanh: Đã nhập địa chỉ chi tiết: "${addr.street}".`, "success");
+      sendMessage(`Đã nhập địa chỉ ${addr.street}.`)
       await page.waitForTimeout(400);
     }
   } catch { }
@@ -503,6 +506,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
       if (await waitForVisible(btn, 1000)) {
         await btn.click();
         sendLog("Bach Hoa Xanh: Đã xác nhận địa chỉ giao hàng.", "success");
+        sendMessage("Xác nhận địa chỉ giao hàng.");
         break;
       }
     } catch { }
@@ -602,7 +606,8 @@ async function run(page, payload, sendLog, sendStatus, sendMessage = null, sendS
         await page.keyboard.press("Enter");
         await page.waitForTimeout(200);
         sendLog(`Bach Hoa Xanh: Đã nhập otp: "${payload.otp}".`, "success");
-        sendMessage(`Đã nhập OTP ${payload.otp}`)
+        sendMessage(`Đã nhập OTP ${payload.otp}.`)
+        sendMessage('Đăng nhập thành công.')
         await page.waitForTimeout(2000);
         if (sendScreenshotFrame) await sendScreenshotFrame();
       }

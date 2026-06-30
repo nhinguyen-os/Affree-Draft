@@ -85,6 +85,11 @@ export function validateOrderSessionEvent(input: unknown): OrderSessionEvent {
     case "choose_handoff":
     case "cancel":
       return { type: value.type } as OrderSessionEvent;
+    case "popup_switch_view": {
+      const view = (value as { view?: string }).view;
+      if (view !== "qr" && view !== "confirm" && view !== "full") fail("popup view must be qr, confirm, or full");
+      return { type: "popup_switch_view", view };
+    }
     case "popup_click": {
       const xRatio = Number((value as { xRatio?: number }).xRatio);
       const yRatio = Number((value as { yRatio?: number }).yRatio);

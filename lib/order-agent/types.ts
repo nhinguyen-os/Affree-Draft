@@ -21,6 +21,8 @@ export type OrderRequiredInput =
   | "final_confirmation"
   | "qr_payment";
 
+export type OrderSessionPopupView = "qr" | "confirm" | "full";
+
 export type OrderSessionEvent =
   | { type: "otp_submitted"; otp: string }
   | { type: "login_completed" }
@@ -28,6 +30,7 @@ export type OrderSessionEvent =
   | { type: "confirm_final_action" }
   | { type: "payment_submitted" }
   | { type: "popup_click"; xRatio: number; yRatio: number }
+  | { type: "popup_switch_view"; view: OrderSessionPopupView }
   | { type: "choose_handoff" }
   | { type: "cancel" };
 
@@ -70,10 +73,14 @@ export interface OrderSessionPopupState {
   open: boolean;
   mode: "popup-focus";
   kind: string;
+  view?: OrderSessionPopupView;
   title?: string;
   text?: string;
   actions: string[];
   bounds: OrderSessionPopupBounds;
+  qrBounds?: OrderSessionPopupBounds;
+  confirmBounds?: OrderSessionPopupBounds;
+  scrollHint?: "top" | "bottom";
   updatedAt: string;
 }
 

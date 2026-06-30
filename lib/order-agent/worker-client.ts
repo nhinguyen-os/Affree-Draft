@@ -6,6 +6,7 @@ import { getOrderSessionStore, type InMemoryOrderSessionStore } from "./session-
 import type {
   OrderRequiredInput,
   OrderSessionEvent,
+  OrderSessionPopupBounds,
   OrderSessionPopupState,
   OrderSessionPrivateState,
   OrderSessionUpdate,
@@ -19,7 +20,7 @@ export interface OrderWorkerClient {
 
 type AgentServerInboundMessage =
   | { type: "ready" }
-  | { type: "log"; message?: string; status?: string }
+  | { type: "log"; message?: string; status?: string; audience?: "client" | "internal" }
   | {
       type: "status";
       phase?: string;
@@ -48,10 +49,24 @@ type AgentServerInboundMessage =
       open?: boolean;
       popup?: {
         kind?: string;
+        view?: "qr" | "confirm" | "full";
         title?: string;
         text?: string;
         actions?: string[];
+        scrollHint?: "top" | "bottom";
         bounds?: {
+          x?: number;
+          y?: number;
+          width?: number;
+          height?: number;
+        };
+        qrBounds?: {
+          x?: number;
+          y?: number;
+          width?: number;
+          height?: number;
+        };
+        confirmBounds?: {
           x?: number;
           y?: number;
           width?: number;
@@ -164,24 +179,40 @@ function statusPatchFromRequiredInput(requiredInput?: OrderRequiredInput): Order
   }
 }
 
-function normalizePopupState(message: Extract<AgentServerInboundMessage, { type: "popup_state" }>): OrderSessionPopupState | undefined {
-  if (!message.open || !message.popup?.bounds) return undefined;
-  const { x, y, width, height } = message.popup.bounds;
+function normalizePopupBounds(bounds?: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}): OrderSessionPopupBounds | undefined {
+  if (!bounds) return undefined;
+  const { x, y, width, height } = bounds;
   if (![x, y, width, height].every((value) => Number.isFinite(value))) return undefined;
   if ((width ?? 0) <= 0 || (height ?? 0) <= 0) return undefined;
+  return {
+    x: Number(x),
+    y: Number(y),
+    width: Number(width),
+    height: Number(height),
+  };
+}
+
+function normalizePopupState(message: Extract<AgentServerInboundMessage, { type: "popup_state" }>): OrderSessionPopupState | undefined {
+  if (!message.open || !message.popup?.bounds) return undefined;
+  const bounds = normalizePopupBounds(message.popup.bounds);
+  if (!bounds) return undefined;
   return {
     open: true,
     mode: "popup-focus",
     kind: message.popup.kind || "dialog",
+    view: message.popup.view,
     title: message.popup.title,
     text: message.popup.text,
     actions: Array.isArray(message.popup.actions) ? message.popup.actions.filter((item): item is string => typeof item === "string") : [],
-    bounds: {
-      x: Number(x),
-      y: Number(y),
-      width: Number(width),
-      height: Number(height),
-    },
+    bounds,
+    qrBounds: normalizePopupBounds(message.popup.qrBounds),
+    confirmBounds: normalizePopupBounds(message.popup.confirmBounds),
+    scrollHint: message.popup.scrollHint,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -374,20 +405,20 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       const connection: WorkerConnection = { sessionId, socket };
       this.connections.set(sessionId, connection);
 
-      this.store.update(sessionId, {
-        status: "running",
-        step: "connect_agent_server",
-        progress: 5,
-        message: `Đang kết nối agent-server tại ${urlWithSession.replace(/token=[^&]+/, "token=***")}`,
-      });
+      // this.store.update(sessionId, {
+      //   status: "running",
+      //   step: "connect_agent_server",
+      //   progress: 5,
+      //   message: `Đang kết nối agent-server tại ${urlWithSession.replace(/token=[^&]+/, "token=***")}`,
+      // });
 
       socket.on("open", () => {
-        this.store.update(sessionId, {
-          status: "running",
-          step: "start_remote_worker",
-          progress: 10,
-          message: "Đã kết nối agent-server, đang chờ worker browser sẵn sàng",
-        });
+        // this.store.update(sessionId, {
+        //   status: "running",
+        //   step: "start_remote_worker",
+        //   progress: 10,
+        //   message: "Đã kết nối agent-server, đang chờ worker browser sẵn sàng",
+        // });
       });
 
       socket.on("message", (raw) => {
@@ -500,6 +531,20 @@ class AgentServerBridgeClient implements OrderWorkerClient {
         });
         connection.socket.send(JSON.stringify({ type: "popup_click", xRatio: event.xRatio, yRatio: event.yRatio }));
         break;
+      case "popup_switch_view":
+        this.store.update(sessionId, {
+          status: session.status,
+          step: session.step,
+          progress: session.progress,
+          message:
+            event.view === "confirm"
+              ? "Đang cuộn popup xuống cuối để hiện vùng xác nhận"
+              : event.view === "qr"
+                ? "Đang chuyển popup về vùng mã QR"
+                : "Đang hiển thị toàn bộ popup thanh toán",
+        });
+        connection.socket.send(JSON.stringify({ type: "popup_switch_view", view: event.view }));
+        break;
       case "choose_handoff":
         this.store.update(sessionId, {
           status: "failed",
@@ -548,19 +593,19 @@ class AgentServerBridgeClient implements OrderWorkerClient {
         connection.runOrderSent = true;
         const latest = this.store.get(connection.sessionId);
         if (latest) {
-          this.store.update(connection.sessionId, {
-            status: "running",
-            step: "remote_ready",
-            progress: Math.max(session.progress, 12),
-            message: "Worker browser đã sẵn sàng, đang gửi lệnh đặt hàng",
-          });
+          // this.store.update(connection.sessionId, {
+          //   status: "running",
+          //   step: "remote_ready",
+          //   progress: Math.max(session.progress, 12),
+          //   message: "Worker browser đã sẵn sàng, đang gửi lệnh đặt hàng",
+          // });
           setTimeout(() => {
-            this.store.update(connection.sessionId, {
-              status: "running",
-              step: "dispatch_run_order",
-              progress: Math.max(session.progress, 12),
-              message: "Bridge chuẩn bị gửi run_order sang agent-server",
-            });
+            // this.store.update(connection.sessionId, {
+            //   status: "running",
+            //   step: "dispatch_run_order",
+            //   progress: Math.max(session.progress, 12),
+            //   message: "Bridge chuẩn bị gửi run_order sang agent-server",
+            // });
             sendJson(connection.socket, { type: "run_order", payload: buildAgentPayload(latest) }, (errorMessage) => {
               this.clearConnectionTimers(connection);
               this.store.update(connection.sessionId, {
@@ -610,12 +655,12 @@ class AgentServerBridgeClient implements OrderWorkerClient {
       }
       connection.lastLogHint = message.message;
       if (!connection.runOrderSent && !connection.readyReceived && /khởi tạo trình duyệt thành công/i.test(message.message)) {
-        this.store.update(connection.sessionId, {
-          status: "running",
-          step: "remote_ready",
-          progress: Math.max(session.progress, 12),
-          message: "Worker browser đã sẵn sàng, đang chờ tín hiệu ready từ agent-server",
-        });
+        // this.store.update(connection.sessionId, {
+        //   status: "running",
+        //   step: "remote_ready",
+        //   progress: Math.max(session.progress, 12),
+        //   message: "Worker browser đã sẵn sàng, đang chờ tín hiệu ready từ agent-server",
+        // });
         if (!connection.fallbackRunOrderTimer) {
           connection.fallbackRunOrderTimer = setTimeout(() => {
             connection.fallbackRunOrderTimer = undefined;
@@ -623,12 +668,12 @@ class AgentServerBridgeClient implements OrderWorkerClient {
             connection.runOrderSent = true;
             const latest = this.store.get(connection.sessionId);
             if (!latest) return;
-            this.store.update(connection.sessionId, {
-              status: "running",
-              step: "fallback_dispatch_run_order",
-              progress: Math.max(session.progress, 12),
-              message: "Không thấy ready, bridge fallback gửi run_order sang agent-server",
-            });
+            // this.store.update(connection.sessionId, {
+            //   status: "running",
+            //   step: "fallback_dispatch_run_order",
+            //   progress: Math.max(session.progress, 12),
+            //   message: "Không thấy ready, bridge fallback gửi run_order sang agent-server",
+            // });
             sendJson(connection.socket, { type: "run_order", payload: buildAgentPayload(latest) }, (errorMessage) => {
               this.clearConnectionTimers(connection);
               this.store.update(connection.sessionId, {
@@ -650,6 +695,9 @@ class AgentServerBridgeClient implements OrderWorkerClient {
           handoffUrl: session.offer.productUrl,
           message: message.message,
         });
+        return;
+      }
+      if (message.audience !== "client") {
         return;
       }
       this.store.update(connection.sessionId, {

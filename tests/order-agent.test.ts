@@ -63,6 +63,11 @@ test("validateOrderSessionEvent accepts popup_click ratios", () => {
   assert.deepEqual(parsed, { type: "popup_click", xRatio: 0.25, yRatio: 0.75 });
 });
 
+test("validateOrderSessionEvent accepts popup_switch_view", () => {
+  const parsed = validateOrderSessionEvent({ type: "popup_switch_view", view: "confirm" });
+  assert.deepEqual(parsed, { type: "popup_switch_view", view: "confirm" });
+});
+
 test("session store persists timeline and public state hides private payload", () => {
   const store = createInMemoryOrderSessionStore();
   const now = new Date().toISOString();
@@ -96,10 +101,14 @@ test("session store persists timeline and public state hides private payload", (
     open: true,
     mode: "popup-focus",
     kind: "payment",
+    view: "qr",
     title: "Popup thanh toán",
     text: "Xác nhận thanh toán",
     actions: ["Xác nhận", "Đóng"],
     bounds: { x: 10, y: 20, width: 300, height: 420 },
+    qrBounds: { x: 20, y: 40, width: 180, height: 180 },
+    confirmBounds: { x: 60, y: 360, width: 220, height: 56 },
+    scrollHint: "top",
     updatedAt: now,
   });
   store.savePopupFrame(session.id, "popup-frame-base64", "image/jpeg");
@@ -119,6 +128,9 @@ test("session store persists timeline and public state hides private payload", (
   assert.equal(publicState.status, "waiting_for_final_confirmation");
   assert.equal(publicState.timeline.at(-1)?.message, "Chờ xác nhận cuối");
   assert.equal(publicState.popup?.mode, "popup-focus");
+  assert.equal(publicState.popup?.view, "qr");
+  assert.deepEqual(publicState.popup?.qrBounds, { x: 20, y: 40, width: 180, height: 180 });
+  assert.equal(publicState.popup?.scrollHint, "top");
   assert.equal(publicState.popupFrameAvailable, true);
   assert.equal("private" in publicState, false);
 });

@@ -7,7 +7,6 @@
  * - nếu đang ở catalog/home thì cố mở đúng card sản phẩm theo tên
  * - sau đó nhường lại cho DOM-first loop xử lý add-to-cart / checkout
  */
-
 const {
   safeGoto,
 } = require("./css-helpers");
@@ -191,7 +190,7 @@ async function activateTuiDonGhep(page, sendLog) {
           await tab.scrollIntoViewIfNeeded();
           await tab.click({ timeout: 3000 });
           await page.waitForTimeout(1200);
-          sendLog('TXNN CSS: đã chuyển sang tab "Túi Đơn Ghép".', "success");
+          sendLog('TXNN: đã chuyển sang tab "Túi Đơn Ghép".', "success");
           return true;
         }
       } catch { }
@@ -203,15 +202,15 @@ async function activateTuiDonGhep(page, sendLog) {
     }).catch(() => false);
 
     if (pageReady) {
-      sendLog(`TXNN CSS: trang đã có nội dung nhưng tab "Túi Đơn Ghép" chưa clickable (lần ${attempt + 1}/8), chờ render thêm...`, "info");
+      sendLog(`TXNN: trang đã có nội dung nhưng tab "Túi Đơn Ghép" chưa clickable (lần ${attempt + 1}/8), chờ render thêm...`, "info");
     } else {
-      sendLog(`TXNN CSS: đang chờ trang render menu/tab sau khi mở lần đầu (lần ${attempt + 1}/8)...`, "info");
+      sendLog(`TXNN: đang chờ trang render menu/tab sau khi mở lần đầu (lần ${attempt + 1}/8)...`, "info");
     }
 
     await page.waitForTimeout(1000 + attempt * 250);
   }
 
-  sendLog('TXNN CSS: không tìm thấy tab "Túi Đơn Ghép".', "warning");
+  sendLog('TXNN: không tìm thấy tab "Túi Đơn Ghép".', "warning");
   return false;
 }
 
@@ -225,7 +224,7 @@ async function addFirstThreeProducts(page, sendLog) {
 
   const cards = page.locator(".product-card");
   if (!visibleCount) {
-    sendLog("TXNN CSS: không tìm thấy product-card nào trong tab Túi Đơn Ghép.", "warning");
+    sendLog("TXNN: không tìm thấy product-card nào trong tab Túi Đơn Ghép.", "warning");
     return [];
   }
 
@@ -239,10 +238,10 @@ async function addFirstThreeProducts(page, sendLog) {
       const plusButton = card.locator("button").filter({ hasText: /^\+$/ }).first();
       await plusButton.click({ timeout: 3000 });
       picked.push(name || `Sản phẩm #${i + 1}`);
-      sendLog(`TXNN CSS: đã cộng vào giỏ sản phẩm #${i + 1}${name ? ` — ${name}` : ""}.`, "success");
+      sendLog(`TXNN: đã thêm vào giỏ sản phẩm #${i + 1}${name ? ` — ${name}` : ""}.`, "success", { audience: "client" });
       await page.waitForTimeout(700);
     } catch (err) {
-      sendLog(`TXNN CSS: lỗi khi cộng sản phẩm #${i + 1} vào giỏ: ${err.message}`, "warning");
+      sendLog(`TXNN: lỗi khi cộng sản phẩm #${i + 1} vào giỏ: ${err.message}`, "warning");
     }
   }
 
@@ -265,14 +264,14 @@ async function openOrderConfirmationModal(page, sendLog) {
         await page.waitForTimeout(1500);
         const modal = page.locator("text=/Xác Nhận Đơn Hàng/i").first();
         if (await modal.isVisible({ timeout: 3000 })) {
-          sendLog('TXNN CSS: đã mở popup bước 1 "Xác Nhận Đơn Hàng".', "success");
+          sendLog('TXNN: đã mở popup bước 1 "Xác Nhận Đơn Hàng".', "success", { audience: "client" });
           return true;
         }
       }
     } catch { }
   }
 
-  sendLog('TXNN CSS: không mở được popup bước 1 "Xác Nhận Đơn Hàng".', "warning");
+  sendLog('TXNN: không mở được popup bước 1 "Xác Nhận Đơn Hàng".', "warning", { audience: "client" });
   return false;
 }
 
@@ -302,7 +301,7 @@ async function openBuyerInfoPopup(page, sendLog) {
             return hasBuyerFields || hasFinalConfirm || /tên người đặt|thông tin đặt hàng/i.test(text);
           });
           if (reachedStep2) {
-            sendLog('TXNN CSS: đã mở popup bước 2 "Thông tin đặt hàng / QR".', "success");
+            sendLog('TXNN: đã mở popup bước 2 "Thông tin đặt hàng / QR".', "success", { audience: "client" });
             return true;
           }
         }
@@ -310,7 +309,7 @@ async function openBuyerInfoPopup(page, sendLog) {
     } catch { }
   }
 
-  sendLog('TXNN CSS: không mở được popup bước 2 sau nút "Xác nhận thanh toán".', "warning");
+  sendLog('TXNN: không mở được popup bước 2 sau nút "Xác nhận thanh toán".', "warning");
   return false;
 }
 
@@ -322,12 +321,12 @@ async function fillVisibleFieldIfPresent(page, selectors, value, sendLog, fieldL
       if (await locator.isVisible({ timeout: 400 })) {
         await locator.scrollIntoViewIfNeeded();
         await locator.fill(value);
-        sendLog(`TXNN CSS: đã điền ${fieldLabel} trong popup.`, "success");
+        sendLog(`TXNN: đã điền ${fieldLabel} trong popup.`, "success", { audience: "client" });
         return true;
       }
     } catch { }
   }
-  sendLog(`TXNN CSS: popup hiện tại không có ô ${fieldLabel}; bỏ qua bước điền.`, "info");
+  sendLog(`TXNN: popup hiện tại không có ô ${fieldLabel}; bỏ qua bước điền.`, "info");
   return false;
 }
 
@@ -369,14 +368,14 @@ async function extractQrFromPaymentPopup(page, sendLog) {
     });
 
     if (result?.ok && result.qrImageBase64) {
-      sendLog(`TXNN CSS: đã trích xuất QR từ popup bước 2 (${result.source}).`, "success");
+      sendLog(`TXNN: đã trích xuất QR từ popup bước 2 (${result.source}).`, "success");
       return result;
     }
   } catch (err) {
-    sendLog(`TXNN CSS: lỗi khi trích xuất QR từ popup bước 2: ${err.message}`, "warning");
+    sendLog(`TXNN: lỗi khi trích xuất QR từ popup bước 2: ${err.message}`, "warning");
   }
 
-  sendLog("TXNN CSS: chưa trích xuất được QR từ popup bước 2.", "warning");
+  sendLog("TXNN: chưa trích xuất được QR từ popup bước 2.", "warning");
   return { ok: false };
 }
 
@@ -407,7 +406,7 @@ async function run(page, payload, sendLog) {
 
 async function runCss(page, payload, sendLog, sendStatus) {
   const { url, productName, chain, buyerName, buyerPhone, buyerAddress } = payload;
-  sendLog(`TXNN CSS: bắt đầu fallback riêng cho ${productName} tại ${String(chain || "tuoixanhnhanhngon").toUpperCase()}.`, "info");
+  sendLog(`TXNN: bắt đầu fallback riêng cho ${productName} tại ${String(chain || "tuoixanhnhanhngon").toUpperCase()}.`, "info");
 
   await safeGoto(page, url, sendLog, { waitUntil: "load", settleMs: 3000 });
   await closeCommonOverlays(page, sendLog);
@@ -416,26 +415,26 @@ async function runCss(page, payload, sendLog, sendStatus) {
 
   const picked = await addFirstThreeProducts(page, sendLog);
   if (picked.length < 3) {
-    sendLog("TXNN CSS: chưa cộng đủ 3 sản phẩm đầu tiên vào giỏ như flow yêu cầu.", "warning");
+    sendLog("TXNN: chưa cộng đủ 3 sản phẩm đầu tiên vào giỏ như flow yêu cầu.", "warning");
   }
 
   const modalOpened = await openOrderConfirmationModal(page, sendLog);
   if (!modalOpened) {
     sendStatus("waiting_user_input", {
-      reason: "TXNN CSS không mở được popup bước 1 xác nhận đơn hàng; cần người dùng tiếp tục thủ công.",
+      reason: "TXNN không mở được popup bước 1 xác nhận đơn hàng; cần người dùng tiếp tục thủ công.",
       requiredInput: "final_confirmation",
     });
-    sendLog("TXNN CSS: đã chuyển sang chờ user vì không mở được popup bước 1.", "warning");
+    sendLog("TXNN: đã chuyển sang chờ user vì không mở được popup bước 1.", "warning");
     return { done: true };
   }
 
   const buyerInfoOpened = await openBuyerInfoPopup(page, sendLog);
   if (!buyerInfoOpened) {
     sendStatus("waiting_user_input", {
-      reason: "TXNN CSS đã mở popup đầu nhưng không vào được popup Thông tin đặt hàng/QR; cần người dùng tiếp tục thủ công.",
+      reason: "TXNN đã mở popup đầu nhưng không vào được popup Thông tin đặt hàng/QR; cần người dùng tiếp tục thủ công.",
       requiredInput: "final_confirmation",
     });
-    sendLog("TXNN CSS: đã chuyển sang chờ user vì không mở được popup bước 2.", "warning");
+    sendLog("TXNN: đã chuyển sang chờ user vì không mở được popup bước 2.", "warning");
     return { done: true };
   }
 
@@ -444,7 +443,7 @@ async function runCss(page, payload, sendLog, sendStatus) {
   const filledAddress = await fillVisibleFieldIfPresent(page, TXNN_BUYER_ADDRESS_SELECTORS, buyerAddress, sendLog, "Địa chỉ nhận quà giao sau");
   if (!filledName || !filledPhone || !filledAddress) {
     sendLog(
-      "TXNN CSS: popup bước 2 hiện chưa render đủ các field buyer/address mong muốn; worker sẽ tiếp tục bằng dữ liệu buyer đã gửi từ lúc tạo session.",
+      "TXNN: popup bước 2 hiện chưa render đủ các field buyer/address mong muốn; worker sẽ tiếp tục bằng dữ liệu buyer đã gửi từ lúc tạo session.",
       "info"
     );
   }
@@ -455,7 +454,7 @@ async function runCss(page, payload, sendLog, sendStatus) {
     reason,
     requiredInput: "qr_payment",
   });
-  sendLog("TXNN CSS: đã dừng ở popup bước 2 để chờ user thao tác trực tiếp trên popup thanh toán thật. Nếu detect popup thất bại, user vẫn có thể mở trang nguồn để xử lý thủ công.", "warning");
+  sendLog("TXNN: đã dừng ở popup bước 2 để chờ user thao tác trực tiếp trên popup thanh toán thật. Nếu detect popup thất bại, user vẫn có thể mở trang nguồn để xử lý thủ công.", "warning");
   return { done: true };
 }
 
