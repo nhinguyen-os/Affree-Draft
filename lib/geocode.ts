@@ -11,14 +11,18 @@ export function areaFromAddress(a: Record<string, string> | undefined): string {
 
 // Phân định vùng cho Affree: cc=vn → suy ra tỉnh/thành (áp dụng MỌI vùng, không riêng HCM).
 // HCM trả "TPHCM" (gọn, ổn định sau sáp nhập); tỉnh/thành khác lấy từ `state`, bỏ tiền tố
-// "Thành phố"/"Tỉnh" (vd "Thành phố Hà Nội" → "Hà Nội", "Tỉnh Đồng Nai" → "Đồng Nai"). Ngoài VN → rỗng.
+// "Thành phố"/"Tỉnh" (vd "Thành phố Hà Nội" → "Hà Nội", "Tỉnh Đồng Nai" → "Đồng Nai").
+// Ngoài VN → lấy city/town/state (vd "Mississauga", "Toronto", "Ontario").
 export function regionForAddress(a: Record<string, string> | undefined): string {
   if (!a) return "";
   const cc = (a.country_code ?? "").toLowerCase();
-  if (cc !== "vn") return "";
-  if (isHCMC(a)) return "TPHCM";
-  const state = (a.state || a.region || a.city || "").trim();
-  return state.replace(/^(thành phố|tỉnh)\s+/i, "").trim();
+  if (cc === "vn") {
+    if (isHCMC(a)) return "TPHCM";
+    const state = (a.state || a.region || a.city || "").trim();
+    return state.replace(/^(thành phố|tỉnh)\s+/i, "").trim();
+  }
+  // Nước ngoài: ưu tiên city > town > county > state
+  return (a.city || a.town || a.county || a.state || "").trim();
 }
 
 // Sau sáp nhập đơn vị hành chính TP.HCM (2025), dữ liệu OSM hay gán SAI cấp "city"

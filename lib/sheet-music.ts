@@ -4,8 +4,9 @@ import { SEED_MUSIC, musicSlug, ytPlaylistId, ytVideoId, type MusicAlbum } from 
  * Khúc Chạm Store — đọc tab "KhucCham" trong sheet cấu hình 1sZTv (dò theo TÊN tab, không cần gid).
  *
  * Mỗi DÒNG = 1 BÀI HÁT. Các dòng cùng tên `album` được gom lại thành 1 album, giữ thứ tự nhập.
+ * Dòng ĐỂ TRỐNG cột `album` = "bài lẻ thuần": chỉ hiện thẻ "Bài hát" (mua lẻ), KHÔNG tạo thẻ Album.
  * Cột (không phân biệt hoa thường, chỉ cần CHỨA từ khoá):
- *   album        — tên album (bắt buộc)
+ *   album        — tên album (trống = bài lẻ thuần)
  *   playlist     — link/ID playlist YouTube của album (tuỳ chọn; điền 1 dòng là đủ)
  *   bia          — link/ID video làm ảnh bìa album (tuỳ chọn; trống → lấy bài đầu)
  *   gia_album    — giá album, đ (tuỳ chọn; trống → 999999)
@@ -58,6 +59,8 @@ function splitCsv(csv: string): string[][] {
 }
 
 const num = (s: string) => parseInt((s || "").replace(/[^\d]/g, ""), 10) || 0;
+/** Video ID YouTube hợp lệ = đúng 11 ký tự [A-Za-z0-9_-]. Loại dòng tiêu đề lọt vào (vd "video"). */
+const isYtId = (v: string) => /^[A-Za-z0-9_-]{11}$/.test(v);
 
 /** Parse CSV tab "KhucCham" → MusicAlbum[]. */
 export function parseMusicCsv(csv: string): MusicAlbum[] {
@@ -84,12 +87,30 @@ export function parseMusicCsv(csv: string): MusicAlbum[] {
 
   const map = new Map<string, MusicAlbum>();
   const order: string[] = [];
+  const singles: MusicAlbum[] = []; // dòng KHÔNG có cột album → "bài lẻ thuần"
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const albumName = (r[ci.album] || "").trim();
     const vidRaw = ci.video >= 0 ? (r[ci.video] || "").trim() : "";
-    if (!albumName || !vidRaw) continue;
+    if (!vidRaw) continue; // bài bắt buộc có video
     if (ci.an >= 0 && /^(x|1|true|có|co|yes|ẩn|an|off)$/i.test((r[ci.an] || "").trim())) continue;
+
+    const vid = ytVideoId(vidRaw);
+    if (!isYtId(vid)) continue; // video không hợp lệ (vd dòng tiêu đề lặp lại lọt vào) → bỏ
+
+    // Không có tên album → BÀI LẺ THUẦN: mỗi dòng = 1 "album" đánh dấu single (chỉ hiện thẻ "Bài hát").
+    if (!albumName) {
+      const title = ci.ten >= 0 ? (r[ci.ten] || "").trim() : "";
+      singles.push({
+        id: `single-${vid}`,
+        title,
+        playlistId: "",
+        cover: vid,
+        single: true,
+        songs: [{ vid, title, price: ci.giaBai >= 0 ? num(r[ci.giaBai]) || undefined : undefined }],
+      });
+      continue;
+    }
 
     let al = map.get(albumName);
     if (!al) {
@@ -105,8 +126,9 @@ export function parseMusicCsv(csv: string): MusicAlbum[] {
       if (g) al.price = g;
     }
 
+    if (al.songs.some((s) => s.vid === vid)) continue; // khử trùng: cùng 1 bài trong 1 album (lỡ dán lặp)
     al.songs.push({
-      vid: ytVideoId(vidRaw),
+      vid,
       title: ci.ten >= 0 ? (r[ci.ten] || "").trim() : "",
       price: ci.giaBai >= 0 ? num(r[ci.giaBai]) || undefined : undefined,
     });
@@ -115,11 +137,12 @@ export function parseMusicCsv(csv: string): MusicAlbum[] {
   // Bìa mặc định = bài đầu; bỏ album không có bài.
   const albums = order.map((n) => map.get(n)!).filter((a) => a.songs.length > 0);
   for (const a of albums) if (!a.cover) a.cover = a.songs[0].vid;
-  return albums;
+  // Bài lẻ thuần xếp SAU album (đánh dấu single → component bỏ qua khi render thẻ Album).
+  return [...albums, ...singles];
 }
 
 /** Tải album nhạc: tab "KhucCham" → SEED_MUSIC. */
-export async function fetchMusicAlbums(revalidate = 120): Promise<MusicAlbum[]> {
+export async function fetchMusicAlbums(revalidate = 30): Promise<MusicAlbum[]> {
   try {
     const res = await fetch(MUSIC_SHEET_CSV_URL, { next: { revalidate } });
     if (res.ok) {

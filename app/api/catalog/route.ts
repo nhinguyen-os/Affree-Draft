@@ -72,14 +72,13 @@ async function fetchCatalogTab(): Promise<Catalog | null> {
 export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
-  // Stores/discount: 120s (thay đổi vừa phải). Groups/similar/tui: 300s (hiếm thay đổi).
-  // Catalog chính vẫn dùng revalidate=30 để giá luôn gần nhất.
+  // Mọi nguồn sheet (admin sửa) dùng chung 30s để sửa sheet → reload là thấy gần như ngay.
   const [, sheetGroups, similarGroups, discountMap, tui] = await Promise.all([
-    fetchSheetStores(120).then(setDynamicStores),
-    fetchSheetGroups(300),
-    fetchSimilarGroups(300),
-    fetchDiscountMap(120),
-    fetchTui(300),
+    fetchSheetStores(30).then(setDynamicStores),
+    fetchSheetGroups(30),
+    fetchSimilarGroups(30),
+    fetchDiscountMap(30),
+    fetchTui(30),
   ]);
 
   /**

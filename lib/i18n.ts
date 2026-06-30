@@ -86,6 +86,22 @@ const EN_DICT: Record<string, string> = {
   "Hè - Đẹp - Khoẻ (Hóa mỹ phẩm nam, nữ, túi)": "Summer · Beauty · Health (cosmetics for men, women, bags)",
   "Hè-Đẹp-Khỏe (Hóa mỹ phẩm nam, nữ, túi)": "Summer · Beauty · Health (cosmetics for men, women, bags)",
 
+  // Jewelry categories (PNJ & similar stores)
+  "Bông tai": "Earrings",
+  "Charm": "Charm",
+  "Dây chuyền": "Necklace",
+  "Lắc tay": "Bracelet",
+  "Nhẫn": "Ring",
+  "Mặt dây": "Pendant",
+  "Vòng tay": "Bangle",
+  "Dây cổ": "Chain necklace",
+  "Trang sức nam": "Men's jewelry",
+  "Trang sức nữ": "Women's jewelry",
+  "Bộ trang sức": "Jewelry set",
+  "Phụ kiện": "Accessories",
+  "Đồng hồ": "Watch",
+  "Hoa tai": "Earrings",
+
   // Category names (from catalog data — translate the most common ones)
   "Đồ ăn": "Food",
   "Đồ uống": "Drinks",
@@ -377,6 +393,17 @@ const EN_DICT: Record<string, string> = {
   "Đăng nhập tài khoản (email)": "Account login (email)",
   "AEON eShop yêu cầu đăng nhập tài khoản (email).":
     "AEON eShop requires account login (email).",
+
+  // SiteStats section
+  "Affree trong những con số": "Affree by the numbers",
+  "Thống kê Affree": "Affree stats",
+  "Lượt truy cập": "Visits",
+  "Đơn đã tạo": "Orders placed",
+  "Lượt thêm giỏ": "Cart adds",
+  "Sản phẩm so giá": "Products compared",
+  "Điểm bán quanh bạn": "Nearby stores",
+  "Nhãn hiệu": "Brands",
+  "Số liệu cập nhật liên tục": "Live data",
 
   // Bulk additions — chrome strings còn thiếu (mua/giỏ/phiên bản/liên hệ/túi…)
   "Mua ngay": "Buy now",

@@ -419,7 +419,38 @@ function doPost(e) {
   if (action === "live_upsert") {
     return json_(liveUpsert_(body.rows || []));
   }
+  if (action === "save_contact") {
+    return saveContact(body.record || {});
+  }
   return json_({ ok: false, error: "unknown action" });
+}
+
+function saveContact(r) {
+  var kind = r.kind || '';
+  if (kind === 'loi-yeu-thuong') {
+    appendRow_('loi_yeu_thuong',
+      ['Thời gian','Tên','SĐT','Khu vực','Email','Lời nhắn'],
+      [new Date(), r.name||'', "'"+(r.phone||''), r.area||'', r.email||'', r.msg||'']);
+  } else if (kind === 'nhac-ban-quyen') {
+    appendRow_('nhac_ban_quyen',
+      ['Thời gian','Tên','SĐT','Email','Công ty','Mục đích khai thác','Album','Phạm vi','Ngân sách','Lời nhắn'],
+      [new Date(), r.name||'', "'"+(r.phone||''), r.email||'', r.company||'',
+       (r.purposes||[]).join(', '), r.album||'', r.scope||'', r.budget||'', r.msg||'']);
+  } else {
+    // Các loại liên hệ khác (tư vấn/hợp tác/B2B/khác) → tab chung
+    appendRow_('contact_leads',
+      ['Thời gian','Loại','Tên','SĐT','Khu vực','Email','Lời nhắn'],
+      [new Date(), kind, r.name||'', "'"+(r.phone||''), r.area||'', r.email||'', r.msg||'']);
+  }
+  return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function appendRow_(tabName, header, row) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(tabName);
+  if (!sh) { sh = ss.insertSheet(tabName); sh.appendRow(header); }  // tự tạo tab + tiêu đề
+  sh.appendRow(row);
 }
 
 function readCatalog_() {

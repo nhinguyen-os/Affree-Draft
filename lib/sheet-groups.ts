@@ -322,7 +322,7 @@ export function parseMealTitlesCsv(csv: string): MealTitle[] {
  * - `danhMucGroups` = cấu hình BOTTOM SECTIONS (sheet 1sZTv/DanhMuc) — chỉ ten + emoji, đơn giản.
  */
 export async function fetchSheetGroups(
-  revalidate = 300,
+  revalidate = 30,
 ): Promise<{ groups?: ProductGroup[]; danhMucGroups?: ProductGroup[]; priorities?: PriorityProfile[]; sponsors?: Sponsor[]; sanPhamGroupOverrides?: Map<string, string[]>; mealTitles?: MealTitle[] }> {
   const fetchCsv = async (url: string): Promise<string | null> => {
     try {
