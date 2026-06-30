@@ -4895,7 +4895,7 @@ export default function Home() {
             geoLat={userLoc?.lat}
             geoLng={userLoc?.lng}
             defaultAddress={userAddr}
-            initialQty={cartQtyFor(buyOffer.product.id) || 1}
+            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
             onClose={() => setBuyOffer(null)}
             onPlaced={(code, chosen) => {
               recordBuy(chosen);
