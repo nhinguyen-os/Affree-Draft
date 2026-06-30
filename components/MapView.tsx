@@ -5,12 +5,10 @@ import { createPortal } from "react-dom";
 import {
   MapContainer,
   TileLayer,
-  Popup,
   useMap,
   Circle,
   AttributionControl,
   Marker,
-  useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -51,7 +49,7 @@ function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight
       ${tagHtml}
     </div>`,
     iconSize: [size, size],
-    iconAnchor: [(size / 2), size],
+    iconAnchor: [0, 0],
   });
 }
 
@@ -74,27 +72,6 @@ function zoomForRadius(km?: number | null): number | undefined {
   return Math.max(10, Math.min(18, Math.round(z)));
 }
 
-function radiusGeoJson(lat: number, lng: number, radiusKm: number) {
-  const points = 64;
-  const coords: [number, number][] = [];
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * 2 * Math.PI;
-    const dlat = (radiusKm / 111) * Math.sin(angle);
-    const dlng = (radiusKm / (111 * Math.cos((lat * Math.PI) / 180))) * Math.cos(angle);
-    coords.push([lng + dlng, lat + dlat]);
-  }
-  return {
-    type: "FeatureCollection" as const,
-    features: [
-      {
-        type: "Feature" as const,
-        properties: {},
-        geometry: { type: "Polygon" as const, coordinates: [coords] },
-      },
-    ],
-  };
-}
-
 function AutoResize() {
   const map = useMap();
   useEffect(() => {
@@ -104,8 +81,6 @@ function AutoResize() {
   }, [map]);
   return null;
 }
-
-
 
 function ClusterGroup({
   markers,
@@ -148,12 +123,6 @@ function ClusterGroup({
         const marker = L.marker([m.store.lat as number, m.store.lng as number], {
           icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, !!m.nearest, m.store.id === highlightId, t("RẺ NHẤT"), t("GẦN NHẤT")),
         });
-
-        marker.bindTooltip(`
-          <span style="font-weight: 600;">${chainLabel(m.store.chain)}</span>
-          · ${m.store.name}
-          ${m.price != null ? ` · ${m.inStock ? formatMoney(m.price, storeCurrency(m.store.id)) : t("Hết hàng")}` : ""}
-        `, { direction: "top", offset: [0, -28], opacity: 1 });
 
         marker.on("click", (ev) => {
           L.DomEvent.stopPropagation(ev);
@@ -231,8 +200,6 @@ export default function MapView({
   // Khi legendOpen=false → coi như tất cả chain bị ẩn (pin biến mất theo).
   const [hiddenChains, setHiddenChains] = useState<Set<Chain>>(new Set());
 
-  const initialZoom = zoomForRadius(radiusKm) ?? 13;
-
   const recenter = useCallback(() => {
     if (!userLoc || !map) return;
     map.flyTo([userLoc.lat, userLoc.lng], 15, { duration: 0.5 });
@@ -295,10 +262,6 @@ export default function MapView({
   const visibleMarkers = legendOpen
     ? radiusMarkers.filter((m) => !hiddenChains.has(m.store.chain))
     : [];
-
-
-
-  const radiusData = userLoc && radiusKm ? radiusGeoJson(userLoc.lat, userLoc.lng, radiusKm) : null;
 
   // Load configured map url from process.env if tileUrl is not provided
   const mapLayer = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MAP_LAYER || "mvp_map" : "mvp_map";
@@ -394,8 +357,6 @@ export default function MapView({
           </div>,
           document.body
         )}
-
-
       </MapContainer>
 
       {userLoc && (

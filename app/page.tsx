@@ -1161,9 +1161,9 @@ export default function Home() {
     if (userLoc) {
       params.append("lat", String(userLoc.lat));
       params.append("lng", String(userLoc.lng));
-      const radMeters = radiusKm ? radiusKm * 1000 : 5000;
+      const radMeters = radiusKm ? radiusKm * 1000 : 1000;
       params.append("radius", String(radMeters));
-      params.append("limit", "500");
+      params.append("limit", "1000");
     }
     if (activeTep) {
       params.append("category", activeTep);
@@ -2831,6 +2831,7 @@ export default function Home() {
                             <span className="block truncate text-xs text-slate-400">
                               {p.brand} · {t(p.unit)}
                             </span>
+                          </span>
                         </button>
                       </li>
                     ))}
@@ -3920,33 +3921,6 @@ export default function Home() {
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {myAlert ? (
-                    <div className="flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 py-1 pl-2.5 pr-1 text-xs font-semibold text-emerald-700">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5" />
-                      </svg>
-                      <span className="hidden sm:inline">{t("Đã đăng ký")}</span>
-                      <button
-                        onClick={openEditAlert}
-                        title={t("Sửa số điện thoại")}
-                        className="ml-1 rounded-md p-1 text-emerald-600 transition hover:bg-emerald-100"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 20h9" />
-                          <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={deleteAlert}
-                        title={t("Huỷ đăng ký")}
-                        className="rounded-md p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                        </svg>
-                      </button>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {myAlert ? (
                         <div className="flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 py-1 pl-2.5 pr-1 text-xs font-semibold text-emerald-700">
                           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M20 6 9 17l-5-5" />
@@ -3988,498 +3962,120 @@ export default function Home() {
                     </div>
                   </div>
 
-                    {!userLoc && (
-                      <button
-                        onClick={() => setLocOpen(true)}
-                        className="mt-3 flex w-full items-center gap-2.5 rounded-xl border border-blue-100 bg-blue-50 px-3.5 py-2.5 text-left text-sm text-blue-800 transition hover:bg-blue-100"
-                      >
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-base">
-                          📍
-                        </span>
-                        <span>
-                          {geoState === "locating"
-                            ? t("Đang định vị…")
-                            : t("Chọn vị trí (định vị hoặc nhập địa chỉ) để xem khoảng cách tới từng cửa hàng và lọc theo bán kính.")}
-                        </span>
-                      </button>
-                    )}
+                  {!userLoc && (
+                    <button
+                      onClick={() => setLocOpen(true)}
+                      className="mt-3 flex w-full items-center gap-2.5 rounded-xl border border-blue-100 bg-blue-50 px-3.5 py-2.5 text-left text-sm text-blue-800 transition hover:bg-blue-100"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-base">
+                        📍
+                      </span>
+                      <span>
+                        {geoState === "locating"
+                          ? t("Đang định vị…")
+                          : t("Chọn vị trí (định vị hoặc nhập địa chỉ) để xem khoảng cách tới từng cửa hàng và lọc theo bán kính.")}
+                      </span>
+                    </button>
+                  )}
 
-                    {cheapest && maxInStock > cheapest.price && (
-                      <div className="mt-3 flex w-fit max-w-full items-center gap-2.5 rounded-xl border border-emerald-100 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-800">
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-base">
-                          💰
-                        </span>
-                        <span>
-                          {t("Rẻ hơn {amount} nếu mua ở {store}", { amount: formatMoney(maxInStock - cheapest.price, storeCurrency(cheapest.storeId)), store: cheapest.store.name })}
-                        </span>
-                      </div>
-                    )}
-
-                    {alertOpen && (
-                      <div
-                        className="fixed inset-0 z-[1100] flex items-center justify-center bg-slate-900/50 p-4"
-                        onClick={() => setAlertOpen(false)}
-                      >
-                        <div
-                          className="w-full max-w-sm rounded-2xl border border-amber-200 bg-white p-5 shadow-xl"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="mb-3 flex items-start justify-between gap-3">
-                            <p className="text-sm font-medium text-amber-900">
-                              {myAlert
-                                ? `✏️ ${t("Sửa số nhận báo giá cho {name}", { name: selected.name })}`
-                                : `🔔 ${t("Để lại SĐT/Zalo, {name} giảm giá là mình báo ngay", { name: selected.name })}`}
-                            </p>
-                            <button
-                              onClick={() => setAlertOpen(false)}
-                              aria-label={t("Đóng")}
-                              className="shrink-0 rounded-lg px-2 py-1 text-lg leading-none text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                          <input
-                            value={alertPhone}
-                            onChange={(e) => setAlertPhone(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && submitAlert()}
-                            type="tel"
-                            inputMode="tel"
-                            autoFocus
-                            placeholder={t("Số điện thoại / Zalo")}
-                            className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                          />
-                          <button
-                            onClick={submitAlert}
-                            className="mt-3 w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
-                          >
-                            {myAlert ? t("Lưu thay đổi") : t("Đăng ký")}
-                          </button>
-                          {myAlert && (
-                            <button
-                              onClick={deleteAlert}
-                              className="mt-2 w-full rounded-lg border border-rose-200 px-4 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
-                            >
-                              {t("Huỷ đăng ký")}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {alertOpen && (
-                      <div
-                        className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
-                        onClick={() => setAlertOpen(false)}
-                      >
-                        <div
-                          className="liquid-glass w-full max-w-sm rounded-3xl p-5 ring-1 ring-amber-200/70"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ WebkitBackdropFilter: "blur(32px)" }}
-                        >
-                          <div className="mb-3 flex items-start justify-between gap-3">
-                            <p className="text-sm font-medium text-amber-900">
-                              {myAlert
-                                ? `✏️ ${t("Sửa số nhận báo giá cho {name}", { name: selected.name })}`
-                                : `🔔 ${t("Để lại SĐT/Zalo, {name} giảm giá là mình báo ngay", { name: selected.name })}`}
-                            </p>
-                            <button
-                              onClick={() => openBuyForm(selected)}
-                              className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-600"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="9" cy="21" r="1" />
-                                <circle cx="20" cy="21" r="1" />
-                                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                              </svg>
-                              {t("Vào mua")}
-                            </button>
-                          </div>
-                          <input
-                            value={alertPhone}
-                            onChange={(e) => setAlertPhone(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && submitAlert()}
-                            type="tel"
-                            inputMode="tel"
-                            autoFocus
-                            placeholder={t("Số điện thoại / Zalo")}
-                            className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                          />
-                          <button
-                            onClick={submitAlert}
-                            className="mt-3 w-full rounded-lg border border-slate-200 bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
-                          >
-                            {myAlert ? t("Lưu thay đổi") : t("Đăng ký")}
-                          </button>
-                          {myAlert && (
-                            <button
-                              onClick={() => setRadiusKm(null)}
-                              className="font-medium text-emerald-600 hover:underline"
-                            >
-                              {t("Bỏ giới hạn bán kính")}
-                            </button>
+                  {cheapest && maxInStock > cheapest.price && (
+                    <div className="mt-3 flex w-fit max-w-full items-center gap-2.5 rounded-xl border border-emerald-100 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-800">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-base">
+                        💰
+                      </span>
+                      <span>
+                        {t("Rẻ hơn {amount} nếu mua ở {store}", { amount: formatMoney(maxInStock - cheapest.price, storeCurrency(cheapest.storeId)), store: cheapest.store.name })}
+                      </span>
                     </div>
-                        )
-  }
+                  )}
 
-                        {displayOffers.length === 0 && offers.length === 0 && (
-                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center">
-                            <p className="text-sm text-slate-600">
-                              {t("Sản phẩm này chưa có nhiều nơi bán để so sánh giá.")}
-                            </p>
-                            <button
-                              onClick={() => openBuyForm(selected)}
-                              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-600"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="9" cy="21" r="1" />
-                                <circle cx="20" cy="21" r="1" />
-                                <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                              </svg>
-                              {t("Vào mua")}
-                            </button>
-                          </div>
-                        )}
-
-                        {displayOffers.length === 0 && offers.length > 0 && (
-                          <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-500">
-                            {t("Không có cửa hàng nào trong bán kính {r} km.", { r: radiusKm ?? 0 })}{" "}
-                            <button
-                              onClick={() => setRadiusKm(null)}
-                              className="font-medium text-emerald-600 hover:underline"
-                            >
-                              {t("Bỏ giới hạn bán kính")}
-                            </button>
-                          </div>
-                        )}
-
-                        {displayOffers.length > 0 && (
-                          <div className="mt-4 mb-3 flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-slate-500">{t("Sắp xếp theo")}</span>
-                            <div className="flex overflow-hidden rounded-xl border border-slate-300 text-sm shadow-sm">
-                              <button
-                                onClick={() => setSortBy("price")}
-                                className={`flex items-center gap-1.5 px-4 py-2 font-semibold transition ${sortBy === "price" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-100"
-                                  }`}
-                              >
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
-                                  <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                                </svg>
-                                {t("Giá rẻ")}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setSortBy("distance");
-                                  if (!userLoc) locate();
-                                }}
-                                title={userLoc ? "" : t("Bật vị trí để sắp theo khoảng cách")}
-                                className={`flex items-center gap-1.5 px-4 py-2 font-semibold transition ${sortBy === "distance" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-100"
-                                  }`}
-                              >
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                  <circle cx="12" cy="10" r="3" />
-                                </svg>
-                                {t("Gần nhất")}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        <ul className="space-y-4">
-                          {(() => {
-                            // Gom nhóm theo chain
-                            const chainMap = new Map<string, typeof displayOffers>();
-                            for (const o of displayOffers) {
-                              const key = o.store.chain;
-                              if (!chainMap.has(key)) chainMap.set(key, []);
-                              chainMap.get(key)!.push(o);
-                            }
-                            // Giữ thứ tự chain theo offer đầu tiên xuất hiện
-                            const chainOrder: string[] = [];
-                            for (const o of displayOffers) {
-                              if (!chainOrder.includes(o.store.chain)) chainOrder.push(o.store.chain);
-                            }
-
-                            return chainOrder.map((chainKey) => {
-                              const group = chainMap.get(chainKey)!;
-                              // Best = rẻ+còn hàng trước, sau đó gần nhất; fallback = index 0
-                              const best = group.find((o) => o.inStock && cheapest?.storeId === o.storeId)
-                                ?? group.find((o) => o.inStock && nearestStoreId === o.storeId)
-                                ?? group.find((o) => o.inStock)
-                                ?? group[0];
-                              const rest = group.filter((o) => o.storeId !== best.storeId);
-                              const isExpanded = expandedChains.has(chainKey);
-
-                              const renderOffer = (o: typeof best, isNested: boolean) => {
-                                const isCheapest = cheapest?.storeId === o.storeId;
-                                const isNearest = nearestStoreId === o.storeId;
-                                const diff = cheapest && o.inStock ? o.price - cheapest.price : 0;
-                                return (
-                                  <div
-                                    key={o.storeId}
-                                    onMouseEnter={() => setHoverStore(o.storeId)}
-                                    onMouseLeave={() => setHoverStore(null)}
-                                    className={`relative ${isNested ? "rounded-xl border bg-white p-2.5 shadow-sm" : ""} ${isNested
-                                      ? isCheapest
-                                        ? "border-emerald-300"
-                                        : isNearest
-                                          ? "border-blue-300"
-                                          : "border-slate-200"
-                                      : ""
-                                      } ${!o.inStock && isNested ? "opacity-60" : ""} transition`}
-                                  >
-                                    {/* Tag nổi cho chi nhánh xổ ra — style outline để phân biệt với chi nhánh chính (nền đậm chữ trắng) */}
-                                    {isNested && (isCheapest || isNearest) && o.inStock && (
-                                      <span className="pointer-events-none absolute -top-2 right-2.5 z-10 flex gap-1">
-                                        {isCheapest && (
-                                          <span className="rounded-full border border-emerald-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600 shadow-sm">
-                                            {t("Rẻ nhất")}
-                                          </span>
-                                        )}
-                                        {isNearest && (
-                                          <span className="inline-flex items-center gap-1 rounded-full border border-blue-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600 shadow-sm">
-                                            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></svg>
-                                            {t("Gần nhất")}
-                                          </span>
-                                        )}
-                                      </span>
-                                    )}
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-                                      <div className="flex min-w-0 flex-1 items-start gap-3">
-                                        <ChainBadge chain={o.store.chain} />
-                                        <div className="min-w-0 flex-1">
-                                          <div className="min-w-0 truncate font-semibold text-slate-900">
-                                            {o.store.name}
-                                          </div>
-                                          <div className="truncate text-xs text-slate-500">{o.store.address}</div>
-                                          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                                            <span
-                                              className={`inline-flex items-center gap-1.5 font-medium ${o.inStock ? "text-emerald-600" : "text-red-500"
-                                                }`}
-                                            >
-                                              <span
-                                                className={`h-1.5 w-1.5 rounded-full ${o.inStock ? "bg-emerald-500" : "bg-red-400"
-                                                  }`}
-                                              />
-                                              {o.inStock ? t("Còn hàng") : t("Hết hàng")}
-                                            </span>
-                                            {o.distanceKm != null && (
-                                              <>
-                                                <span className="text-slate-300">·</span>
-                                                <span className="inline-flex items-center gap-1 font-medium text-slate-600">
-                                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                                    <circle cx="12" cy="10" r="3" />
-                                                  </svg>
-                                                  {t("cách bạn {km} km", { km: o.distanceKm.toFixed(1) })}
-                                                </span>
-                                                <a
-                                                  href={directionsUrl(o.store)}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  onClick={(e) => e.stopPropagation()}
-                                                  className="inline-flex items-center gap-0.5 font-medium text-blue-600 underline-offset-2 hover:text-blue-700 hover:underline"
-                                                >
-                                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                                    <polyline points="9 18 15 12 9 6" />
-                                                  </svg>
-                                                  {t("Chỉ đường")}
-                                                </a>
-                                              </>
-                                            )}
-                                          </div>
-                                          {o.lastChecked && (
-                                            <div className="mt-0.5 text-[10px] font-normal text-slate-400">
-                                              ({formatCheckedAt(o.lastChecked)})
-                                            </div>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center justify-between gap-3 pl-[3.25rem] sm:shrink-0 sm:justify-end sm:gap-4 sm:pl-0">
-                                        <div className="text-right">
-                                          <div
-                                            className={`inline-flex items-center gap-1 text-lg font-extrabold tracking-tight ${isCheapest ? "text-emerald-600" : "text-slate-900"
-                                              }`}
-                                          >
-                                            <svg className={`shrink-0 ${isCheapest ? "text-emerald-500" : "text-slate-400"}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                              <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
-                                              <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                                            </svg>
-                                            {formatMoney(o.price, storeCurrency(o.storeId))}
-                                          </div>
-                                          {diff > 0 && (
-                                            <div className="max-w-[7.5rem] text-xs font-medium leading-snug text-slate-400">
-                                              {t("Chênh {amount}", { amount: formatMoney(diff, storeCurrency(o.storeId)) })}
-                                            </div>
-                                          )}
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                          <button
-                                            onClick={() => setBuyOffer(o)}
-                                            className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
-                                          >
-                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                              <circle cx="9" cy="21" r="1" />
-                                              <circle cx="20" cy="21" r="1" />
-                                              <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                                            </svg>
-                                            {t("Mua ngay")}
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
-                                            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
-                                            title={t("Thêm vào giỏ")}
-                                            aria-label={t("Thêm vào giỏ")}
-                                          >
-                                            +
-                                            {cartQtyFor(o.product.id) > 0 && (
-                                              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                                {cartQtyFor(o.product.id)}
-                                              </span>
-                                            )}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              };
-
-                              const isBestCheapest = cheapest?.storeId === best.storeId;
-                              const isBestNearest = nearestStoreId === best.storeId;
-
-                              return (
-                                <li
-                                  key={chainKey}
-                                  className={`relative rounded-2xl border transition ${isBestCheapest
-                                    ? "border-emerald-300 bg-emerald-50/50 shadow-sm"
-                                    : isBestNearest
-                                      ? "border-blue-300 bg-blue-50/50 shadow-sm"
-                                      : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
-                                    } ${!best.inStock ? "opacity-60" : ""}`}
-                                >
-                                  {(isBestCheapest || isBestNearest) && best.inStock && (
-                                    <span className="absolute -top-2.5 right-3 z-10 flex gap-1 pointer-events-none">
-                                      {isBestCheapest && (
-                                        <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
-                                          {t("Rẻ nhất")}
-                                        </span>
-                                      )}
-                                      {isBestNearest && (
-                                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
-                                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></svg>
-                                          {t("Gần nhất")}
-                                        </span>
-                                      )}
-                                    </span>
-                                  )}
-                                  <div className="p-3">
-                                    {renderOffer(best, false)}
-
-                                    {/* Nút xổ chi nhánh */}
-                                    {rest.length > 0 && (
-                                      <button
-                                        onClick={() => setExpandedChains((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(chainKey)) next.delete(chainKey);
-                                          else next.add(chainKey);
-                                          return next;
-                                        })}
-                                        className="mt-2 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                                      >
-                                        <svg
-                                          width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
-                                          className={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                                        >
-                                          <path d="m6 9 6 6 6-6" />
-                                        </svg>
-                                        {isExpanded
-                                          ? t("Ẩn bớt")
-                                          : t("{n} chi nhánh khác", { n: rest.length })}
-                                      </button>
-                                    )}
-                                  </div>
-
-                                  {/* Chi nhánh xổ ra — cuộn dọc trong khung giới hạn để so sánh với chi nhánh mặc định ở trên */}
-                                  {isExpanded && rest.length > 0 && (
-                                    <div className="border-t border-slate-100 px-3 pb-3 pt-2">
-                                      <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                                        {rest.map((o) => renderOffer(o, true))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </li>
-                              );
-                            });
-                          })()}
-                        </ul>
-
-                        {/* Map desktop — nằm trong left column để không có khoảng trống */}
-                        {selected && (
-                          <div className="mt-4 hidden overflow-hidden rounded-xl border border-slate-200 lg:block">
-                            {userLoc && (
-                              <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-100 bg-white px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                                <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                    <circle cx="12" cy="10" r="3" />
-                                  </svg>
-                                  {t("Bán kính")}
-                                </span>
-                                {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
-                                  <button
-                                    key={r}
-                                    onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
-                                    className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs transition ${radiusKm === r
-                                      ? "border-emerald-600 bg-emerald-600 text-white"
-                                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                                      }`}
-                                  >
-                                    {r < 1 ? `${Math.round(r * 1000)}m` : "1km"}
-                                  </button>
-                                ))}
-                                {radiusKm !== null && (
-                                  <button
-                                    onClick={() => setRadiusKm(null)}
-                                    title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
-                                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-600 transition hover:bg-rose-100"
-                                  >
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M18 6 6 18M6 6l12 12" />
-                                    </svg>
-                                    {t("Bỏ giới hạn")}
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                            <div className="relative z-0 lg:h-[380px]">
-                              <MapView
-                                center={center}
-                                userLoc={userLoc}
-                                userAddr={userAddr}
-                                markers={markers}
-                                highlightId={hoverStore}
-                                radiusKm={radiusKm}
-                                lang={lang}
-                                onBuy={(store) => openBuyForm(selected, store)}
-                                onStorePick={setStoreProducts}
-                              />
-                            </div>
-                          </div>
+                  {alertOpen && (
+                    <div
+                      className="fixed inset-0 z-[2200] flex items-center justify-center bg-slate-900/30 backdrop-blur-md p-4"
+                      onClick={() => setAlertOpen(false)}
+                    >
+                      <div
+                        className="liquid-glass w-full max-w-sm rounded-3xl p-5 ring-1 ring-amber-200/70"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ WebkitBackdropFilter: "blur(32px)" }}
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <p className="text-sm font-medium text-amber-900">
+                            {myAlert
+                              ? `✏️ ${t("Sửa số nhận báo giá cho {name}", { name: selected.name })}`
+                              : `🔔 ${t("Để lại SĐT/Zalo, {name} giảm giá là mình báo ngay", { name: selected.name })}`}
+                          </p>
+                          <button
+                            onClick={() => setAlertOpen(false)}
+                            aria-label={t("Đóng")}
+                            className="shrink-0 rounded-lg px-2 py-1 text-lg leading-none text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <input
+                          value={alertPhone}
+                          onChange={(e) => setAlertPhone(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && submitAlert()}
+                          type="tel"
+                          inputMode="tel"
+                          autoFocus
+                          placeholder={t("Số điện thoại / Zalo")}
+                          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                        />
+                        <button
+                          onClick={submitAlert}
+                          className="mt-3 w-full rounded-lg border border-slate-200 bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
+                        >
+                          {myAlert ? t("Lưu thay đổi") : t("Đăng ký")}
+                        </button>
+                        {myAlert && (
+                          <button
+                            onClick={deleteAlert}
+                            className="mt-2 w-full rounded-lg border border-rose-200 px-4 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
+                          >
+                            {t("Huỷ đăng ký")}
+                          </button>
                         )}
                       </div>
+                    </div>
+                  )}
 
-        {similar.length > 0 && (
-                      <aside className="mt-8 lg:mt-0">
-                        <h3 className="mb-3 text-sm font-semibold text-slate-700">{t("Sản phẩm tương tự")}</h3>
-                        <div className="flex flex-col gap-2">
-                          {similar.map((p) => {
-                            const st = priceStats.get(p.id);
-                            return (
+                  {displayOffers.length === 0 && offers.length === 0 && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-6 text-center">
+                      <p className="text-sm text-slate-600">
+                        {t("Sản phẩm này chưa có nhiều nơi bán để so sánh giá.")}
+                      </p>
+                      <button
+                        onClick={() => openBuyForm(selected)}
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-amber-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-600"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="9" cy="21" r="1" />
+                          <circle cx="20" cy="21" r="1" />
+                          <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                        </svg>
+                        {t("Vào mua")}
+                      </button>
+                    </div>
+                  )}
+
+                  {displayOffers.length === 0 && offers.length > 0 && (
+                    <div className="mt-3 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-6 text-center text-sm text-slate-500">
+                      {t("Không có cửa hàng nào trong bán kính {r} km.", { r: radiusKm ?? 0 })}{" "}
+                      <button
+                        onClick={() => setRadiusKm(null)}
+                        className="font-medium text-emerald-600 hover:underline"
+                      >
+                        {t("Bỏ giới hạn bán kính")}
+                      </button>
+                    </div>
+                  )}
+
+                  {displayOffers.length > 0 && (
+                    <div className="mt-4 mb-3 flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-slate-500">{t("Sắp xếp theo")}</span>
+                      <div className="flex overflow-hidden rounded-xl border border-slate-300 text-sm shadow-sm">
                         <button
                           onClick={() => setSortBy("price")}
                           className={`flex items-center gap-1.5 px-4 py-2 font-semibold transition ${sortBy === "price" ? "bg-slate-900 text-white" : "bg-white text-slate-600 hover:bg-slate-100"
@@ -4507,175 +4103,334 @@ export default function Home() {
                           {t("Gần nhất")}
                         </button>
                       </div>
-                      </div>
-                    )}
+                    </div>
+                  )}
 
-                    <ul className="space-y-2.5">
-                      {displayOffers.map((o) => {
-                        const isCheapest = cheapest?.storeId === o.storeId;
-                        const isNearest = nearestStoreId === o.storeId;
-                        const diff = cheapest && o.inStock ? o.price - cheapest.price : 0;
-                        return (
-                          <li
-                            key={o.storeId}
-                            onMouseEnter={() => setHoverStore(o.storeId)}
-                            onMouseLeave={() => setHoverStore(null)}
-                            className={`rounded-2xl border p-3 transition ${isCheapest
-                              ? "border-emerald-300 bg-emerald-50/50 shadow-sm"
-                              : isNearest
-                                ? "border-blue-300 bg-blue-50/50 shadow-sm"
-                                : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
-                              } ${!o.inStock ? "opacity-60" : ""}`}
-                          >
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-                              <div className="flex min-w-0 flex-1 items-start gap-3">
-                                <ChainBadge chain={o.store.chain} />
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate font-semibold text-slate-900">
-                                      {o.store.name}
+                  <ul className="space-y-4">
+                    {(() => {
+                      // Gom nhóm theo chain
+                      const chainMap = new Map<string, typeof displayOffers>();
+                      for (const o of displayOffers) {
+                        const key = o.store.chain;
+                        if (!chainMap.has(key)) chainMap.set(key, []);
+                        chainMap.get(key)!.push(o);
+                      }
+                      // Giữ thứ tự chain theo offer đầu tiên xuất hiện
+                      const chainOrder: string[] = [];
+                      for (const o of displayOffers) {
+                        if (!chainOrder.includes(o.store.chain)) chainOrder.push(o.store.chain);
+                      }
+
+                      return chainOrder.map((chainKey) => {
+                        const group = chainMap.get(chainKey)!;
+                        // Best = rẻ+còn hàng trước, sau đó gần nhất; fallback = index 0
+                        const best = group.find((o) => o.inStock && cheapest?.storeId === o.storeId)
+                          ?? group.find((o) => o.inStock && nearestStoreId === o.storeId)
+                          ?? group.find((o) => o.inStock)
+                          ?? group[0];
+                        const rest = group.filter((o) => o.storeId !== best.storeId);
+                        const isExpanded = expandedChains.has(chainKey);
+
+                        const renderOffer = (o: typeof best, isNested: boolean) => {
+                          const isCheapest = cheapest?.storeId === o.storeId;
+                          const isNearest = nearestStoreId === o.storeId;
+                          const diff = cheapest && o.inStock ? o.price - cheapest.price : 0;
+                          return (
+                            <div
+                              key={o.storeId}
+                              onMouseEnter={() => setHoverStore(o.storeId)}
+                              onMouseLeave={() => setHoverStore(null)}
+                              className={`relative ${isNested ? "rounded-xl border bg-white p-2.5 shadow-sm" : ""} ${isNested
+                                ? isCheapest
+                                  ? "border-emerald-300"
+                                  : isNearest
+                                    ? "border-blue-300"
+                                    : "border-slate-200"
+                                : ""
+                                } ${!o.inStock && isNested ? "opacity-60" : ""} transition`}
+                            >
+                              {/* Tag nổi cho chi nhánh xổ ra — style outline để phân biệt với chi nhánh chính (nền đậm chữ trắng) */}
+                              {isNested && (isCheapest || isNearest) && o.inStock && (
+                                <span className="pointer-events-none absolute -top-2 right-2.5 z-10 flex gap-1">
+                                  {isCheapest && (
+                                    <span className="rounded-full border border-emerald-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600 shadow-sm">
+                                      {t("Rẻ nhất")}
                                     </span>
-                                    {(isCheapest || isNearest) && o.inStock && (
-                                      <span className="flex shrink-0 items-center gap-1">
-                                        {isCheapest && (
-                                          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
-                                            {t("Rẻ nhất")}
-                                          </span>
-                                        )}
-                                        {isNearest && (
-                                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
-                                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                  )}
+                                  {isNearest && (
+                                    <span className="inline-flex items-center gap-1 rounded-full border border-blue-500 bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600 shadow-sm">
+                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></svg>
+                                      {t("Gần nhất")}
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                                <div className="flex min-w-0 flex-1 items-start gap-3">
+                                  <ChainBadge chain={o.store.chain} />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="min-w-0 truncate font-semibold text-slate-900">
+                                      {o.store.name}
+                                    </div>
+                                    <div className="truncate text-xs text-slate-500">{o.store.address}</div>
+                                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                                      <span
+                                        className={`inline-flex items-center gap-1.5 font-medium ${o.inStock ? "text-emerald-600" : "text-red-500"
+                                          }`}
+                                      >
+                                        <span
+                                          className={`h-1.5 w-1.5 rounded-full ${o.inStock ? "bg-emerald-500" : "bg-red-400"
+                                            }`}
+                                        />
+                                        {o.inStock ? t("Còn hàng") : t("Hết hàng")}
+                                      </span>
+                                      {o.distanceKm != null && (
+                                        <>
+                                          <span className="text-slate-300">·</span>
+                                          <span className="inline-flex items-center gap-1 font-medium text-slate-600">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                                               <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
                                               <circle cx="12" cy="10" r="3" />
                                             </svg>
-                                            {t("Gần nhất")}
+                                            {t("cách bạn {km} km", { km: o.distanceKm.toFixed(1) })}
                                           </span>
-                                        )}
-                                      </span>
+                                          <a
+                                            href={directionsUrl(o.store)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="inline-flex items-center gap-0.5 font-medium text-blue-600 underline-offset-2 hover:text-blue-700 hover:underline"
+                                          >
+                                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                              <polyline points="9 18 15 12 9 6" />
+                                            </svg>
+                                            {t("Chỉ đường")}
+                                          </a>
+                                        </>
+                                      )}
+                                    </div>
+                                    {o.lastChecked && (
+                                      <div className="mt-0.5 text-[10px] font-normal text-slate-400">
+                                        ({formatCheckedAt(o.lastChecked)})
+                                      </div>
                                     )}
                                   </div>
-                                  <div className="truncate text-xs text-slate-500">{o.store.address}</div>
-                                  <div className="mt-1.5 flex items-center gap-2 text-xs">
-                                    <span
-                                      className={`inline-flex items-center gap-1.5 font-medium ${o.inStock ? "text-emerald-600" : "text-red-500"
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3 pl-[3.25rem] sm:shrink-0 sm:justify-end sm:gap-4 sm:pl-0">
+                                  <div className="text-right">
+                                    <div
+                                      className={`inline-flex items-center gap-1 text-lg font-extrabold tracking-tight ${isCheapest ? "text-emerald-600" : "text-slate-900"
                                         }`}
                                     >
-                                      <span
-                                        className={`h-1.5 w-1.5 rounded-full ${o.inStock ? "bg-emerald-500" : "bg-red-400"
-                                          }`}
-                                      />
-                                      {o.inStock ? t("Còn hàng") : t("Hết hàng")}
-                                    </span>
-                                    {o.distanceKm != null && (
-                                      <>
-                                        <span className="text-slate-300">·</span>
-                                        <span className="inline-flex items-center gap-1 font-medium text-slate-600">
-                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                            <circle cx="12" cy="10" r="3" />
-                                          </svg>
-                                          {t("cách bạn {km} km", { km: o.distanceKm.toFixed(1) })}
-                                        </span>
-                                      </>
+                                      <svg className={`shrink-0 ${isCheapest ? "text-emerald-500" : "text-slate-400"}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+                                        <circle cx="7" cy="7" r="1.2" fill="currentColor" />
+                                      </svg>
+                                      {formatMoney(o.price, storeCurrency(o.storeId))}
+                                    </div>
+                                    {diff > 0 && (
+                                      <div className="max-w-[7.5rem] text-xs font-medium leading-snug text-slate-400">
+                                        {t("Chênh {amount}", { amount: formatMoney(diff, storeCurrency(o.storeId)) })}
+                                      </div>
                                     )}
                                   </div>
-                                </div>
-                              </div>
 
-                              <div className="flex items-center justify-between gap-3 sm:shrink-0 sm:justify-end sm:gap-4">
-                                <div className="text-right">
-                                  <div
-                                    className={`inline-flex items-center gap-1 text-lg font-extrabold tracking-tight ${isCheapest ? "text-emerald-600" : "text-slate-900"
-                                      }`}
-                                  >
-                                    <svg className={`shrink-0 ${isCheapest ? "text-emerald-500" : "text-slate-400"}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
-                                      <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                                    </svg>
-                                    {formatMoney(o.price, storeCurrency(o.storeId))}
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => setBuyOffer(o)}
+                                      className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
+                                    >
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <circle cx="9" cy="21" r="1" />
+                                        <circle cx="20" cy="21" r="1" />
+                                        <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                                      </svg>
+                                      {t("Mua ngay")}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
+                                      className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
+                                      title={t("Thêm vào giỏ")}
+                                      aria-label={t("Thêm vào giỏ")}
+                                    >
+                                      +
+                                      {cartQtyFor(o.product.id) > 0 && (
+                                        <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
+                                          {cartQtyFor(o.product.id)}
+                                        </span>
+                                      )}
+                                    </button>
                                   </div>
-                                  {diff > 0 && (
-                                    <div className="max-w-[7.5rem] text-xs font-medium leading-snug text-slate-400">
-                                      {t("Đắt hơn {amount}", { amount: formatMoney(diff, storeCurrency(o.storeId)) })}
-                                    </div>
-                                  )}
-                                </div>
-
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => setBuyOffer(o)}
-                                    className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                                  >
-                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                      <circle cx="9" cy="21" r="1" />
-                                      <circle cx="20" cy="21" r="1" />
-                                      <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                                    </svg>
-                                    {t("Mua")}
-                                  </button>
-                                  <a
-                                    href={directionsUrl(o.store)}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                                  >
-                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                      <circle cx="12" cy="10" r="3" />
-                                    </svg>
-                                    {t("Chỉ đường")}
-                                  </a>
                                 </div>
                               </div>
                             </div>
+                          );
+                        };
+
+                        const isBestCheapest = cheapest?.storeId === best.storeId;
+                        const isBestNearest = nearestStoreId === best.storeId;
+
+                        return (
+                          <li
+                            key={chainKey}
+                            className={`relative rounded-2xl border transition ${isBestCheapest
+                              ? "border-emerald-300 bg-emerald-50/50 shadow-sm"
+                              : isBestNearest
+                                ? "border-blue-300 bg-blue-50/50 shadow-sm"
+                                : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
+                              } ${!best.inStock ? "opacity-60" : ""}`}
+                          >
+                            {(isBestCheapest || isBestNearest) && best.inStock && (
+                              <span className="absolute -top-2.5 right-3 z-10 flex gap-1 pointer-events-none">
+                                {isBestCheapest && (
+                                  <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
+                                    {t("Rẻ nhất")}
+                                  </span>
+                                )}
+                                {isBestNearest && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></svg>
+                                    {t("Gần nhất")}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                            <div className="p-3">
+                              {renderOffer(best, false)}
+
+                              {/* Nút xổ chi nhánh */}
+                              {rest.length > 0 && (
+                                <button
+                                  onClick={() => setExpandedChains((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(chainKey)) next.delete(chainKey);
+                                    else next.add(chainKey);
+                                    return next;
+                                  })}
+                                  className="mt-2 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                                >
+                                  <svg
+                                    width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+                                    className={`transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                                  >
+                                    <path d="m6 9 6 6 6-6" />
+                                  </svg>
+                                  {isExpanded
+                                    ? t("Ẩn bớt")
+                                    : t("{n} chi nhánh khác", { n: rest.length })}
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Chi nhánh xổ ra — cuộn dọc trong khung giới hạn để so sánh với chi nhánh mặc định ở trên */}
+                            {isExpanded && rest.length > 0 && (
+                              <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+                                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                                  {rest.map((o) => renderOffer(o, true))}
+                                </div>
+                              </div>
+                            )}
                           </li>
                         );
-                      })}
-                    </ul>
-                  </div>
+                      });
+                    })()}
+                  </ul>
 
-                  {
-                    similar.length > 0 && (
-                      <aside className="mt-8 lg:mt-0">
-                        <h3 className="mb-3 text-sm font-semibold text-slate-700">{t("Sản phẩm tương tự")}</h3>
-                        <div className="flex flex-col gap-2">
-                          {similar.map((p) => {
-                            const st = priceStats.get(p.id);
-                            return (
-                              <button
-                                key={p.id}
-                                onClick={() => openProduct(p)}
-                                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2 text-left transition hover:border-emerald-500 hover:shadow-sm"
-                              >
-                                <ProductThumb product={p} size={48} contain />
-                                <span className="min-w-0 flex-1">
-                                  <span className="line-clamp-2 text-xs font-medium leading-snug text-slate-800">
-                                    {p.name}
-                                  </span>
-                                  {st && st.stores > 0 ? (
-                                    <span className="mt-0.5 block text-sm font-bold text-rose-600">
-                                      {formatMoney(st.min, st.currency)}
-                                    </span>
-                                  ) : st && st.outOfStock ? (
-                                    <span className="mt-0.5 block text-xs font-medium text-red-500">
-                                      {t("Hết hàng")}
-                                    </span>
-                                  ) : (
-                                    <span className="mt-0.5 block text-xs text-slate-400">{t("Chưa có giá")}</span>
-                                  )}
-                                </span>
-                              </button>
-                            );
-                          })}
+                  {/* Map desktop — nằm trong left column để không có khoảng trống */}
+                  {selected && (
+                    <div className="mt-4 hidden overflow-hidden rounded-xl border border-slate-200 lg:block">
+                      {userLoc && (
+                        <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-100 bg-white px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                          <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                              <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            {t("Bán kính")}
+                          </span>
+                          {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
+                              className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs transition ${radiusKm === r
+                                ? "border-emerald-600 bg-emerald-600 text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                                }`}
+                            >
+                              {r < 1 ? `${Math.round(r * 1000)}m` : "1km"}
+                            </button>
+                          ))}
+                          {radiusKm !== null && (
+                            <button
+                              onClick={() => setRadiusKm(null)}
+                              title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-600 transition hover:bg-rose-100"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 6 6 18M6 6l12 12" />
+                              </svg>
+                              {t("Bỏ giới hạn")}
+                            </button>
+                          )}
                         </div>
-                      </aside>
-                    )
-                  }
-                </div >
+                      )}
+                      <div className="relative z-0 lg:h-[380px]">
+                        <MapView
+                          center={center}
+                          userLoc={userLoc}
+                          userAddr={userAddr}
+                          markers={markers}
+                          highlightId={hoverStore}
+                          radiusKm={radiusKm}
+                          lang={lang}
+                          onBuy={(store) => openBuyForm(selected, store)}
+                          onStorePick={setStoreProducts}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {similar.length > 0 && (
+                  <aside className="mt-8 lg:mt-0">
+                    <h3 className="mb-3 text-sm font-semibold text-slate-700">{t("Sản phẩm tương tự")}</h3>
+                    <div className="flex flex-col gap-2">
+                      {similar.map((p) => {
+                        const st = priceStats.get(p.id);
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => openProduct(p)}
+                            className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2 text-left transition hover:border-emerald-500 hover:shadow-sm"
+                          >
+                            <ProductThumb product={p} size={48} contain />
+                            <span className="min-w-0 flex-1">
+                              <span className="line-clamp-2 text-xs font-medium leading-snug text-slate-800">
+                                {p.name}
+                              </span>
+                              {st && st.stores > 0 ? (
+                                <span className="mt-0.5 block text-sm font-bold text-rose-600">
+                                  {formatMoney(st.min, st.currency)}
+                                </span>
+                              ) : st && st.outOfStock ? (
+                                <span className="mt-0.5 block text-xs font-medium text-red-500">
+                                  {t("Hết hàng")}
+                                </span>
+                              ) : (
+                                <span className="mt-0.5 block text-xs text-slate-400">{t("Chưa có giá")}</span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </aside>
+                )}
               </div >
-            </div>
-          )
-          }
+            </div >
+          )}
         </section >
 
         {/* Map mobile — chỉ hiện trên mobile (lg: đã có map trong left column) */}
@@ -4924,586 +4679,593 @@ export default function Home() {
       }
 
       {/* Modal "Liên hệ dịch vụ - Affree" — form intake có phân loại nhu cầu (Phương án 1+). */}
-      {contactOpen && (() => {
-        // Validate SĐT VN ngay khi gõ.
-        const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
-        const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
-        const phoneError = contactPhone.trim().length > 0 && !phoneValid;
-        // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
-        const isMusic = contactKind === "nhac-ban-quyen";
-        // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
-        const isLove = contactKind === "loi-yeu-thuong";
-        const emailValid = isMusic
-          ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
-          : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
-        // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
-        const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
-        const canSubmit =
-          phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
-          (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
-          (!isMusic || contactPurposes.length > 0);
-        // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
-        const MUSIC_PURPOSES = [
-          t("🎬 Quảng cáo / TVC"),
-          t("📱 Video MXH (YT/TikTok/FB)"),
-          t("🏪 Phát trong cửa hàng / quán"),
-          t("🎤 Sự kiện / biểu diễn"),
-          t("🎮 Game / App"),
-        ];
-        const togglePurpose = (p: string) =>
-          setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
-        // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
-        const msgPlaceholder = {
-          "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
-          "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
-          "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
-          "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
-          "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
-          "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
-        }[contactKind];
-        const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
-          { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
-          { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
-          { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
-        ];
-        return (
-          <div
-            className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
-            style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
-            onClick={() => setContactOpen(false)}
-          >
+      {
+        contactOpen && (() => {
+          // Validate SĐT VN ngay khi gõ.
+          const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
+          const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
+          const phoneError = contactPhone.trim().length > 0 && !phoneValid;
+          // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
+          const isMusic = contactKind === "nhac-ban-quyen";
+          // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
+          const isLove = contactKind === "loi-yeu-thuong";
+          const emailValid = isMusic
+            ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
+            : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
+          // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
+          const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
+          const canSubmit =
+            phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
+            (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
+            (!isMusic || contactPurposes.length > 0);
+          // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
+          const MUSIC_PURPOSES = [
+            t("🎬 Quảng cáo / TVC"),
+            t("📱 Video MXH (YT/TikTok/FB)"),
+            t("🏪 Phát trong cửa hàng / quán"),
+            t("🎤 Sự kiện / biểu diễn"),
+            t("🎮 Game / App"),
+          ];
+          const togglePurpose = (p: string) =>
+            setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+          // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
+          const msgPlaceholder = {
+            "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
+            "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
+            "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
+            "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
+            "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
+            "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
+          }[contactKind];
+          const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
+            { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
+            { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
+            { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
+          ];
+          return (
             <div
-              className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
-                // không bị backdrop tối làm chìm chữ.
-                backdropFilter: "blur(24px) saturate(160%)",
-                WebkitBackdropFilter: "blur(24px) saturate(160%)",
-                backgroundColor: "rgba(255,255,255,0.96)",
-                boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
-              }}
+              className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
+              style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+              onClick={() => setContactOpen(false)}
             >
-              <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
-                <button
-                  onClick={() => setContactOpen(false)}
-                  aria-label={t("Đóng")}
-                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-                </button>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
-                  {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
-                </p>
-                <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
-                  {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
-                </h3>
-                {!isLove && (
-                  <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                    {t("Phản hồi trong 24h")}
-                  </p>
-                )}
-              </div>
-
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setContactError("");
-                  if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
-                  if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
-                  if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
-                  if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
-                  if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
-                  if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
-                  if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
-                  setContactSubmitting(true);
-                  // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
-                  saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
-                  try {
-                    await fetch("/api/contact", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        kind: contactKind,
-                        name: contactName.trim(),
-                        phone: phoneDigits,
-                        area: contactArea.trim(),
-                        email: contactEmail.trim(),
-                        msg: contactMsg.trim(),
-                        // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
-                        ...(contactKind === "nhac-ban-quyen" && {
-                          company: contactCompany.trim(),
-                          purposes: contactPurposes,
-                          album: contactAlbum.trim(),
-                          scope: contactScope.trim(),
-                          budget: contactBudget.trim(),
-                        }),
-                      }),
-                    });
-                  } catch {
-                    // im lặng — vẫn báo thành công vì đã lưu localStorage
-                  }
-                  setContactSubmitting(false);
-                  setContactOpen(false);
-                  setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
-                  setTimeout(() => setToast(""), 3500);
+              <div
+                className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
+                  // không bị backdrop tối làm chìm chữ.
+                  backdropFilter: "blur(24px) saturate(160%)",
+                  WebkitBackdropFilter: "blur(24px) saturate(160%)",
+                  backgroundColor: "rgba(255,255,255,0.96)",
+                  boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
                 }}
-                className="flex-1 overflow-y-auto px-5 py-4"
               >
-                {!isMusic && !isLove && (
-                  <div className="mb-3">
-                    <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
-                      {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {KINDS.map((k) => {
-                        const active = contactKind === k.key;
-                        return (
-                          <button
-                            key={k.key}
-                            type="button"
-                            onClick={() => setContactKind(k.key)}
-                            className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${active
-                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
-                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                              }`}
-                          >
-                            <span className="text-base">{k.emoji}</span>
-                            <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                <label className="mb-2.5 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                    {t("Họ tên")} {!isLove && <span className="text-rose-500">*</span>}
-                  </span>
-                  <input
-                    type="text"
-                    value={contactName}
-                    onChange={(e) => setContactName(e.target.value)}
-                    required
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                    placeholder={t("Vd: Nguyễn Văn A")}
-                  />
-                </label>
-
-                <label className="mb-2.5 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                    {t("SĐT / Zalo")} {!isLove && <span className="text-rose-500">*</span>}
-                  </span>
-                  <input
-                    type="tel"
-                    value={contactPhone}
-                    onChange={(e) => setContactPhone(e.target.value)}
-                    required
-                    className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${phoneError
-                      ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                      : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
-                      }`}
-                    placeholder={t("Vd: 09xxxxxxxx")}
-                  />
-                  {phoneError && (
-                    <span className="mt-1 block text-[11px] text-rose-600">
-                      {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
-                    </span>
+                <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
+                  <button
+                    onClick={() => setContactOpen(false)}
+                    aria-label={t("Đóng")}
+                    className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                  </button>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
+                    {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
+                  </p>
+                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
+                    {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
+                  </h3>
+                  {!isLove && (
+                    <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                      {t("Phản hồi trong 24h")}
+                    </p>
                   )}
-                </label>
+                </div>
 
-                {!isMusic && !isLove && (
-                  <label className="mb-2.5 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
-                    <input
-                      type="text"
-                      value={contactArea}
-                      onChange={(e) => setContactArea(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
-                    />
-                  </label>
-                )}
-
-                {isMusic && (
-                  <>
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                        {t("Email")} <span className="text-rose-500">*</span>
-                      </span>
-                      <input
-                        type="email"
-                        value={contactEmail}
-                        onChange={(e) => setContactEmail(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
-                      />
-                    </label>
-
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
-                      <input
-                        type="text"
-                        value={contactCompany}
-                        onChange={(e) => setContactCompany(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
-                      />
-                    </label>
-
-                    <div className="mb-2.5">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                        {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {MUSIC_PURPOSES.map((p) => {
-                          const active = contactPurposes.includes(p);
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setContactError("");
+                    if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
+                    if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
+                    if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
+                    if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
+                    if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
+                    if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
+                    if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
+                    setContactSubmitting(true);
+                    // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
+                    saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
+                    try {
+                      await fetch("/api/contact", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          kind: contactKind,
+                          name: contactName.trim(),
+                          phone: phoneDigits,
+                          area: contactArea.trim(),
+                          email: contactEmail.trim(),
+                          msg: contactMsg.trim(),
+                          // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
+                          ...(contactKind === "nhac-ban-quyen" && {
+                            company: contactCompany.trim(),
+                            purposes: contactPurposes,
+                            album: contactAlbum.trim(),
+                            scope: contactScope.trim(),
+                            budget: contactBudget.trim(),
+                          }),
+                        }),
+                      });
+                    } catch {
+                      // im lặng — vẫn báo thành công vì đã lưu localStorage
+                    }
+                    setContactSubmitting(false);
+                    setContactOpen(false);
+                    setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
+                    setTimeout(() => setToast(""), 3500);
+                  }}
+                  className="flex-1 overflow-y-auto px-5 py-4"
+                >
+                  {!isMusic && !isLove && (
+                    <div className="mb-3">
+                      <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
+                        {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {KINDS.map((k) => {
+                          const active = contactKind === k.key;
                           return (
                             <button
-                              key={p}
+                              key={k.key}
                               type="button"
-                              onClick={() => togglePurpose(p)}
-                              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${active
-                                ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
-                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                              onClick={() => setContactKind(k.key)}
+                              className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${active
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
+                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
                                 }`}
                             >
-                              {p}
+                              <span className="text-base">{k.emoji}</span>
+                              <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
                             </button>
                           );
                         })}
                       </div>
                     </div>
+                  )}
 
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
-                      <select
-                        value={contactAlbum}
-                        onChange={(e) => setContactAlbum(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      >
-                        <option value="">{t("Chọn")}</option>
-                        <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
-                        {SEED_MUSIC.map((al) => (
-                          <option key={al.id} value={al.title}>{al.title}</option>
-                        ))}
-                        <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
-                      </select>
-                    </label>
-
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
-                      <input
-                        type="text"
-                        value={contactScope}
-                        onChange={(e) => setContactScope(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
-                      />
-                    </label>
-
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
-                      <input
-                        type="text"
-                        value={contactBudget}
-                        onChange={(e) => setContactBudget(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
-                      />
-                    </label>
-                  </>
-                )}
-
-                {(contactKind === "hop-tac" || contactKind === "b2b") && (
                   <label className="mb-2.5 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                    <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                      {t("Họ tên")} {!isLove && <span className="text-rose-500">*</span>}
+                    </span>
                     <input
-                      type="email"
-                      value={contactEmail}
-                      onChange={(e) => setContactEmail(e.target.value)}
+                      type="text"
+                      value={contactName}
+                      onChange={(e) => setContactName(e.target.value)}
+                      required
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      placeholder={t("Vd: ten@congty.com")}
+                      placeholder={t("Vd: Nguyễn Văn A")}
                     />
                   </label>
-                )}
 
-                <label className="mb-3 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{isLove ? t("Lời nhắn") : t("Nội dung cụ thể")} {isLove && <span className="text-rose-500">*</span>}</span>
-                  <textarea
-                    value={contactMsg}
-                    onChange={(e) => setContactMsg(e.target.value)}
-                    rows={3}
-                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                    placeholder={msgPlaceholder}
-                  />
-                </label>
-
-                {!isLove && (
-                  <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
+                  <label className="mb-2.5 block">
+                    <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                      {t("SĐT / Zalo")} {!isLove && <span className="text-rose-500">*</span>}
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={contactConsent}
-                      onChange={(e) => setContactConsent(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+                      type="tel"
+                      value={contactPhone}
+                      onChange={(e) => setContactPhone(e.target.value)}
+                      required
+                      className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${phoneError
+                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                        : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
+                        }`}
+                      placeholder={t("Vd: 09xxxxxxxx")}
                     />
-                    <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
+                    {phoneError && (
+                      <span className="mt-1 block text-[11px] text-rose-600">
+                        {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
+                      </span>
+                    )}
                   </label>
-                )}
 
-                {contactError && (
-                  <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
-                    {contactError}
-                  </p>
-                )}
+                  {!isMusic && !isLove && (
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
+                      <input
+                        type="text"
+                        value={contactArea}
+                        onChange={(e) => setContactArea(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
+                      />
+                    </label>
+                  )}
 
-                <button
-                  type="submit"
-                  disabled={!canSubmit}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" /></svg>
-                  {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
-                </button>
-              </form>
+                  {isMusic && (
+                    <>
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Email")} <span className="text-rose-500">*</span>
+                        </span>
+                        <input
+                          type="email"
+                          value={contactEmail}
+                          onChange={(e) => setContactEmail(e.target.value)}
+                          required
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
+                        />
+                      </label>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
+                        <input
+                          type="text"
+                          value={contactCompany}
+                          onChange={(e) => setContactCompany(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
+                        />
+                      </label>
+
+                      <div className="mb-2.5">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MUSIC_PURPOSES.map((p) => {
+                            const active = contactPurposes.includes(p);
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => togglePurpose(p)}
+                                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${active
+                                  ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                                  }`}
+                              >
+                                {p}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
+                        <select
+                          value={contactAlbum}
+                          onChange={(e) => setContactAlbum(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        >
+                          <option value="">{t("Chọn")}</option>
+                          <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
+                          {SEED_MUSIC.map((al) => (
+                            <option key={al.id} value={al.title}>{al.title}</option>
+                          ))}
+                          <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
+                        </select>
+                      </label>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
+                        <input
+                          type="text"
+                          value={contactScope}
+                          onChange={(e) => setContactScope(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
+                        />
+                      </label>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
+                        <input
+                          type="text"
+                          value={contactBudget}
+                          onChange={(e) => setContactBudget(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {(contactKind === "hop-tac" || contactKind === "b2b") && (
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                      <input
+                        type="email"
+                        value={contactEmail}
+                        onChange={(e) => setContactEmail(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={t("Vd: ten@congty.com")}
+                      />
+                    </label>
+                  )}
+
+                  <label className="mb-3 block">
+                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{isLove ? t("Lời nhắn") : t("Nội dung cụ thể")} {isLove && <span className="text-rose-500">*</span>}</span>
+                    <textarea
+                      value={contactMsg}
+                      onChange={(e) => setContactMsg(e.target.value)}
+                      rows={3}
+                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      placeholder={msgPlaceholder}
+                    />
+                  </label>
+
+                  {!isLove && (
+                    <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={contactConsent}
+                        onChange={(e) => setContactConsent(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+                      />
+                      <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
+                    </label>
+                  )}
+
+                  {contactError && (
+                    <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
+                      {contactError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={!canSubmit}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" /></svg>
+                    {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
+                  </button>
+                </form>
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()
+      }
 
       {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ HOẶC từ click sponsor logo.
           Sponsor click set id = "__brand__<lower-name>" → offers filter theo brand thay vì storeId.
           Brand mode dùng RAW catalog (chưa filter region) để show full brand bất kể vùng. */}
-      {storeProducts && (rawCatalog || catalog) && (() => {
-        const isBrandMode = storeProducts.id.startsWith("__brand__");
-        const sourceCat = isBrandMode ? (rawCatalog || catalog!) : catalog!;
-        const brandLower = isBrandMode ? storeProducts.id.slice("__brand__".length) : "";
-        const productMap = new Map(sourceCat.products.map((p) => [p.id, p]));
-        // Emoji danh mục lấy từ SHEET (tab "tệp" → catalog.groups) để header section trang
-        // cửa hàng KHỚP với tile trang chủ — quản lý 1 nơi duy nhất là Google Sheet.
-        const groupEmoji: Record<string, string> = {};
-        (sourceCat.groups || []).forEach((g) => {
-          const label = (g.label || "").trim();
-          const emoji = (g.emoji || "").trim();
-          if (label && emoji) groupEmoji[label] = emoji;
-        });
-        const offersForView = isBrandMode
-          ? sourceCat.offers.filter((o) => {
-            const p = productMap.get(o.productId);
-            return p && (p.brand || "").toLowerCase().trim() === brandLower;
-          })
-          : sourceCat.offers.filter((o) => o.storeId === storeProducts.id);
-        return (
-          <StoreProductsPage
-            store={storeProducts}
-            offers={offersForView}
-            productMap={productMap}
-            userLoc={userLoc}
-            lang={lang}
-            headerH={headerH}
-            groupEmoji={groupEmoji}
-            onClose={() => setStoreProducts(null)}
-            onBuy={(ranked) => {
-              setStoreProducts(null);
-              setBuyOffer(ranked);
-            }}
-          />
-        );
-      })()}
+      {
+        storeProducts && (rawCatalog || catalog) && (() => {
+          const isBrandMode = storeProducts.id.startsWith("__brand__");
+          const sourceCat = isBrandMode ? (rawCatalog || catalog!) : catalog!;
+          const brandLower = isBrandMode ? storeProducts.id.slice("__brand__".length) : "";
+          const productMap = new Map(sourceCat.products.map((p) => [p.id, p]));
+          // Emoji danh mục lấy từ SHEET (tab "tệp" → catalog.groups) để header section trang
+          // cửa hàng KHỚP với tile trang chủ — quản lý 1 nơi duy nhất là Google Sheet.
+          const groupEmoji: Record<string, string> = {};
+          (sourceCat.groups || []).forEach((g) => {
+            const label = (g.label || "").trim();
+            const emoji = (g.emoji || "").trim();
+            if (label && emoji) groupEmoji[label] = emoji;
+          });
+          const offersForView = isBrandMode
+            ? sourceCat.offers.filter((o) => {
+              const p = productMap.get(o.productId);
+              return p && (p.brand || "").toLowerCase().trim() === brandLower;
+            })
+            : sourceCat.offers.filter((o) => o.storeId === storeProducts.id);
+          return (
+            <StoreProductsPage
+              store={storeProducts}
+              offers={offersForView}
+              productMap={productMap}
+              userLoc={userLoc}
+              lang={lang}
+              headerH={headerH}
+              groupEmoji={groupEmoji}
+              onClose={() => setStoreProducts(null)}
+              onBuy={(ranked) => {
+                setStoreProducts(null);
+                setBuyOffer(ranked);
+              }}
+            />
+          );
+        })()
+      }
 
       {/* Modal "Sản phẩm trong túi" — mở từ nút ⓘ trên thẻ túi. Bấm ⓘ trên từng SP → mở [[infoProduct]]. */}
-      {tuiInfo && catalog && (
-        <div
-          className="fixed inset-0 z-[2050] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
-          onClick={() => setTuiInfo(null)}
-        >
+      {
+        tuiInfo && catalog && (
           <div
-            className="flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[2050] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
+            onClick={() => setTuiInfo(null)}
           >
-            <div className="relative bg-gradient-to-br from-violet-50 via-white to-emerald-50 px-5 pb-4 pt-5">
-              <button
-                onClick={() => setTuiInfo(null)}
-                aria-label={t("Đóng")}
-                className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-              </button>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600">
-                🛍️ {loaiLabel(tuiInfo.loai)}
-              </p>
-              <h3 className="mt-0.5 pr-8 text-base font-bold leading-snug text-slate-900">
-                {tuiInfo.tenTui}
-              </h3>
-              <p className="mt-1 truncate text-xs text-slate-500">
-                {tuiInfo.chuyenTrang} · {t("{n} món", { n: tuiInfo.items.length })} · {formatMoney(tuiCombo(tuiInfo))}
-              </p>
-            </div>
-            <div className="flex-1 overflow-y-auto px-3 py-3">
-              <ul className="space-y-2">
-                {tuiInfo.items.map((it) => {
-                  const p = catalog.products.find((x) => x.id === it.productId);
-                  const gia = it.gia || priceStats.get(it.productId)?.min || 0;
-                  return (
-                    <li key={it.productId} className="rounded-xl border border-slate-200 bg-white p-2.5">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
-                          {p ? <ProductThumb product={p} size={48} contain /> : <span className="text-xs font-bold text-slate-400">{it.name.slice(0, 2)}</span>}
+            <div
+              className="flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="relative bg-gradient-to-br from-violet-50 via-white to-emerald-50 px-5 pb-4 pt-5">
+                <button
+                  onClick={() => setTuiInfo(null)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600">
+                  🛍️ {loaiLabel(tuiInfo.loai)}
+                </p>
+                <h3 className="mt-0.5 pr-8 text-base font-bold leading-snug text-slate-900">
+                  {tuiInfo.tenTui}
+                </h3>
+                <p className="mt-1 truncate text-xs text-slate-500">
+                  {tuiInfo.chuyenTrang} · {t("{n} món", { n: tuiInfo.items.length })} · {formatMoney(tuiCombo(tuiInfo))}
+                </p>
+              </div>
+              <div className="flex-1 overflow-y-auto px-3 py-3">
+                <ul className="space-y-2">
+                  {tuiInfo.items.map((it) => {
+                    const p = catalog.products.find((x) => x.id === it.productId);
+                    const gia = it.gia || priceStats.get(it.productId)?.min || 0;
+                    return (
+                      <li key={it.productId} className="rounded-xl border border-slate-200 bg-white p-2.5">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
+                            {p ? <ProductThumb product={p} size={48} contain /> : <span className="text-xs font-bold text-slate-400">{it.name.slice(0, 2)}</span>}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
+                            {p && (p.brand || p.unit) && <p className="truncate text-[11px] text-slate-400">{[p.brand, p.unit ? t(p.unit) : null].filter(Boolean).join(" · ")}</p>}
+                            {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia)}</p>}
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
-                          {p && (p.brand || p.unit) && <p className="truncate text-[11px] text-slate-400">{[p.brand, p.unit ? t(p.unit) : null].filter(Boolean).join(" · ")}</p>}
-                          {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia)}</p>}
-                        </div>
-                      </div>
-                      {p?.info && (
-                        <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-[12px] leading-relaxed text-slate-600">{p.info}</p>
-                      )}
-                      {p?.certifications && p.certifications.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {p.certifications.map((url, i) => (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <a key={i} href={url} target="_blank" rel="noopener noreferrer" title={t("Chứng nhận {n}", { n: i + 1 })} className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400">
-                              <img src={url} alt={t("Chứng nhận {n}", { n: i + 1 })} loading="lazy" className="h-full w-full object-contain p-1" />
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-            <div className="border-t border-slate-100 bg-slate-50 px-5 py-3">
-              <button
-                type="button"
-                onClick={() => { buyTuiWithAgent(tuiInfo); setTuiInfo(null); }}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-amber-500 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
-              >
-                🛍️ {t("Mua cả túi")}
-              </button>
+                        {p?.info && (
+                          <p className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-[12px] leading-relaxed text-slate-600">{p.info}</p>
+                        )}
+                        {p?.certifications && p.certifications.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {p.certifications.map((url, i) => (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <a key={i} href={url} target="_blank" rel="noopener noreferrer" title={t("Chứng nhận {n}", { n: i + 1 })} className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400">
+                                <img src={url} alt={t("Chứng nhận {n}", { n: i + 1 })} loading="lazy" className="h-full w-full object-contain p-1" />
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+              <div className="border-t border-slate-100 bg-slate-50 px-5 py-3">
+                <button
+                  type="button"
+                  onClick={() => { buyTuiWithAgent(tuiInfo); setTuiInfo(null); }}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-amber-500 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600"
+                >
+                  🛍️ {t("Mua cả túi")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Modal thông tin sản phẩm (nút ⓘ) */}
-      {infoProduct && (
-        <div
-          className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
-          onClick={() => setInfoProduct(null)}
-        >
+      {
+        infoProduct && (
           <div
-            className="liquid-glass flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
-            onClick={(e) => e.stopPropagation()}
-            style={{ WebkitBackdropFilter: "blur(32px)", backdropFilter: "blur(32px)" }}
+            className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/30 backdrop-blur-md p-4"
+            onClick={() => setInfoProduct(null)}
           >
-            {/* Header gradient + thumb + tên */}
-            <div className="relative bg-gradient-to-br from-emerald-50/80 via-white/40 to-sky-50/80 px-5 pb-4 pt-5">
-              <button
-                onClick={() => setInfoProduct(null)}
-                aria-label={t("Đóng")}
-                className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-800"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-              </button>
-              <div className="flex items-start gap-4">
-                <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100">
-                  <ProductThumb product={infoProduct} size={80} contain />
-                </div>
-                <div className="min-w-0 flex-1 pr-8 pt-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                    {t("Thông tin sản phẩm")}
-                  </p>
-                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900">
-                    {infoProduct.name}
-                  </h3>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    {infoProduct.brand && (
-                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
-                        {infoProduct.brand}
-                      </span>
-                    )}
-                    {infoProduct.unit && (
-                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
-                        {t(infoProduct.unit)}
-                      </span>
-                    )}
+            <div
+              className="liquid-glass flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
+              onClick={(e) => e.stopPropagation()}
+              style={{ WebkitBackdropFilter: "blur(32px)", backdropFilter: "blur(32px)" }}
+            >
+              {/* Header gradient + thumb + tên */}
+              <div className="relative bg-gradient-to-br from-emerald-50/80 via-white/40 to-sky-50/80 px-5 pb-4 pt-5">
+                <button
+                  onClick={() => setInfoProduct(null)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm backdrop-blur transition hover:bg-white hover:text-slate-800"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+                <div className="flex items-start gap-4">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100">
+                    <ProductThumb product={infoProduct} size={80} contain />
+                  </div>
+                  <div className="min-w-0 flex-1 pr-8 pt-1">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+                      {t("Thông tin sản phẩm")}
+                    </p>
+                    <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900">
+                      {infoProduct.name}
+                    </h3>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {infoProduct.brand && (
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
+                          {infoProduct.brand}
+                        </span>
+                      )}
+                      {infoProduct.unit && (
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+                          {t(infoProduct.unit)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Body cuộn được */}
-            <div className="flex-1 overflow-y-auto px-5 py-4">
-              {infoProduct.info ? (
-                <section>
-                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
-                    {t("Mô tả")}
-                  </h4>
-                  <div className="whitespace-pre-wrap rounded-xl bg-slate-50/80 px-4 py-3 text-sm leading-relaxed text-slate-700 ring-1 ring-slate-100">
-                    {infoProduct.info}
-                  </div>
-                </section>
-              ) : (
-                <p className="rounded-xl bg-slate-50/80 px-4 py-6 text-center text-xs text-slate-400 ring-1 ring-slate-100">
-                  {t("Chưa có mô tả cho sản phẩm này.")}
-                </p>
-              )}
+              {/* Body cuộn được */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {infoProduct.info ? (
+                  <section>
+                    <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
+                      {t("Mô tả")}
+                    </h4>
+                    <div className="whitespace-pre-wrap rounded-xl bg-slate-50/80 px-4 py-3 text-sm leading-relaxed text-slate-700 ring-1 ring-slate-100">
+                      {infoProduct.info}
+                    </div>
+                  </section>
+                ) : (
+                  <p className="rounded-xl bg-slate-50/80 px-4 py-6 text-center text-xs text-slate-400 ring-1 ring-slate-100">
+                    {t("Chưa có mô tả cho sản phẩm này.")}
+                  </p>
+                )}
 
-              {infoProduct.certifications && infoProduct.certifications.length > 0 && (
-                <section className="mt-5">
-                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="7" /><path d="M8.21 13.89 7 22l5-3 5 3-1.21-8.12" /></svg>
-                    {t("Chứng nhận")}
-                    <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-emerald-700">
-                      {infoProduct.certifications.length}
-                    </span>
-                  </h4>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {infoProduct.certifications.map((url, i) => (
-                      <a
-                        key={i}
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group relative block overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400 hover:shadow-md"
-                      >
-                        <div className="flex aspect-square items-center justify-center bg-slate-50">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={url}
-                            alt={t("Chứng nhận {n}", { n: i + 1 })}
-                            loading="lazy"
-                            className="h-full w-full object-contain p-1.5"
-                          />
-                        </div>
-                        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1 pt-4 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
-                          {t("Xem ảnh lớn")}
-                        </span>
-                      </a>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </div>
+                {infoProduct.certifications && infoProduct.certifications.length > 0 && (
+                  <section className="mt-5">
+                    <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="7" /><path d="M8.21 13.89 7 22l5-3 5 3-1.21-8.12" /></svg>
+                      {t("Chứng nhận")}
+                      <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-emerald-700">
+                        {infoProduct.certifications.length}
+                      </span>
+                    </h4>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {infoProduct.certifications.map((url, i) => (
+                        <a
+                          key={i}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group relative block overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-emerald-400 hover:shadow-md"
+                        >
+                          <div className="flex aspect-square items-center justify-center bg-slate-50">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt={t("Chứng nhận {n}", { n: i + 1 })}
+                              loading="lazy"
+                              className="h-full w-full object-contain p-1.5"
+                            />
+                          </div>
+                          <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1 pt-4 text-[10px] font-medium text-white opacity-0 transition group-hover:opacity-100">
+                            {t("Xem ảnh lớn")}
+                          </span>
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
 
-            {/* Footer */}
-            <div className="border-t border-slate-100 bg-white/60 px-5 py-3">
-              <button
-                onClick={() => setInfoProduct(null)}
-                className="w-full rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-              >
-                {t("Đóng")}
-              </button>
+              {/* Footer */}
+              <div className="border-t border-slate-100 bg-white/60 px-5 py-3">
+                <button
+                  onClick={() => setInfoProduct(null)}
+                  className="w-full rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  {t("Đóng")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )
+        )
       }
 
       {
