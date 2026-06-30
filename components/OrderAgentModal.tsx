@@ -689,6 +689,8 @@ export default function OrderAgentModal({
   const popupFrameSrc = sessionId && popupFrameTs
     ? `/api/order-sessions/${sessionId}/popup-frame?ts=${encodeURIComponent(popupFrameTs)}`
     : null;
+  const popupCurrentView = serverState?.popup?.view || (serverState?.popupFrameAvailable ? "full" : undefined);
+  const popupShowingQr = popupCurrentView !== "confirm";
 
   useEffect(() => {
     if (!popupViewerOpen) return;
@@ -715,6 +717,10 @@ export default function OrderAgentModal({
     const xRatio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const yRatio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
     void sendSessionEvent({ type: "popup_click", xRatio, yRatio });
+  }
+
+  async function switchPopupView(view: "qr" | "confirm" | "full") {
+    await sendSessionEvent({ type: "popup_switch_view", view });
   }
 
   
@@ -3146,7 +3152,9 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "qr" && (
-                          <PauseBox tone="amber" hint={t("💳 Worker đang cast popup thanh toán thật để bạn thao tác trực tiếp. Nếu popup không hiện đúng, vẫn có thể mở trang nguồn hoặc dùng fallback xác nhận thủ công.")}>
+                          <PauseBox tone="amber" hint={popupShowingQr
+                            ? t("💳 Bước 1: worker đang ưu tiên cast vùng QR ở đầu popup để bạn quét/thanh toán trước.")
+                            : t("✅ Bước 2: sau khi thanh toán, worker đang focus vùng cuối popup để bạn bấm nút xác nhận trên website thật.")}>
                             <div className="mb-2 space-y-2 rounded-lg border border-slate-200 bg-white p-3">
                               <p className="text-sm font-semibold text-slate-700">{t("Thông tin đặt hàng")}</p>
                               <div className="grid gap-2 sm:grid-cols-2">
@@ -3169,14 +3177,18 @@ export default function OrderAgentModal({
                                 <div className="mb-2 flex items-start justify-between gap-3">
                                   <div>
                                     <p className="text-sm font-semibold text-slate-800">
-                                      {serverState.popup.title || t("Popup thanh toán thật")}
+                                      {popupShowingQr
+                                        ? (serverState.popup.title || t("Bước 1: mã QR thanh toán"))
+                                        : t("Bước 2: nút xác nhận cuối")}
                                     </p>
                                     <p className="mt-1 text-xs text-slate-500">
-                                      {t("Click trực tiếp vào ảnh popup bên dưới để bấm các nút như Xác nhận / Đóng trên website thật.")}
+                                      {popupShowingQr
+                                        ? t("Worker đang crop vùng QR trong popup thật. Quét/chuyển khoản xong thì bấm nút chuyển xuống nút xác nhận.")
+                                        : t("Popup đang focus vùng cuối. Bạn có thể click trực tiếp vào ảnh bên dưới để bấm nút xác nhận trên website thật.")}
                                     </p>
                                   </div>
                                   <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                                    popup-focus
+                                    {serverState.popup.view || "popup-focus"}
                                   </span>
                                 </div>
                                 <img
@@ -3196,13 +3208,33 @@ export default function OrderAgentModal({
                                       {t("Nút phát hiện trong popup")}: {serverState.popup.actions.join(" · ")}
                                     </p>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setPopupViewerOpen(true)}
-                                    className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                                  >
-                                    {t("Mở popup lớn để thao tác")}
-                                  </button>
+                                  <div className="flex flex-wrap gap-2 pt-1">
+                                    {!popupShowingQr && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void switchPopupView("qr")}
+                                        className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                      >
+                                        {t("Hiện mã QR")}
+                                      </button>
+                                    )}
+                                    {popupShowingQr && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void switchPopupView("confirm")}
+                                        className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                      >
+                                        {t("Chuyển xuống nút xác nhận")}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setPopupViewerOpen(true)}
+                                      className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                    >
+                                      {t("Mở popup lớn để thao tác")}
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             ) : serverState?.qrCodeAvailable && sessionId ? (
@@ -3224,15 +3256,21 @@ export default function OrderAgentModal({
 
                             <div className="mt-2 space-y-2">
                               <button
-                                onClick={() => void submitPaymentConfirmed()}
+                                onClick={() => {
+                                  if (popupShowingQr) {
+                                    void switchPopupView("confirm");
+                                    return;
+                                  }
+                                  void submitPaymentConfirmed();
+                                }}
                                 disabled={paymentConfirmBusy}
                                 className="w-full rounded-lg bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
                               >
                                 {paymentConfirmBusy
                                   ? t("Đang kiểm tra thanh toán...")
-                                  : serverState?.popupFrameAvailable
-                                    ? t("Popup chưa tự đóng? Báo đã thanh toán xong")
-                                    : t("Tôi đã thanh toán xong")}
+                                  : popupShowingQr
+                                    ? t("Tôi đã thanh toán xong, xuống nút xác nhận")
+                                    : t("Đã bấm xác nhận xong, bắt đầu kiểm tra")}
                               </button>
                               <a
                                 href={serverState?.handoffUrl || activeOffer.productUrl}
@@ -3553,13 +3591,31 @@ export default function OrderAgentModal({
                   </div>
 
                   <div className="space-y-2">
+                    {!popupShowingQr && (
+                      <button
+                        type="button"
+                        onClick={() => void switchPopupView("qr")}
+                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                      >
+                        {t("Hiện lại mã QR")}
+                      </button>
+                    )}
+                    {popupShowingQr && (
+                      <button
+                        type="button"
+                        onClick={() => void switchPopupView("confirm")}
+                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10"
+                      >
+                        {t("Tôi đã thanh toán xong, xuống nút xác nhận")}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void submitPaymentConfirmed()}
-                      disabled={paymentConfirmBusy}
+                      disabled={paymentConfirmBusy || popupShowingQr}
                       className="w-full rounded-lg bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-200"
                     >
-                      {paymentConfirmBusy ? t("Đang kiểm tra thanh toán...") : t("Tôi đã thanh toán xong")}
+                      {paymentConfirmBusy ? t("Đang kiểm tra thanh toán...") : t("Đã bấm xác nhận xong, bắt đầu kiểm tra")}
                     </button>
                     <a
                       href={serverState.handoffUrl || activeOffer.productUrl}

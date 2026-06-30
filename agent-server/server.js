@@ -82,14 +82,23 @@ wss.on("connection", async (ws) => {
   let activeActionHistory = []; // Lưu lại lịch sử hành động giữa các phiên pause/resume
   let activeResumeHistory = []; // Lưu conversation history cho Tool-Use mode
 
-  // Gửi log về client
-  function sendLog(message, status = "info") {
+  // Gửi log qua bridge; chỉ log có audience="client" mới nên hiện ra UI client.
+  function sendLog(message, status = "info", options = {}) {
     console.log(`[LOG - ${status}] ${message}`);
     try {
-      ws.send(JSON.stringify({ type: "log", message, status }));
+      ws.send(JSON.stringify({
+        type: "log",
+        message,
+        status,
+        audience: options.audience === "client" ? "client" : "internal",
+      }));
     } catch (e) {
       // client disconnected
     }
+  }
+
+  function sendClientLog(message, status = "info") {
+    sendLog(message, status, { audience: "client" });
   }
 
   function sendPopupState(popup) {
@@ -101,14 +110,27 @@ wss.on("connection", async (ws) => {
         popup: popup
           ? {
               kind: popup.kind,
+              view: popup.view,
               title: popup.title,
               text: popup.text,
               actions: popup.actions,
+              scrollHint: popup.scrollHint,
               bounds: popup.bounds,
+              qrBounds: popup.qrBounds,
+              confirmBounds: popup.confirmBounds,
             }
           : undefined,
       }));
     } catch (e) { }
+  }
+
+  function getPopupFrameBounds(popup) {
+    if (!popup) return null;
+    if (popup.view === "qr" && popup.qrBounds) return popup.qrBounds;
+    // Ở view confirm vẫn chụp toàn bộ popup sau khi đã scroll xuống cuối,
+    // để user nhìn lại đúng ngữ cảnh như trước thay vì chỉ thấy riêng nút xác nhận.
+    if (popup.view === "confirm") return popup.bounds;
+    return popup.bounds;
   }
 
   function clearPopupFrameInterval() {
@@ -122,7 +144,9 @@ wss.on("connection", async (ws) => {
     clearPopupFrameInterval();
     if (!popupFocusState) return;
     popupFrameInterval = setInterval(() => {
-      void sendScreenshotFrame({ clip: popupFocusState.bounds, mode: "popup-focus" });
+      const clip = getPopupFrameBounds(popupFocusState);
+      if (!clip) return;
+      void sendScreenshotFrame({ clip, mode: `popup-focus-${popupFocusState.view || "full"}` });
     }, 1200);
   }
 
@@ -150,7 +174,7 @@ wss.on("connection", async (ws) => {
   function sendMessage(content, type = "message") {
     try {
       ws.send(JSON.stringify({ type, content }));
-      if (type === "message") sendLog(content);
+      if (type === "message") sendClientLog(content);
     } catch (e) {
       // client disconnected
     }
@@ -163,7 +187,7 @@ wss.on("connection", async (ws) => {
     } catch (e) { }
 
     if (phase === "waiting_user_input" && details?.requiredInput === "qr_payment") {
-      void refreshTxnnPopupFocus("waiting_for_qr_payment").then((popup) => {
+      void refreshTxnnPopupFocus("waiting_for_qr_payment", "qr").then((popup) => {
         if (!popup) {
           sendLog("TXNN: chưa detect được popup thanh toán thật, tạm giữ fallback hiện có.", "warning");
         }
@@ -283,7 +307,7 @@ wss.on("connection", async (ws) => {
             sendLog("Đã có quy trình đang chạy, vui lòng chờ...", "warning");
             return;
           }
-          sendLog(`Đã nhận lệnh đặt hàng cho: ${msg.payload?.productName || msg.productName || "unknown product"}`, "info");
+          sendClientLog(`Đã nhận lệnh đặt hàng cho: ${msg.payload?.productName || msg.productName || "unknown product"}`, "info");
           lastOrderPayload = msg.payload || msg;
           isBachHoaXanhFlow = lastOrderPayload?.chain === "bhx";
           runAutomatedOrder(lastOrderPayload);
@@ -356,50 +380,48 @@ wss.on("connection", async (ws) => {
           break;
 
         case "payment_submitted": {
-          try {
-            sendLog("Đã nhận tín hiệu người dùng báo thanh toán xong, bắt đầu xác minh lại trang.", "info");
-            sendStatus("running", { reason: "resume:payment_submitted" });
-            const confirmSelectors = [
-              'button:has-text("✅ Xác nhận")',
-              'button:has-text("Xác nhận")',
-              'button:has-text("OK")',
-            ];
-            let clicked = false;
-            for (const selector of confirmSelectors) {
-              const locator = page.locator(selector).last();
-              if (await locator.isVisible({ timeout: 600 }).catch(() => false)) {
-                await locator.click({ timeout: 3000 });
-                sendLog(`Đã click nút xác nhận cuối sau thanh toán bằng selector: ${selector}`, "success");
-                clicked = true;
-                break;
-              }
-            }
-            if (clicked && await completeTxnnAfterFinalConfirmation()) {
-              isAutomating = false;
-              break;
-            }
-            if (!clicked) {
-              sendLog("Không thấy nút xác nhận cuối sau khi user báo thanh toán; sẽ tiếp tục bằng AI loop để tự dò lại trang.", "warning");
-            }
-            await resumeAgenticLoop("payment_submitted");
-          } catch (err) {
-            sendLog(`Lỗi khi thử click nút xác nhận cuối sau thanh toán: ${err.message}`, "warning");
-            await resumeAgenticLoop("payment_submitted");
+          await handleTxnnPaymentSubmitted({
+            source: "payment_submitted",
+            logMessage: "Đã nhận tín hiệu người dùng báo thanh toán xong, bắt đầu xác minh lại trang.",
+            resumeReason: "payment_submitted",
+            clickConfirmButton: true,
+            missingConfirmLog: "Không thấy nút xác nhận cuối sau khi user báo thanh toán; sẽ tiếp tục bằng AI loop để tự dò lại trang.",
+            errorLogPrefix: "Lỗi khi thử click nút xác nhận cuối sau thanh toán",
+          });
+          break;
+        }
+
+        case "popup_switch_view": {
+          if (isAutomating) break;
+          const nextView = msg.view === "confirm" || msg.view === "full" ? msg.view : "qr";
+          const popup = await refreshTxnnPopupFocus(`popup_switch_view:${nextView}`, nextView);
+          if (!popup) {
+            sendLog("TXNN: không chuyển được popup view vì popup thanh toán không còn hiển thị.", "warning");
           }
           break;
         }
 
         case "popup_click": {
           if (!popupFocusState || isAutomating) break;
-          const bounds = popupFocusState.bounds;
+          const clickedPopupView = popupFocusState.view;
+          const bounds = getPopupFrameBounds(popupFocusState) || popupFocusState.bounds;
           const xRatio = Math.min(1, Math.max(0, Number(msg.xRatio) || 0));
           const yRatio = Math.min(1, Math.max(0, Number(msg.yRatio) || 0));
           const x = Math.round(bounds.x + bounds.width * xRatio);
           const y = Math.round(bounds.y + bounds.height * yRatio);
           await page.mouse.click(x, y);
           await page.waitForTimeout(900);
-          const popup = await refreshTxnnPopupFocus("popup_click");
-          if (!popup) {
+          const popup = await refreshTxnnPopupFocus("popup_click", popupFocusState?.view);
+          if (clickedPopupView === "confirm") {
+            await handleTxnnPaymentSubmitted({
+              source: "popup_click_confirm",
+              logMessage: "User đã click nút xác nhận trong popup; tự chuyển sang bước verify thanh toán.",
+              resumeReason: "popup_click_confirm",
+              clickConfirmButton: false,
+              missingConfirmLog: "Popup xác nhận đã đóng sau khi user click; không cần click lại nút xác nhận, tiếp tục verify luôn.",
+              errorLogPrefix: "Lỗi khi tự verify sau popup click xác nhận",
+            });
+          } else {
             sendLog("Popup thanh toán đã đóng sau thao tác của user; vẫn chờ user bấm xác nhận đã thanh toán để bắt đầu verify.", "info");
             sendStatus("waiting_user_input", {
               reason: "Popup thanh toán đã đóng. Hệ thống vẫn chờ user xác nhận đã thanh toán xong trước khi kiểm tra hoàn tất.",
@@ -878,14 +900,57 @@ wss.on("connection", async (ws) => {
     }
   }
 
-  async function detectTxnnPaymentPopup() {
+  async function detectTxnnPaymentPopup(preferredView) {
     if (!page || page.isClosed()) return null;
     try {
-      return await page.evaluate(() => {
+      return await page.evaluate(({ preferredView }) => {
         const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
         const normalizeLower = (value) => normalize(value).toLowerCase();
         const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+        const clampBounds = (rect) => ({
+          x: Math.max(0, Math.floor(rect.left)),
+          y: Math.max(0, Math.floor(rect.top)),
+          width: Math.max(1, Math.min(viewportWidth, Math.ceil(rect.width))),
+          height: Math.max(1, Math.min(viewportHeight, Math.ceil(rect.height))),
+        });
+        const pickScrollableContainer = (root) => {
+          const nodes = [root, ...Array.from(root.querySelectorAll('*'))];
+          let best = null;
+          for (const node of nodes) {
+            if (!(node instanceof HTMLElement)) continue;
+            const style = window.getComputedStyle(node);
+            const overflowY = style.overflowY || style.overflow;
+            const scrollable = /(auto|scroll|overlay)/.test(overflowY) && node.scrollHeight > node.clientHeight + 24;
+            if (!scrollable) continue;
+            if (!best || node.scrollHeight - node.clientHeight > best.scrollHeight - best.clientHeight) {
+              best = node;
+            }
+          }
+          return best;
+        };
+        const findBoundsForElement = (element) => {
+          if (!(element instanceof Element)) return undefined;
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 20 || rect.height < 20) return undefined;
+          return clampBounds(rect);
+        };
+        const findConfirmButton = (root) => {
+          const candidates = Array.from(root.querySelectorAll('button, [role="button"], a')).filter((node) => {
+            const text = normalizeLower(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || '');
+            return /xác nhận|xac nhan|ok|đặt hàng|dat hang|hoàn tất|hoan tat/.test(text);
+          });
+          return candidates.at(-1) || null;
+        };
+        const findQrElement = (root) => {
+          const imageCandidate = root.querySelector('img[alt*="QR" i], img[src^="data:image"], canvas');
+          if (imageCandidate) return imageCandidate;
+          const semanticBlock = Array.from(root.querySelectorAll('div, section, article, p, span')).find((node) => {
+            const text = normalizeLower(node.textContent || '');
+            return /qr|thanh toán|thanh toan|chuyển khoản|chuyen khoan/.test(text);
+          });
+          return semanticBlock || null;
+        };
         const nodes = Array.from(document.querySelectorAll('div, section, article, aside, [role="dialog"]'));
         const candidates = nodes.map((node) => {
           const text = normalize(node.textContent || "");
@@ -913,32 +978,63 @@ wss.on("connection", async (ws) => {
             ((Number(style.zIndex || '0') >= 10) ? 2 : 0) +
             (buttons.length ? 2 : 0);
           if (score < 5) return null;
-          return {
-            kind: isInvoiceDetails ? 'invoice_details' : isPaymentPopup ? 'payment' : 'dialog',
-            title: buttons.find((item) => /xác nhận thanh toán|xác nhận|đặt hàng/i.test(item)) || text.slice(0, 120),
-            text: text.slice(0, 1200),
-            actions: buttons.filter((item, index, arr) => arr.indexOf(item) === index).slice(0, 6),
-            bounds: {
-              x: Math.max(0, Math.floor(rect.left)),
-              y: Math.max(0, Math.floor(rect.top)),
-              width: Math.min(viewportWidth, Math.ceil(rect.width)),
-              height: Math.min(viewportHeight, Math.ceil(rect.height)),
-            },
-            score,
-          };
+          return { node, score, text, buttons, isInvoiceDetails, isPaymentPopup };
         }).filter(Boolean);
 
         candidates.sort((a, b) => b.score - a.score);
-        return candidates[0] || null;
-      });
+        const selected = candidates[0];
+        if (!selected) return null;
+
+        const root = selected.node;
+        const scrollContainer = pickScrollableContainer(root);
+        if (scrollContainer) {
+          if (preferredView === 'qr') {
+            scrollContainer.scrollTop = 0;
+          } else if (preferredView === 'confirm') {
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+          }
+        }
+
+        const rootRect = root.getBoundingClientRect();
+        const qrElement = findQrElement(root);
+        const confirmButton = findConfirmButton(root);
+        const qrBounds = findBoundsForElement(qrElement);
+        const confirmBounds = findBoundsForElement(confirmButton);
+        const view =
+          preferredView === 'qr' && qrBounds ? 'qr'
+            : preferredView === 'confirm' && confirmBounds ? 'confirm'
+              : qrBounds ? 'qr'
+                : confirmBounds ? 'confirm'
+                  : 'full';
+
+        return {
+          kind: selected.isInvoiceDetails ? 'invoice_details' : selected.isPaymentPopup ? 'payment' : 'dialog',
+          view,
+          title: selected.buttons.find((item) => /xác nhận thanh toán|xác nhận|đặt hàng/i.test(item)) || selected.text.slice(0, 120),
+          text: selected.text.slice(0, 1200),
+          actions: selected.buttons.filter((item, index, arr) => arr.indexOf(item) === index).slice(0, 6),
+          bounds: clampBounds(rootRect),
+          qrBounds,
+          confirmBounds,
+          scrollHint: view === 'confirm' ? 'bottom' : 'top',
+          debug: scrollContainer
+            ? {
+                scrollTop: scrollContainer.scrollTop,
+                scrollHeight: scrollContainer.scrollHeight,
+                clientHeight: scrollContainer.clientHeight,
+              }
+            : undefined,
+        };
+      }, { preferredView });
     } catch (err) {
       sendLog(`TXNN: lỗi khi detect popup thanh toán: ${err.message}`, "warning");
       return null;
     }
   }
 
-  async function refreshTxnnPopupFocus(reason = "refresh") {
-    const popup = await detectTxnnPaymentPopup();
+  async function refreshTxnnPopupFocus(reason = "refresh", preferredView) {
+    const desiredView = preferredView || popupFocusState?.view || "qr";
+    const popup = await detectTxnnPaymentPopup(desiredView);
     if (!popup) {
       clearPopupFrameInterval();
       if (popupFocusState) {
@@ -947,8 +1043,15 @@ wss.on("connection", async (ws) => {
       sendPopupState(null);
       return null;
     }
+    sendLog(
+      `TXNN: popup-focus ${reason} -> view=${popup.view}, scrollHint=${popup.scrollHint}, scrollTop=${popup.debug?.scrollTop ?? "n/a"}`,
+      "info"
+    );
     sendPopupState(popup);
-    await sendScreenshotFrame({ clip: popup.bounds, mode: "popup-focus" });
+    const clip = getPopupFrameBounds(popup);
+    if (clip) {
+      await sendScreenshotFrame({ clip, mode: `popup-focus-${popup.view || "full"}` });
+    }
     startPopupFrameInterval();
     return popup;
   }
@@ -1027,11 +1130,85 @@ wss.on("connection", async (ws) => {
     return false;
   }
 
+  async function waitForTxnnPostOrderPopups(options = {}) {
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 12000;
+    const pollMs = Number(options.pollMs) > 0 ? Number(options.pollMs) : 700;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (await detectTxnnCompletion()) {
+        return true;
+      }
+
+      const closedPrintPopup = await closeTxnnPopupByKeywords(["print hóa đơn", "in hóa đơn"], "print hóa đơn");
+      if (closedPrintPopup) {
+        continue;
+      }
+
+      const closedInvoicePopup = await closeTxnnPopupByKeywords(
+        ["hóa đơn chi tiết", "hoa don chi tiet", "chi tiết hóa đơn"],
+        "hóa đơn chi tiết"
+      );
+      if (closedInvoicePopup) {
+        continue;
+      }
+
+      await page.waitForTimeout(pollMs);
+    }
+
+    return detectTxnnCompletion();
+  }
+
   async function completeTxnnAfterFinalConfirmation() {
     await page.waitForTimeout(1200);
-    await closeTxnnPopupByKeywords(["print hóa đơn", "in hóa đơn"], "print hóa đơn");
-    await closeTxnnPopupByKeywords(["hóa đơn chi tiết", "hoa don chi tiet", "chi tiết hóa đơn"], "hóa đơn chi tiết");
-    return detectTxnnCompletion();
+    return waitForTxnnPostOrderPopups();
+  }
+
+  async function handleTxnnPaymentSubmitted(options = {}) {
+    const {
+      source = "payment_submitted",
+      logMessage = "Đang xác minh lại trạng thái thanh toán.",
+      resumeReason = source,
+      clickConfirmButton = true,
+      missingConfirmLog = "Không thấy nút xác nhận cuối; sẽ tiếp tục bằng AI loop để tự dò lại trang.",
+      errorLogPrefix = "Lỗi khi xác minh thanh toán",
+    } = options;
+
+    try {
+      sendLog(logMessage, "info");
+      sendStatus("running", { reason: `resume:${resumeReason}` });
+
+      let clicked = !clickConfirmButton;
+      if (clickConfirmButton) {
+        const confirmSelectors = [
+          'button:has-text("✅ Xác nhận")',
+          'button:has-text("Xác nhận")',
+          'button:has-text("OK")',
+        ];
+        for (const selector of confirmSelectors) {
+          const locator = page.locator(selector).last();
+          if (await locator.isVisible({ timeout: 600 }).catch(() => false)) {
+            await locator.click({ timeout: 3000 });
+            sendLog(`Đã click nút xác nhận cuối sau thanh toán bằng selector: ${selector}`, "success");
+            clicked = true;
+            break;
+          }
+        }
+      }
+
+      if (clicked && await completeTxnnAfterFinalConfirmation()) {
+        isAutomating = false;
+        return;
+      }
+
+      if (!clickConfirmButton || !clicked) {
+        sendLog(missingConfirmLog, "warning");
+      }
+      await resumeAgenticLoop(resumeReason);
+    } catch (err) {
+      sendLog(`${errorLogPrefix}: ${err.message}`, "warning");
+      await resumeAgenticLoop(resumeReason);
+    }
   }
 
   async function resumeAgenticLoopBHX(reason, content = null) {
