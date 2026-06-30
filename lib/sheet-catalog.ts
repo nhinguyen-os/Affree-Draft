@@ -350,7 +350,7 @@ export async function fetchCatalogScrapeTargets(): Promise<CatalogScrapeTarget[]
 }
 
 /** Tải + parse master sheet. Trả null nếu lỗi để caller fallback. */
-export async function fetchMasterCatalog(revalidate = 300): Promise<Catalog | null> {
+export async function fetchMasterCatalog(revalidate = 30): Promise<Catalog | null> {
   try {
     const res = await fetch(MASTER_SHEET_CSV_URL, { next: { revalidate } });
     if (!res.ok) return null;

@@ -41,7 +41,7 @@ function parsePct(raw: string): number | null {
   return hasPct ? num / 100 : num > 1 ? num / 100 : num;
 }
 
-export async function fetchDiscountMap(revalidate = 60): Promise<Map<string, number>> {
+export async function fetchDiscountMap(revalidate = 30): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
     const res = await fetch(DISCOUNT_SHEET_URL, { next: { revalidate } });

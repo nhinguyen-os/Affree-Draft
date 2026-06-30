@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchSheetStores } from "@/lib/sheet-stores";
 import { STORES } from "@/lib/stores";
 
-export const revalidate = 300; // cache 5 phút
+export const revalidate = 30; // 30s — đồng bộ với các nguồn sheet khác (sửa → reload ~30s là thấy)
 
 /**
  * Danh sách cửa hàng vật lý (store_id, toạ độ, địa chỉ…) cho client dựng marker bản đồ

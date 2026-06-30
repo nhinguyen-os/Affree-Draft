@@ -42,7 +42,7 @@ function splitCsv(csv: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
-export async function fetchSimilarGroups(revalidate = 60): Promise<SimilarGroup[]> {
+export async function fetchSimilarGroups(revalidate = 30): Promise<SimilarGroup[]> {
   try {
     const res = await fetch(SIMILAR_SHEET_URL, { next: { revalidate } });
     if (!res.ok) return [];

@@ -166,7 +166,7 @@ export function parseTuiFromSanPham(csv: string): Tui[] {
 }
 
 /** Tải túi: ưu tiên tab "SanPham" (có cột tui) → tab "Tui" → SEED_TUI. */
-export async function fetchTui(revalidate = 300): Promise<Tui[]> {
+export async function fetchTui(revalidate = 30): Promise<Tui[]> {
   // 1) Gom từ SanPham nếu đã thêm cột "tui".
   try {
     const res = await fetch(SANPHAM_CSV_URL, { next: { revalidate } });

@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.3";
+export const APP_VERSION = "1.3.4";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,18 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.4",
+      date: "29.06.2026",
+      highlights: [
+        "Album nhạc Khúc Chạm có đường dẫn riêng — bấm F5 hay chia sẻ link vẫn vào đúng trang album",
+        "Album nhạc giờ mua trọn bộ; các bài bên trong để nghe thử (vẫn mua lẻ được ở thẻ bài hát riêng ngoài trang chủ)",
+        "Gửi 'lời yêu thương' / 'đề nghị cấp phép nhạc' xong hiện lời cảm ơn ngay trên cửa sổ, kèm logo Khúc Chạm",
+        "Sửa lỗi không gửi được 'lời yêu thương' khi để trống tên/SĐT",
+        "Thêm dải 'Affree trong những con số' ở cuối trang: lượt truy cập, đơn đã tạo, lượt thêm giỏ — cùng số sản phẩm so giá / điểm bán quanh bạn / thương hiệu; số liệu thật, đếm tăng dần khi cuộn tới",
+        "Khu vực nhạc Khúc Chạm dùng đúng logo chính thức của kênh",
+        "Đưa khu vực 'Nhạc bản quyền' xuống dưới (sau khu vực món ăn) cho bố cục trang chủ tự nhiên hơn",
+      ],
+    }, {
       subVersion: "1.3.3",
       date: "26.06.2026",
       highlights: [

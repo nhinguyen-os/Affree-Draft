@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { DEFAULT_WIDGET, type KhucChamWidget } from "@/lib/khuccham-widget";
 
 /**
  * Banner "Khúc Chạm Channel" — bố cục theo Miro Update 26/06/2026:
@@ -11,10 +12,6 @@ import { useState } from "react";
  *  • Embed YouTube Music của @KhucChamChannel (click toàn banner → driven sang trang đích)
  */
 const YT_CHANNEL = "https://music.youtube.com/@KhucChamChannel";
-/** Video ID YouTube thường (embed được, phát nhạc bản quyền). */
-const VID_ALBUM = "k47rkLLuDlg";   // Album Mùa Hè Sôi Động
-const VID_WEATHER = "B7QWA7X8vH0"; // Âm nhạc và dự báo thời tiết
-const EMBED_VIDEO_ID = VID_ALBUM;
 
 type Props = {
   t: (s: string) => string;
@@ -124,50 +121,72 @@ export function KhucChamBanner({ t, landingUrl = YT_CHANNEL, onSendLove, onLicen
 type SideProps = {
   t: (s: string) => string;
   landingUrl?: string;
-  /** Video/playlist ID YouTube để nhúng mini-player. Mặc định = bài Mùa Hè Sôi Động. */
-  embedVideoId?: string;
   onSendLove?: () => void;
   onLicense?: () => void;
 };
 
-export function KhucChamSidePanel({ t, landingUrl = YT_CHANNEL, embedVideoId = EMBED_VIDEO_ID, onSendLove, onLicense }: SideProps) {
+const LOGO_FALLBACK = "/assets/khuc-cham-logo.png";
+// Pill kiểu "trắng" (link / liên hệ / nghe-không-marquee), dùng chung; rounded-2xl để chữ dài wrap đẹp.
+const WHITE_PILL_BASE =
+  "rounded-2xl border px-3 py-1.5 text-left text-[11px] font-medium leading-snug transition";
+const WHITE_PILL_IDLE = "border-white/25 bg-white/10 text-white/90 hover:bg-white/20";
+const WHITE_PILL_ACTIVE = "border-white/70 bg-white/25 text-white ring-1 ring-white/40";
+
+export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: SideProps) {
+  // Cấu hình ĐỘNG đọc từ Google Sheet (/api/khuccham-widget); chưa nạp/lỗi → DEFAULT_WIDGET.
+  const [cfg, setCfg] = useState<KhucChamWidget>(DEFAULT_WIDGET);
   // Mặc định MỞ mỗi lần mount/load. ✕ chỉ thu gọn cho lượt xem hiện tại (không nhớ).
   const [open, setOpen] = useState(true);
-  const [videoId, setVideoId] = useState(embedVideoId);
+  const [videoId, setVideoId] = useState(DEFAULT_WIDGET.defaultVideoId);
   const [autoplay, setAutoplay] = useState(false);
-  const play = (id: string) => { setVideoId(id); setAutoplay(true); };
+  const touched = useRef(false); // user đã tự chọn bài → không ghi đè khi cfg nạp xong
 
-  const albumTitle = t("Album Mùa Hè Sôi Động 2026");
-  const weatherLabel = t("Âm nhạc và dự báo thời tiết");
-  // Tên hiển thị ở footer theo video đang phát.
-  const footerTitle = videoId === VID_WEATHER ? weatherLabel : t("Mùa Hè Sôi Động");
-  const marqueeRun = (
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/khuccham-widget")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!alive || !d?.widget) return;
+        const w = d.widget as KhucChamWidget;
+        setCfg(w);
+        if (!touched.current) setVideoId(w.defaultVideoId);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const play = (id: string) => { touched.current = true; setVideoId(id); setAutoplay(true); };
+
+  const logo = cfg.logo || LOGO_FALLBACK;
+  const landing = landingUrl || cfg.landingUrl;
+  // Tên footer = nhãn pill nhạc đang phát; không khớp → tên kênh.
+  const footerTitle =
+    cfg.pills.find((p) => p.type === "nghe" && p.videoId === videoId)?.label || cfg.channelName;
+
+  const marqueeFor = (label: string) => (
     <span className="flex shrink-0 items-center gap-6 pr-6">
-      <span>{albumTitle}</span>
-      <span className="text-pink-300">♪</span>
-      <span>{albumTitle}</span>
-      <span className="text-pink-300">♪</span>
+      <span>{t(label)}</span><span className="text-pink-300">♪</span>
+      <span>{t(label)}</span><span className="text-pink-300">♪</span>
     </span>
   );
+
   const openChannel = () => {
-    if (typeof window !== "undefined") window.open(landingUrl, "_blank", "noopener,noreferrer");
+    if (typeof window !== "undefined") window.open(landing, "_blank", "noopener,noreferrer");
   };
 
-  // Thu gọn: tab dính mép PHẢI, canh giữa chiều dọc → luôn nằm giữa màn, không bị
-  // thanh công cụ đáy của trình duyệt che. Có vòng nhấp nháy cho nổi bật.
+  // Thu gọn: nút logo dính mép PHẢI, canh giữa chiều dọc → luôn nằm giữa màn, có vòng nhấp nháy.
   if (!open) {
     return (
       <button
         type="button"
         onClick={() => setOpen(true)}
         aria-label={t("Mở Khúc Chạm Channel")}
-        title={t("Khúc Chạm Channel")}
-        className="fixed right-0 top-1/2 z-40 flex h-16 w-12 -translate-y-1/2 items-center justify-center rounded-l-2xl bg-gradient-to-br from-orange-400 to-amber-500 text-white shadow-2xl ring-2 ring-white/70 transition hover:w-14"
+        title={t(cfg.channelName)}
+        className="fixed right-2 top-1/2 z-40 flex h-14 w-14 -translate-y-1/2 items-center justify-center rounded-full shadow-2xl transition hover:scale-110"
       >
-        {/* Vòng nhấp nháy thu hút mắt */}
-        <span className="pointer-events-none absolute inset-0 rounded-l-2xl bg-orange-400 opacity-50 animate-ping" aria-hidden="true" />
-        <span className="animate-note-bounce relative text-2xl drop-shadow-sm">♪</span>
-        <span className="animate-note-pulse pointer-events-none absolute left-1 top-1 text-xs text-pink-100" aria-hidden="true">♫</span>
+        <span className="pointer-events-none absolute inset-0 rounded-full bg-orange-400 opacity-40 animate-ping" aria-hidden="true" />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logo} alt={t(cfg.channelName)} className="relative h-14 w-14 rounded-full object-contain drop-shadow-lg" />
       </button>
     );
   }
@@ -175,11 +194,11 @@ export function KhucChamSidePanel({ t, landingUrl = YT_CHANNEL, embedVideoId = E
   // Thẻ Khúc Chạm đầy đủ — nổi góc dưới-phải, width co theo màn để bớt đè nội dung.
   return (
     <aside
-      className="fixed bottom-20 right-4 z-40 w-56 max-w-[calc(100vw-2rem)] sm:w-80"
-      aria-label={`${t("Khúc Chạm Channel")} — ${albumTitle}`}
+      className="fixed bottom-20 right-4 z-40 w-60 max-w-[calc(100vw-2rem)] sm:w-80"
+      aria-label={t(cfg.channelName)}
     >
       <div className="relative max-h-[calc(100vh-6rem)] overflow-y-auto overflow-x-hidden rounded-2xl bg-gradient-to-br from-[#1e1b4b] via-[#4c1d95] to-[#831843] p-3 text-white shadow-xl ring-1 ring-white/20">
-        {/* Nút đóng → thu gọn (mở lại được qua nút tròn) */}
+        {/* Nút đóng → thu gọn (mở lại được qua nút logo) */}
         <button
           type="button"
           onClick={() => setOpen(false)}
@@ -190,73 +209,79 @@ export function KhucChamSidePanel({ t, landingUrl = YT_CHANNEL, embedVideoId = E
           ✕
         </button>
 
-        {/* Header: avatar nhảy + tên kênh */}
+        {/* Header: logo quay + tên kênh */}
         <div className="flex items-center gap-2 pr-6">
           <button
             type="button"
             onClick={openChannel}
             aria-label={t("Mở Khúc Chạm Channel")}
-            className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-400 to-amber-500 shadow-sm ring-1 ring-orange-300 transition hover:scale-105"
+            className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full transition hover:scale-105 sm:h-12 sm:w-12"
           >
-            <span className="animate-note-bounce text-lg text-white drop-shadow-sm">♪</span>
-            <span className="animate-note-pulse pointer-events-none absolute -right-1 -top-1 text-[10px] text-pink-300" aria-hidden="true">♫</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={logo} alt={t(cfg.channelName)} className="animate-disc-spin h-full w-full object-cover" />
           </button>
-          <h3 className="text-sm font-bold tracking-tight text-white">
-            {t("Khúc Chạm Channel")}
+          <h3 className="whitespace-nowrap text-[13px] font-bold tracking-tight text-white sm:text-sm">
+            {t(cfg.channelName)}
           </h3>
         </div>
 
-        {/* Pill — xếp dọc. 2 pill nhạc = nút chọn bài, bấm là đổi player & tự phát. */}
+        {/* Pill — xếp dọc, đọc động từ sheet. Pill "nghe" = chọn bài (đổi player & tự phát);
+            "link" = mở trang ngoài; "lien_he_*" = mở form liên hệ. */}
         <div className="mt-2.5 flex flex-col gap-1.5">
-          <button
-            type="button"
-            onClick={() => play(VID_WEATHER)}
-            aria-pressed={videoId === VID_WEATHER}
-            className={`block rounded-full border px-3 py-1 text-left text-[11px] font-medium transition ${
-              videoId === VID_WEATHER
-                ? "border-white/70 bg-white/25 text-white ring-1 ring-white/40"
-                : "border-white/25 bg-white/10 text-white/90 hover:bg-white/20"
-            }`}
-          >
-            {weatherLabel}
-          </button>
-
-          {/* Pill album — CHẠY CHỮ */}
-          <button
-            type="button"
-            onClick={() => play(VID_ALBUM)}
-            aria-pressed={videoId === VID_ALBUM}
-            aria-label={albumTitle}
-            title={albumTitle}
-            className={`group flex items-center overflow-hidden rounded-full border px-3 py-1 text-[11px] font-semibold text-pink-100 transition ${
-              videoId === VID_ALBUM
-                ? "border-pink-300 bg-pink-500/35 ring-1 ring-pink-300/60"
-                : "border-pink-300/60 bg-pink-500/20 hover:bg-pink-500/30"
-            }`}
-          >
-            <span className="overflow-hidden">
-              <span className="animate-title-marquee flex w-max whitespace-nowrap">
-                {marqueeRun}
-                {marqueeRun}
-              </span>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSendLove?.()}
-            className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-left text-[11px] font-medium text-white/90 transition hover:bg-white/20"
-          >
-            {t("Gửi lời yêu thương")}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onLicense?.()}
-            className="rounded-2xl border border-white/25 bg-white/10 px-3 py-1.5 text-left text-[11px] font-medium leading-snug text-white/90 transition hover:bg-white/20"
-          >
-            {t("Gửi đề nghị nhận nhạc bản quyền & khai thác thương mại")}
-          </button>
+          {cfg.pills.map((pill, i) => {
+            const key = `${pill.type}-${i}`;
+            if (pill.type === "lien_he_yeu_thuong")
+              return (
+                <button key={key} type="button" onClick={() => onSendLove?.()} className={`${WHITE_PILL_BASE} ${WHITE_PILL_IDLE}`}>
+                  {t(pill.label)}
+                </button>
+              );
+            if (pill.type === "lien_he_ban_quyen")
+              return (
+                <button key={key} type="button" onClick={() => onLicense?.()} className={`${WHITE_PILL_BASE} ${WHITE_PILL_IDLE}`}>
+                  {t(pill.label)}
+                </button>
+              );
+            if (pill.type === "link")
+              return (
+                <a key={key} href={pill.url || landing} target="_blank" rel="noopener noreferrer" className={`${WHITE_PILL_BASE} ${WHITE_PILL_IDLE} block`}>
+                  {t(pill.label)}
+                </a>
+              );
+            // type "nghe"
+            const active = !!pill.videoId && videoId === pill.videoId;
+            if (pill.marquee)
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => pill.videoId && play(pill.videoId)}
+                  aria-pressed={active}
+                  title={t(pill.label)}
+                  className={`group flex items-center overflow-hidden rounded-full border px-3 py-1 text-[11px] font-semibold text-pink-100 transition ${
+                    active ? "border-pink-300 bg-pink-500/35 ring-1 ring-pink-300/60" : "border-pink-300/60 bg-pink-500/20 hover:bg-pink-500/30"
+                  }`}
+                >
+                  <span className="overflow-hidden">
+                    <span className="animate-title-marquee flex w-max whitespace-nowrap">
+                      {marqueeFor(pill.label)}
+                      {marqueeFor(pill.label)}
+                    </span>
+                  </span>
+                </button>
+              );
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => pill.videoId && play(pill.videoId)}
+                aria-pressed={active}
+                className={`${WHITE_PILL_BASE} ${active ? WHITE_PILL_ACTIVE : WHITE_PILL_IDLE}`}
+              >
+                {t(pill.label)}
+              </button>
+            );
+          })}
         </div>
 
         {/* Player nhúng YouTube (phát nhạc bản quyền) */}
@@ -264,7 +289,7 @@ export function KhucChamSidePanel({ t, landingUrl = YT_CHANNEL, embedVideoId = E
           <iframe
             key={videoId}
             src={`https://www.youtube.com/embed/${videoId}?rel=0${autoplay ? "&autoplay=1" : ""}`}
-            title={`${t("Khúc Chạm Channel")} — ${footerTitle}`}
+            title={`${t(cfg.channelName)} — ${footerTitle}`}
             className="absolute inset-0 h-full w-full"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             referrerPolicy="strict-origin-when-cross-origin"
@@ -273,18 +298,20 @@ export function KhucChamSidePanel({ t, landingUrl = YT_CHANNEL, embedVideoId = E
           />
         </div>
 
-        {/* Footer: tên album + nút sang YouTube Music */}
+        {/* Footer: tên bài đang phát + handle + nút sang YouTube Music */}
         <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 pb-0.5">
           <div className="min-w-0">
             <p className="truncate text-[12px] font-extrabold leading-tight">
               {footerTitle}
             </p>
-            <p className="truncate text-[9px] uppercase tracking-widest text-pink-200/90">
-              @KhucChamChannel
-            </p>
+            {cfg.handle && (
+              <p className="truncate text-[9px] uppercase tracking-widest text-pink-200/90">
+                {cfg.handle}
+              </p>
+            )}
           </div>
           <a
-            href={landingUrl}
+            href={landing}
             target="_blank"
             rel="noopener noreferrer"
             aria-label={t("Mở YouTube Music")}

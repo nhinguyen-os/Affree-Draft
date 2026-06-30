@@ -27,6 +27,9 @@ export type MusicAlbum = {
   /** Giá riêng của album (đ). Trống → dùng ALBUM_PRICE. */
   price?: number;
   songs: MusicSong[];
+  /** true = "bài lẻ thuần" (dòng sheet KHÔNG có cột album): CHỈ hiện thẻ "Bài hát",
+   *  không render thẻ Album. Bài vẫn vào danh sách bài lẻ để mua. */
+  single?: boolean;
 };
 
 /** Tách videoId từ link YouTube đủ kiểu (watch?v= · youtu.be/ · /embed/ · /shorts/) hoặc trả nguyên ID. */

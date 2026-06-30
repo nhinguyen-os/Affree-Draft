@@ -28,6 +28,8 @@ import { Logo } from "@/components/Logo";
 import { QtyInput } from "@/components/QtyInput";
 import { KhucChamSidePanel } from "@/components/KhucChamBanner";
 import { KhucChamAlbumList, type MusicBuyItem } from "@/components/KhucChamStore";
+import { SiteStats } from "@/components/SiteStats";
+import { bumpMetric } from "@/lib/metrics";
 import type { MusicOrderLine } from "@/components/MusicOrderModal";
 import { SEED_MUSIC } from "@/lib/music";
 import type { MapMarker } from "@/components/MapView";
@@ -676,6 +678,9 @@ export default function Home() {
   // Filter theo CHUỖI cửa hàng (chain, vd "astrabean"). Set khi URL = /<chain-slug>.
   // Chỉ hiện sản phẩm có offer ở chuỗi này — như "trang cửa hàng" của 1 chuỗi.
   const [activeChain, setActiveChain] = useState<string | null>(null);
+  // Album nhạc Khúc Chạm đang mở trang chi tiết (id album). Set khi URL = /nhac/<id>;
+  // sync 2 chiều với KhucChamAlbumList để F5/chia sẻ link giữ đúng trang album.
+  const [activeAlbum, setActiveAlbum] = useState<string | null>(null);
   // Cửa hàng đang xem sản phẩm (mở từ pin trên bản đồ).
   const [storeProducts, setStoreProducts] = useState<Store | null>(null);
   // Ô dịch vụ vừa bấm — để làm nổi bật (highlight) khối được chọn.
@@ -719,6 +724,10 @@ export default function Home() {
   const [contactConsent, setContactConsent] = useState(true);
   const [contactSubmitting, setContactSubmitting] = useState(false);
   const [contactError, setContactError] = useState("");
+  // Form "Gửi lời yêu thương": gửi xong hiện lời cảm ơn NGAY TRONG popup (không đóng).
+  const [loveSent, setLoveSent] = useState(false);
+  // Form "Đề nghị cấp phép nhạc": gửi xong hiện xác nhận NGAY TRONG popup (không đóng).
+  const [licenseSent, setLicenseSent] = useState(false);
   const [alertPhone, setAlertPhone] = useState("");
   const [myAlert, setMyAlert] = useState<PriceAlert | null>(null);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
@@ -802,6 +811,7 @@ export default function Home() {
       return [...prev, { product: p, offer: ranked, qty: 1 }];
     });
     setCartBumpKey((k) => k + 1);
+    bumpMetric("cart");
   }
 
   // Nhạc không nằm trong catalog → dựng product/offer/store tổng hợp (store "khuccham") để
@@ -849,6 +859,7 @@ export default function Home() {
       return [...prev, { product: offer.product, offer, qty: 1 }];
     });
     setCartBumpKey((k) => k + 1);
+    bumpMetric("cart");
   }
 
   // Nút "Mua ngay"/"Mua bài" của nhạc → mở FORM ĐẶT MUA NHẠC (sản phẩm số, KHÔNG agentic).
@@ -1109,6 +1120,9 @@ export default function Home() {
       .catch(() => setRawCatalog({ products: [], offers: [] }));
   }, []);
 
+  // Đếm 1 lượt truy cập cho mỗi phiên trình duyệt (số THẬT cho dải thống kê cuối trang).
+  useEffect(() => { bumpMetric("visit"); }, []);
+
   // URL → state (chạy 1 lần sau khi catalog nạp). Slug helpers ánh xạ tên-không-dấu về brand/cat/sản phẩm gốc.
   const pathname = usePathname();
   const router = useRouter();
@@ -1117,7 +1131,10 @@ export default function Home() {
     if (!catalog || urlSynced) return;
     const segs = (pathname || "/").split("/").filter(Boolean);
     if (segs.length === 0) { setUrlSynced(true); return; }
-    if (segs[0] === "p" && segs[1]) {
+    if (segs[0] === "nhac" && segs[1]) {
+      // Trang album nhạc Khúc Chạm — id album là slug (vd mua-he-soi-dong-2026).
+      setActiveAlbum(decodeURIComponent(segs[1]));
+    } else if (segs[0] === "p" && segs[1]) {
       const p = findProductBySlug(catalog, decodeURIComponent(segs[1]));
       if (p) setSelected(p);
     } else if (segs[0] === "nhan" && segs[1]) {
@@ -1217,7 +1234,10 @@ export default function Home() {
     if (!urlSynced) return;
     let url = "/";
     let shortUrl: string | null = null;
-    if (selected) {
+    if (activeAlbum) {
+      // Trang album nhạc — luôn có dạng /nhac/<id> để F5/chia sẻ giữ nguyên trang.
+      url = `/nhac/${activeAlbum}`;
+    } else if (selected) {
       const s = slugify(selected.id || selected.name);
       url = `/p/${s}`;
       shortUrl = `/${s}`;
@@ -1244,8 +1264,12 @@ export default function Home() {
       // Trang chuỗi: chỉ có dạng ngắn /<chain-slug>.
       url = `/${slugify(activeChain)}`;
     }
-    if (pathname !== url && pathname !== shortUrl) router.replace(url, { scroll: false });
-  }, [urlSynced, selected, activeTep, activeBrand, activeCat, activeChain, pathname, router]);
+    // Dùng history.replaceState (không phải router.replace) để đổi URL mà KHÔNG remount:
+    // `/` và `/nhac|/p|/nhan…` do 2 route file khác nhau phục vụ (page.tsx vs [...slug]),
+    // router.replace sẽ nhảy route → remount cả trang → nháy trang chủ 1 nhịp.
+    // Next vẫn sync history.replaceState với usePathname; F5/chia sẻ vẫn vào đúng trang.
+    if (pathname !== url && pathname !== shortUrl) window.history.replaceState(null, "", url);
+  }, [urlSynced, selected, activeAlbum, activeTep, activeBrand, activeCat, activeChain, pathname]);
 
   // Nạp cửa hàng vật lý + toạ độ từ tab "stores" (Google Sheet). Lỗi → giữ STORES tĩnh.
   useEffect(() => {
@@ -2978,12 +3002,14 @@ export default function Home() {
               onSendLove={() => {
                 setContactKind("loi-yeu-thuong");
                 setContactMsg("");
+                setLoveSent(false);
                 setContactOpen(true);
               }}
               onLicense={() => {
                 setContactKind("nhac-ban-quyen");
                 setContactMsg("");
                 setContactPurposes([]);
+                setLicenseSent(false);
                 setContactOpen(true);
               }}
             />
@@ -3436,7 +3462,7 @@ export default function Home() {
                     )}
                   </div>
                   {isMusicActive ? (
-                    <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} showAll headerH={headerH} />
+                    <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} showAll headerH={headerH} detailId={activeAlbum} onDetailChange={setActiveAlbum} />
                   ) : isTuiActive ? (
                   <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                     {catalog!.tui!.map((tu) => (
@@ -3739,7 +3765,7 @@ export default function Home() {
                           {t("Xem tất cả →")}
                         </button>
                       </div>
-                      <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} headerH={headerH} />
+                      <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} headerH={headerH} detailId={activeAlbum} onDetailChange={setActiveAlbum} />
                     </section>
                   );
                 }
@@ -4576,6 +4602,17 @@ export default function Home() {
         )}
       </main>
 
+      {catalog && (
+        <div className="mx-auto w-full max-w-6xl px-4">
+          <SiteStats
+            t={t}
+            products={(rawCatalog ?? catalog).products.length}
+            stores={(rawStores ?? getStores()).length}
+            brands={new Set((rawCatalog ?? catalog).products.map((p) => (p.brand || "").trim()).filter(Boolean)).size}
+          />
+        </div>
+      )}
+
       <footer className="mt-8 border-t border-slate-200 bg-white">
         <div className="mx-auto max-w-6xl px-4 py-7 pb-24 sm:pb-7 lg:pb-7">
           <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
@@ -4684,6 +4721,7 @@ export default function Home() {
           onClose={() => setMusicOrder(null)}
           onPlaced={() => {
             recordMusicBuy(musicOrder);
+            bumpMetric("order");
             setToast(t("Đã đặt mua nhạc · {n} mục", { n: musicOrder.length }));
             setTimeout(() => setToast(""), 4000);
           }}
@@ -4702,6 +4740,7 @@ export default function Home() {
           onClose={() => setBuyTui(null)}
           onPlaced={() => {
             recordTuiBuy(buyTui);
+            bumpMetric("order");
             setToast(t("Đã đặt cả túi {tui}", { tui: buyTui.tenTui }));
             setTimeout(() => setToast(""), 4000);
           }}
@@ -4719,6 +4758,7 @@ export default function Home() {
           onClose={() => setBuyOffer(null)}
           onPlaced={(code, chosen) => {
             recordBuy(chosen);
+            bumpMetric("order");
             setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
             setTimeout(() => setToast(""), 4000);
           }}
@@ -4808,6 +4848,70 @@ export default function Home() {
                 )}
               </div>
 
+              {isLove && loveSent ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-rose-50 text-3xl ring-1 ring-rose-100">
+                    <span aria-hidden="true">💚</span>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/assets/khuc-cham-logo.png"
+                      alt="Khúc Chạm"
+                      className="absolute inset-0 h-full w-full bg-rose-50 object-contain"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                    />
+                  </div>
+                  <h4 className="mt-4 text-lg font-bold text-slate-900">
+                    {t("Đã nhận lời yêu thương của bạn!")}
+                  </h4>
+                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
+                    {t("Cảm ơn bạn đã gửi lời nhắn tới Khúc Chạm 💌 — những dòng này thật sự tiếp thêm động lực cho cả nhà.")}
+                  </p>
+                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setContactMsg(""); setLoveSent(false); }}
+                      className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 active:scale-95"
+                    >
+                      {t("Gửi thêm một lời nữa")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setContactOpen(false)}
+                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    >
+                      {t("Đóng")}
+                    </button>
+                  </div>
+                </div>
+              ) : isMusic && licenseSent ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-orange-50 text-3xl ring-1 ring-orange-100">
+                    <span aria-hidden="true">🎵</span>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/assets/khuc-cham-logo.png"
+                      alt="Khúc Chạm"
+                      className="absolute inset-0 h-full w-full bg-orange-50 object-contain"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                    />
+                  </div>
+                  <h4 className="mt-4 text-lg font-bold text-slate-900">
+                    {t("Đã nhận đề nghị cấp phép của bạn!")}
+                  </h4>
+                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
+                    {t("Cảm ơn bạn đã quan tâm khai thác nhạc Khúc Chạm 🎶 — đội Affree sẽ liên hệ qua email trong 24h để trao đổi cấp phép.")}
+                  </p>
+                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setContactOpen(false)}
+                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    >
+                      {t("Đóng")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
@@ -4847,6 +4951,15 @@ export default function Home() {
                     // im lặng — vẫn báo thành công vì đã lưu localStorage
                   }
                   setContactSubmitting(false);
+                  // "Lời yêu thương" & "Cấp phép nhạc": hiện xác nhận NGAY TRONG popup, giữ popup mở.
+                  if (isLove) {
+                    setLoveSent(true);
+                    return;
+                  }
+                  if (isMusic) {
+                    setLicenseSent(true);
+                    return;
+                  }
                   setContactOpen(false);
                   setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
                   setTimeout(() => setToast(""), 3500);
@@ -4889,7 +5002,7 @@ export default function Home() {
                     type="text"
                     value={contactName}
                     onChange={(e) => setContactName(e.target.value)}
-                    required
+                    required={!isLove}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                     placeholder={t("Vd: Nguyễn Văn A")}
                   />
@@ -4903,7 +5016,7 @@ export default function Home() {
                     type="tel"
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
-                    required
+                    required={!isLove}
                     className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${
                       phoneError
                         ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
@@ -5074,6 +5187,7 @@ export default function Home() {
                   {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
                 </button>
               </form>
+              )}
             </div>
           </div>
         );

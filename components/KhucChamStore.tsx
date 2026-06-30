@@ -45,14 +45,27 @@ type Props = {
   showAll?: boolean;
   /** Chiều cao header app (để overlay trang chi tiết nằm DƯỚI header cố định, không che nó). */
   headerH?: number;
+  /** Album đang mở (id) — điều khiển từ ngoài để sync URL /nhac/<id>. */
+  detailId?: string | null;
+  /** Đổi album đang mở (null = đóng) → cha cập nhật URL. Có truyền = chế độ "controlled". */
+  onDetailChange?: (id: string | null) => void;
 };
 
-export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH = 0 }: Props) {
+export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH = 0, detailId, onDetailChange }: Props) {
   const [albums, setAlbums] = useState<MusicAlbum[]>(SEED_MUSIC);
   // Bài đang nghe thử (popup embed). null = đóng.
   const [preview, setPreview] = useState<MusicSong | null>(null);
-  // Album đang mở TRANG CHI TIẾT (danh sách bài dọc). null = đang ở lưới album.
-  const [detail, setDetail] = useState<MusicAlbum | null>(null);
+  // Album đang mở TRANG CHI TIẾT. Controlled (theo URL) nếu cha truyền onDetailChange,
+  // ngược lại dùng state cục bộ.
+  const [detailLocal, setDetailLocal] = useState<MusicAlbum | null>(null);
+  const controlled = onDetailChange != null;
+  const detail = controlled
+    ? (detailId ? albums.find((a) => a.id === detailId) ?? null : null)
+    : detailLocal;
+  const openDetail = (al: MusicAlbum | null) => {
+    if (controlled) onDetailChange!(al?.id ?? null);
+    else setDetailLocal(al);
+  };
   // Đổ bóng mép carousel — chỉ hiện khi còn cuộn được hướng đó (thẻ đầu/cuối không bị nhòe khi chưa cuộn).
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -121,7 +134,7 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
         {/* Chỉ blur mép PHẢI (gợi ý cuộn →); không blur mép trái để thẻ đầu không mờ góc. */}
         {!showAll && edges.right && <div className={EDGE_BLUR_RIGHT} />}
         <div ref={rowRef} onScroll={showAll ? undefined : updateEdges} className={containerCls}>
-        {albums.map((al) => {
+        {albums.filter((al) => !al.single).map((al) => {
           const price = albumPrice(al);
           return (
             <div
@@ -162,7 +175,7 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
               {/* Xem từng bài → SANG TRANG CHI TIẾT (card bài dọc) */}
               <button
                 type="button"
-                onClick={() => setDetail(al)}
+                onClick={() => openDetail(al)}
                 className="mt-1 inline-flex items-center gap-1 self-start text-[11px] font-semibold text-orange-700 transition hover:text-orange-800"
               >
                 {t("Xem {n} bài").replace("{n}", String(al.songs.length))} <span aria-hidden>→</span>
@@ -257,7 +270,7 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
             <div className="sticky top-0 z-10 -mx-4 flex items-center gap-2 border-b border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur">
               <button
                 type="button"
-                onClick={() => setDetail(null)}
+                onClick={() => openDetail(null)}
                 className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
               >
                 <span aria-hidden>←</span> {t("Quay lại")}
@@ -281,29 +294,40 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
               </div>
             </div>
 
-            {/* DANH SÁCH BÀI — chỉ nghe thử, KHÔNG mua lẻ (mua nguyên album ở trên) */}
+            {/* DANH SÁCH BÀI — nghe thử + giá + mua lẻ từng bài (hoặc mua nguyên album ở trên) */}
             <p className="mt-5 mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">{t("Danh sách bài hát")}</p>
             <div className="space-y-2.5">
               {detail.songs.map((s, i) => (
-                <button
+                <div
                   key={s.vid}
-                  type="button"
-                  onClick={() => setPreview(s)}
                   className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-orange-300 hover:bg-orange-50/40"
-                  aria-label={`${t("Nghe thử")} ${s.title}`}
                 >
-                  <span className="group/song relative aspect-video w-28 shrink-0 overflow-hidden rounded-lg ring-1 ring-slate-200 sm:w-36">
+                  <button
+                    type="button"
+                    onClick={() => setPreview(s)}
+                    className="group/song relative aspect-video w-24 shrink-0 overflow-hidden rounded-lg ring-1 ring-slate-200 sm:w-32"
+                    aria-label={`${t("Nghe thử")} ${s.title}`}
+                  >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={thumbUrl(s.vid)} alt={s.title} className="h-full w-full object-cover" loading="lazy" />
                     <span className="absolute inset-0 flex items-center justify-center bg-black/20 text-lg text-white opacity-90 transition group-hover/song:bg-black/45">▶</span>
                     <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-medium text-white">{t("Nghe thử")}</span>
-                  </span>
-                  <span className="flex min-w-0 flex-1 items-start gap-2">
-                    <span className="mt-0.5 shrink-0 text-xs font-semibold text-slate-400">{i + 1}.</span>
-                    <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{s.title}</span>
-                  </span>
-                  <span className="shrink-0 text-slate-300" aria-hidden>▶</span>
-                </button>
+                  </button>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="flex items-start gap-2">
+                      <span className="mt-0.5 shrink-0 text-xs font-semibold text-slate-400">{i + 1}.</span>
+                      <span className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{s.title}</span>
+                    </span>
+                  </div>
+                  {/* Mua nhạc theo TRỌN ALBUM (nút ở header) — từng bài chỉ để nghe thử. */}
+                  <button
+                    type="button"
+                    onClick={() => setPreview(s)}
+                    className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-bold text-slate-700 transition hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700 active:scale-95"
+                  >
+                    ▶ {t("Nghe thử")}
+                  </button>
+                </div>
               ))}
             </div>
           </div>

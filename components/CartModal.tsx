@@ -6,6 +6,7 @@ import { chainLabel, chainLogo } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
 import { getOrderConfig } from "@/lib/orderConfig";
+import { bumpMetric } from "@/lib/metrics";
 import { type Lang, tr } from "@/lib/i18n";
 
 const SLOTS = [
@@ -142,6 +143,7 @@ export default function CartModal({
           });
         }
         next[group.storeId] = "ok";
+        bumpMetric("order"); // mỗi cửa hàng đặt thành công = 1 đơn
       } catch {
         next[group.storeId] = "err";
       }

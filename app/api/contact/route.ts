@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PURCHASE_WEBHOOK_URL } from "@/lib/config";
+import { PURCHASE_WEBHOOK_URL, ALLOW_SHEET_WRITE } from "@/lib/config";
 
 /**
  * Lưu lead liên hệ "Liên hệ dịch vụ - Affree".
@@ -31,6 +31,10 @@ export async function POST(req: Request) {
   const webhook = PURCHASE_WEBHOOK_URL;
   if (!webhook) {
     return NextResponse.json({ ok: true, persisted: "client-only" });
+  }
+  // Chỉ ghi vào sheet ở production thật — local/preview bỏ qua (vẫn trả ok cho client).
+  if (!ALLOW_SHEET_WRITE) {
+    return NextResponse.json({ ok: true, persisted: "skipped-non-prod" });
   }
 
   try {
