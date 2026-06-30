@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cleanLabel, areaFromAddress } from "@/lib/geocode";
+import { cleanLabel, areaFromAddress, regionForAddress } from "@/lib/geocode";
 
 export const revalidate = 0;
 
@@ -57,15 +57,27 @@ async function nominatimSearch(q: string, bounded: boolean): Promise<any[]> {
     });
     if (!res.ok) return [];
     const data = await res.json();
-    return (Array.isArray(data) ? data : [])
-      .map((d: any) => ({
-        label: cleanLabel(d.address, d.display_name ?? ""),
-        lat: parseFloat(d.lat ?? ""),
-        lng: parseFloat(d.lon ?? ""),
-        area: areaFromAddress(d.address),
-        cc: (d.address?.country_code ?? "").toLowerCase(),
-      }))
+    // Nếu query bắt đầu bằng số nhà (vd "234 nguyễn...") nhưng Nominatim không trả house_number,
+    // tự prepend số nhà vào label để gợi ý hiển thị đúng địa chỉ user đang tìm.
+    const houseNumMatch = q.trim().match(/^(\d+[-/]?\d*[a-zA-Z]?)\s/);
+    const queryHouseNum = houseNumMatch ? houseNumMatch[1] : null;
+    const results = (Array.isArray(data) ? data : [])
+      .map((d: { display_name?: string; lat?: string; lon?: string; address?: Record<string, string> }) => {
+        let label = cleanLabel(d.address, d.display_name ?? "");
+        if (queryHouseNum && !d.address?.house_number && !/^\d/.test(label)) {
+          label = `${queryHouseNum} ${label}`;
+        }
+        return {
+          label,
+          lat: parseFloat(d.lat ?? ""),
+          lng: parseFloat(d.lon ?? ""),
+          area: areaFromAddress(d.address),
+          cc: (d.address?.country_code ?? "").toLowerCase(),
+          region: regionForAddress(d.address),
+        };
+      })
       .filter((r: any) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+    return results;
   } catch {
     return [];
   }

@@ -2,11 +2,17 @@ import { NextResponse } from "next/server";
 import { PRODUCT_IMAGES, SEED_CATALOG } from "@/lib/seed-catalog";
 import { fetchMasterCatalog } from "@/lib/sheet-catalog";
 import { fetchSheetGroups } from "@/lib/sheet-groups";
+import { fetchSimilarGroups } from "@/lib/sheet-similar";
+import { fetchTui } from "@/lib/sheet-tui";
+import { fetchDiscountMap } from "@/lib/sheet-discount";
 import { fetchSheetStores } from "@/lib/sheet-stores";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
-export const revalidate = 60; // cache 1 phút — sửa sheet (tệp/emoji/ngành hàng) hiện nhanh hơn
+// Cache 30s ở Vercel edge — request đầu mỗi 30s mới đập Google Sheets (~3.5s), các request
+// sau lấy từ cache (~100ms). Sửa sheet hiện sau ≤30s. Trade-off chấp nhận: trước đây
+// revalidate=0 khiến mọi user đợi 3.5s; giờ chỉ 1 user/30s phải đợi.
+export const revalidate = 30;
 
 // Nguồn catalog CHÍNH: Google Sheet "Danh sách sản phẩm" (định dạng product_id) trong
 // folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.
@@ -66,20 +72,57 @@ async function fetchCatalogTab(): Promise<Catalog | null> {
 export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
-  const [, sheetGroups] = await Promise.all([
-    fetchSheetStores(revalidate).then(setDynamicStores),
-    fetchSheetGroups(revalidate),
+  // Mọi nguồn sheet (admin sửa) dùng chung 30s để sửa sheet → reload là thấy gần như ngay.
+  const [, sheetGroups, similarGroups, discountMap, tui] = await Promise.all([
+    fetchSheetStores(30).then(setDynamicStores),
+    fetchSheetGroups(30),
+    fetchSimilarGroups(30),
+    fetchDiscountMap(30),
+    fetchTui(30),
   ]);
 
   /**
    * Gắn cấu hình tệp/ưu tiên từ Google Sheet vào catalog — CHỈ khi catalog chưa
    * tự khai báo (nguồn catalog-tab/apps-script có thể đã trả groups riêng).
    */
-  const withGroups = (catalog: Catalog): Catalog => ({
+  // Override `product.group` + `product.groups[]` theo `product_id` từ tab SanPham (1sZTv) —
+  // mỗi product_id có thể xuất hiện nhiều dòng với danh_muc khác nhau → gom thành array để
+  // sản phẩm xuất hiện ở NHIỀU section (vd Mì Hảo Hảo vừa "Giỏ tạp hóa" vừa "Worldcup").
+  const applyGroupOverrides = (catalog: Catalog): Catalog => {
+    const overrides = sheetGroups.sanPhamGroupOverrides;
+    const hasGroups = overrides && overrides.size > 0;
+    const hasDiscounts = discountMap && discountMap.size > 0;
+    if (!hasGroups && !hasDiscounts) return catalog;
+    return {
+      ...catalog,
+      products: catalog.products.map((p) => {
+        const gs = hasGroups ? overrides!.get(p.id) : undefined;
+        const d = hasDiscounts ? discountMap.get(p.id) : undefined;
+        // Sheet "giá hời" là single source of truth — khi tab có entries (hasDiscounts),
+        // xoá discountPct gốc từ catalog (% khuyến mãi cũ) cho sp KHÔNG có trong sheet,
+        // để section "Giá hời" chỉ hiện đúng list trong sheet.
+        const next: Product = { ...p };
+        if (gs && gs.length) {
+          next.group = gs[0];
+          next.groups = gs;
+        }
+        if (hasDiscounts) {
+          if (d != null) next.discountPct = d;
+          else delete next.discountPct;
+        }
+        return next;
+      }),
+    };
+  };
+  const withGroups = (catalog: Catalog): Catalog => applyGroupOverrides({
     ...catalog,
     groups: catalog.groups?.length ? catalog.groups : sheetGroups.groups,
+    danhMucGroups: catalog.danhMucGroups?.length ? catalog.danhMucGroups : sheetGroups.danhMucGroups,
     priorities: catalog.priorities?.length ? catalog.priorities : sheetGroups.priorities,
     sponsors: catalog.sponsors?.length ? catalog.sponsors : sheetGroups.sponsors,
+    similarGroups: similarGroups.length ? similarGroups : catalog.similarGroups,
+    tui: tui.length ? tui : catalog.tui,
+    mealTitles: catalog.mealTitles?.length ? catalog.mealTitles : sheetGroups.mealTitles,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
@@ -149,9 +192,13 @@ function parseCsv(csv: string): Catalog {
     group: idx("danh_muc") >= 0 ? idx("danh_muc") : idx("tệp"),
     unit: idx("unit"),
     image: idx("image"),
+    info: ["info", "mo_ta", "mô tả", "mo ta", "description", "ghi_chu", "ghi chú"].map(idx).find((i) => i >= 0) ?? -1,
+    certifications: ["chung_nhan", "chứng nhận", "chung nhan", "certifications", "certification", "cert", "anh_chung_nhan", "ảnh chứng nhận"].map(idx).find((i) => i >= 0) ?? -1,
     chain: idx("chain"),
     storeId: idx("store_id"),
     price: idx("price"),
+    listedPrice: ["gia_niem_yet", "giá niêm yết", "gia niem yet", "msrp", "list_price", "listed_price", "gia_bao_bi", "giá bao bì"].map(idx).find((i) => i >= 0) ?? -1,
+    discountPct: ["%_khuyen_mai", "%_km", "phan_tram_km", "% khuyến mãi", "% khuyen mai", "khuyen_mai", "khuyến mãi", "discount", "discount_pct"].map(idx).find((i) => i >= 0) ?? -1,
     inStock: idx("in_stock"),
     productUrl: idx("product_url"),
     lastChecked: idx("last_checked"),
@@ -185,6 +232,16 @@ function parseCsv(csv: string): Catalog {
     if (hiddenIds.has(productId)) continue; // sản phẩm bị tắt hiển thị
 
     if (!productMap.has(productId)) {
+      const listedRaw = ci.listedPrice >= 0
+        ? (r[ci.listedPrice] ?? "").replace(/\.(?=\d{3}\b)/g, "").replace(",", ".").replace(/[^\d.]/g, "")
+        : "";
+      const listedPrice = listedRaw ? Number(listedRaw) : 0;
+      let discountPct: number | undefined;
+      if (ci.discountPct >= 0) {
+        const raw = (r[ci.discountPct] ?? "").trim().replace("%", "").replace(",", ".");
+        const n = parseFloat(raw);
+        if (isFinite(n) && n > 0) discountPct = n > 1 ? n / 100 : n;
+      }
       productMap.set(productId, {
         id: productId,
         name: (r[ci.name] ?? productId).trim(),
@@ -193,6 +250,17 @@ function parseCsv(csv: string): Catalog {
         group: ci.group >= 0 ? (r[ci.group] ?? "").trim() || undefined : undefined,
         unit: (r[ci.unit] ?? "").trim(),
         image: ci.image >= 0 ? (r[ci.image] ?? "").trim() || undefined : undefined,
+        info: ci.info >= 0 ? (r[ci.info] ?? "").trim() || undefined : undefined,
+        certifications: (() => {
+          if (ci.certifications < 0) return undefined;
+          const urls = (r[ci.certifications] ?? "")
+            .split(/[;,\n]+/)
+            .map((u) => u.trim())
+            .filter((u) => /^https?:\/\//i.test(u));
+          return urls.length ? urls : undefined;
+        })(),
+        listedPrice: listedPrice > 0 ? listedPrice : undefined,
+        discountPct,
       });
     }
 
@@ -210,7 +278,7 @@ function parseCsv(csv: string): Catalog {
       price: priceRaw ? Number(priceRaw) : 0,
       inStock: !["0", "false", "het", "hết", "no", "out"].includes(stockRaw),
       productUrl: (r[ci.productUrl] ?? "").trim(),
-      lastChecked: (r[ci.lastChecked] ?? new Date().toISOString()).trim(),
+      lastChecked: ((r[ci.lastChecked] ?? "").trim() || new Date().toISOString()),
     });
     void (ci.chain as Chain | number); // chain suy ra từ store
   }

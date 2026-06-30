@@ -8,7 +8,7 @@ export async function GET(req: Request) {
   // Ensure the color is prefixed with '#'
   const cleanColor = color.startsWith("#") ? color : `#${color}`;
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
     <path fill="${cleanColor}" stroke="#fff" stroke-width="1.5" d="M12 2c-4 0-7 3-7 7 0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/>
     <circle cx="12" cy="9" r="2.6" fill="#fff"/>
   </svg>`;

@@ -104,7 +104,7 @@ export function parseStoresCsv(csv: string): Store[] {
 }
 
 /** Tải + parse tab "stores". Trả null nếu lỗi/rỗng để caller fallback về STORES tĩnh. */
-export async function fetchSheetStores(revalidate = 300): Promise<Store[] | null> {
+export async function fetchSheetStores(revalidate = 30): Promise<Store[] | null> {
   try {
     const res = await fetch(STORES_SHEET_CSV_URL, { next: { revalidate } });
     if (!res.ok) return null;

@@ -1,17 +1,6 @@
 import { STORES, SOURCE_META } from "./stores";
 import type { Store } from "./types";
 
-const ASTRABEAN_STORE: Store = {
-  id: "astrabean",
-  chain: "astrabean",
-  name: "Astrabean — PHIN LAB",
-  address: "San Jose, CA, USA",
-  lat: 37.3352,
-  lng: -121.8811,
-  website: "https://day-sales.com/store/astrabean/product",
-  currency: "USD"
-};
-
 const CATEGORY_MAP: Record<string, string> = {
   "Đồ ăn": "2,7,16,33,38,61,67,79,83,84,88,138,145,158,164,183,215,222,228,257",
   "Đồ uống": "159,12,120,161,165",
@@ -47,6 +36,7 @@ export async function fetchNearbyStores(options: {
 
   const headers: Record<string, string> = {
     "Accept-Language": "vi",
+    "Cache-Control": "public, max-age=300, s-maxage=300"
   };
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;
@@ -121,10 +111,6 @@ export async function fetchNearbyStores(options: {
           }
         }
       }
-    }
-
-    if (!mappedStores.some(s => s.id === "astrabean")) {
-      mappedStores.push(ASTRABEAN_STORE);
     }
 
     return { source: "api", stores: mappedStores };

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PURCHASE_WEBHOOK_URL } from "@/lib/config";
+import { PURCHASE_WEBHOOK_URL, ALLOW_SHEET_WRITE } from "@/lib/config";
 
 /**
  * Lưu hồ sơ người mua (tên / SĐT / địa chỉ).
@@ -22,6 +22,9 @@ export async function POST(req: Request) {
   const webhook = PURCHASE_WEBHOOK_URL;
   if (!webhook) {
     return NextResponse.json({ ok: true, persisted: "client-only" });
+  }
+  if (!ALLOW_SHEET_WRITE) {
+    return NextResponse.json({ ok: true, persisted: "skipped-non-prod" });
   }
 
   try {

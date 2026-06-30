@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CartItem } from "@/lib/types";
-import { chainLabel } from "@/lib/stores";
+import type { CartItem, RankedOffer } from "@/lib/types";
+import { chainLabel, chainLogo } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
 import { getOrderConfig } from "@/lib/orderConfig";
+import { bumpMetric } from "@/lib/metrics";
 import { type Lang, tr } from "@/lib/i18n";
 
 const SLOTS = [
@@ -33,12 +34,14 @@ export default function CartModal({
   onClose,
   onUpdateQty,
   onRemove,
+  onOrderWithAgent,
   lang = "vi",
 }: {
   items: CartItem[];
   onClose: () => void;
   onUpdateQty: (productId: string, storeId: string, qty: number) => void;
   onRemove: (productId: string, storeId: string) => void;
+  onOrderWithAgent?: (offers: RankedOffer[]) => void;
   lang?: Lang;
 }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
@@ -54,11 +57,16 @@ export default function CartModal({
 
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Close on Escape
+  // Close on Escape + lock body scroll
   useEffect(() => {
     const handler = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = prev;
+    };
   }, [onClose]);
 
   const storeGroups = useMemo((): StoreGroup[] => {
@@ -135,6 +143,7 @@ export default function CartModal({
           });
         }
         next[group.storeId] = "ok";
+        bumpMetric("order"); // mỗi cửa hàng đặt thành công = 1 đơn
       } catch {
         next[group.storeId] = "err";
       }
@@ -148,15 +157,15 @@ export default function CartModal({
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex items-end justify-center sm:items-center"
+      className="fixed inset-0 z-[2200] flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-md" onClick={onClose} />
 
-      {/* Panel */}
-      <div className="relative flex w-full max-w-lg flex-col rounded-t-2xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-2xl">
+      {/* Panel — liquid glass */}
+      <div className="liquid-glass relative flex w-full max-w-lg flex-col rounded-3xl max-h-[85vh] sm:max-h-[90vh]">
         {/* Header */}
         <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3">
           <svg
@@ -216,7 +225,7 @@ export default function CartModal({
               </div>
               <button
                 onClick={onClose}
-                className="mt-2 rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                className="mt-2 rounded-xl border border-slate-200 bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
               >
                 {t("Đóng")}
               </button>
@@ -294,8 +303,17 @@ export default function CartModal({
                 >
                   {/* Store header */}
                   <div className="mb-2.5 flex items-center gap-2">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                    <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-100 text-xs font-bold text-emerald-700 ring-1 ring-slate-200">
                       {group.storeName.slice(0, 2).toUpperCase()}
+                      {chainLogo(group.chain) && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={chainLogo(group.chain)}
+                          alt={group.storeName}
+                          className="absolute inset-0 h-full w-full bg-white object-contain p-0.5"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                        />
+                      )}
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800 truncate">{group.storeName}</p>
@@ -341,7 +359,7 @@ export default function CartModal({
                             }
                             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:border-slate-300 hover:bg-slate-100"
                           >
-                            {item.qty <= 1 ? "🗑" : "−"}
+                            −
                           </button>
                           <span className="w-5 text-center text-sm font-semibold text-slate-700">
                             {item.qty}
@@ -373,12 +391,6 @@ export default function CartModal({
                         />
                       </label>
                     )}
-                    {group.authNote ? (
-                      <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
-                        <span className="shrink-0">ℹ️</span>
-                        {group.authNote}
-                      </p>
-                    ) : null}
                     {group.needStorePick && (
                       <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-2.5 py-2 text-xs text-blue-700">
                         <span className="shrink-0">🏪</span>
@@ -400,9 +412,20 @@ export default function CartModal({
               <span className="text-lg font-bold text-rose-600">{formatMoney(grandTotal, "VND")}</span>
             </div>
             <button
-              onClick={placeAll}
+              onClick={() => {
+                if (onOrderWithAgent) {
+                  // Lấy offer đại diện (item đầu tiên) của mỗi store group
+                  const offers = storeGroups.map((g) => g.items[0].offer);
+                  onOrderWithAgent(offers);
+                } else {
+                  placeAll();
+                }
+              }}
               disabled={phase === "submitting" || !phone.trim() || !address.trim()}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              // iOS/macOS 26 prominent button style: solid vibrant fill + subtle shadow, disabled
+              // state HẲN dùng slate (xám rõ rệt) thay vì opacity giảm (mờ nhạt khó đoán). Active
+               // press → scale nhẹ + shadow co (haptic-feel).
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-150 hover:bg-emerald-700 active:scale-[0.98] active:shadow-[0_2px_8px_rgba(16,185,129,0.25)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
             >
               {phase === "submitting" ? (
                 <>

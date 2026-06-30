@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { fetchNearbyStores } from "@/lib/api-stores";
 
-export const revalidate = 0; // Dynamic route based on location query parameters
+export const revalidate = 30; // 30s — đồng bộ với các nguồn sheet khác (sửa → reload ~30s là thấy)
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);

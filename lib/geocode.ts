@@ -9,6 +9,22 @@ export function areaFromAddress(a: Record<string, string> | undefined): string {
   return [ward, district].filter(Boolean).join(" · ");
 }
 
+// Phân định vùng cho Affree: cc=vn → suy ra tỉnh/thành (áp dụng MỌI vùng, không riêng HCM).
+// HCM trả "TPHCM" (gọn, ổn định sau sáp nhập); tỉnh/thành khác lấy từ `state`, bỏ tiền tố
+// "Thành phố"/"Tỉnh" (vd "Thành phố Hà Nội" → "Hà Nội", "Tỉnh Đồng Nai" → "Đồng Nai").
+// Ngoài VN → lấy city/town/state (vd "Mississauga", "Toronto", "Ontario").
+export function regionForAddress(a: Record<string, string> | undefined): string {
+  if (!a) return "";
+  const cc = (a.country_code ?? "").toLowerCase();
+  if (cc === "vn") {
+    if (isHCMC(a)) return "TPHCM";
+    const state = (a.state || a.region || a.city || "").trim();
+    return state.replace(/^(thành phố|tỉnh)\s+/i, "").trim();
+  }
+  // Nước ngoài: ưu tiên city > town > county > state
+  return (a.city || a.town || a.county || a.state || "").trim();
+}
+
 // Sau sáp nhập đơn vị hành chính TP.HCM (2025), dữ liệu OSM hay gán SAI cấp "city"
 // cho phường (vd đường Phan Đình Phùng ở Phú Nhuận bị ghi city="Thủ Đức"). Toạ độ
 // thì đúng — chỉ nhãn quận/thành phố con là sai. Với địa chỉ TP.HCM ta bỏ cấp "city"
@@ -42,7 +58,7 @@ export function cleanLabel(a: Record<string, string> | undefined, fallback: stri
   return parts.length ? parts.join(", ") : fallback;
 }
 
-export type GeoResult = { label: string; lat: number; lng: number; area?: string; cc?: string };
+export type GeoResult = { label: string; lat: number; lng: number; area?: string; cc?: string; region?: string; };
 
 /** Geocode địa chỉ → toạ độ qua /api/geocode (Nominatim/OSM). Lỗi → null. */
 export async function geocode(
@@ -53,14 +69,14 @@ export async function geocode(
   try {
     const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
     const d = await res.json();
-    
+
     // Nếu API trả về mảng kết quả (dùng cho forward geocode autocomplete), 
     // ta lấy phần tử đầu tiên khớp với chữ geocode
     if (Array.isArray(d)) {
       if (d.length === 0) return null;
       return { lat: d[0].lat, lng: d[0].lng, label: d[0].label };
     }
-    
+
     if (d?.found) return { lat: d.lat, lng: d.lng, label: d.label };
     return null;
   } catch {
