@@ -19,7 +19,7 @@ export async function fetchNearbyStores(options: {
   limit?: string;
   category?: string | null;
 }) {
-  const { lat, lng, radius = "1000", limit = "500", category } = options;
+  const { lat, lng, radius = "1000", limit = "1000", category } = options;
 
   const baseUrl = (process.env.NEXT_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
   const apiKey = process.env.NEXT_GEO_API_KEY || "";
