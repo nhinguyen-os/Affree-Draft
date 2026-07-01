@@ -131,7 +131,7 @@ export async function fetchNearbyStores(options: {
       }
     }
 
-    return { source: "api", stores: data };
+    return { source: "api", stores: mappedStores };
   } catch (err) {
     return { source: "static-fallback", stores: [...STORES] };
   }
