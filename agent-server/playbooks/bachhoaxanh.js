@@ -266,6 +266,40 @@ async function login(page, payload, sendLog, sendMessage) {
     }
   }
 
+  await page.waitForTimeout(500);
+
+  const checkbox = page.locator('#policy-accept-all');
+
+  await waitForVisible(checkbox, 5000);
+  if (await checkbox.isVisible()) {
+    if (!(await checkbox.isChecked())) {
+      await checkbox.check();
+      sendLog(`Bach Hoa Xanh: Đã click checkbox "${checkbox}"`, "success");
+    }
+  }
+
+  await page.waitForTimeout(500);
+
+  const policyContinueSelector = [
+    'button:type="button"]:has-text("Xác nhận")',
+    'button:has-text("Xác nhận")',
+  ];
+
+  for (const selector of policyContinueSelector) {
+    try {
+      const element = await page.locator(selector).first();
+      await waitForVisible(element, 10000);
+      if (await element.isVisible({ timeout: 3000 })) {
+        await element.click({ timeout: 5000 });
+        sendLog(`Bach Hoa Xanh: Đã click nút "${selector}"`, "success");
+        sendMessage('Đã đồng ý với điều khoản và điều kiện.');
+        break;
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+
   return { done: true };
 }
 
