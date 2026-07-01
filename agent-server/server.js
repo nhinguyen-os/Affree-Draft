@@ -808,7 +808,12 @@ wss.on("connection", async (ws) => {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-blink-features=AutomationControlled"
-      ]
+      ],
+      proxy: {
+        server: process.env.PROXY_SERVER,
+        username: process.env.PROXY_USERNAME,
+        password: process.env.PROXY_PASSWORD
+      },
     });
 
     context = await browser.newContext({
