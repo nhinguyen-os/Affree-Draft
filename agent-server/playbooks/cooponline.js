@@ -1524,9 +1524,9 @@ async function showCartPreview(page, payload, sendLog, sendStatus, sendFrame) {
   await page.waitForTimeout(1500);
   await fillCoopProfilePopup(page, payload, sendLog, sendFrame, 30000);
   await selectCoopCheckoutScheduleWithRetry(page, payload, sendLog, sendFrame);
-  await sendFrame?.();
   sendLog("Co.opmart: Đã mở màn checkout để người dùng thao tác.", "success");
   sendStatus("coop_assist_ready", { url: page.url() });
+  await sendFrame?.();
   return { done: true };
 }
 
