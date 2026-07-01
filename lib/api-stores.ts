@@ -19,7 +19,7 @@ export async function fetchNearbyStores(options: {
   limit?: string;
   category?: string | null;
 }) {
-  const { lat, lng, radius = "1000", limit = "1000", category } = options;
+  const { lat, lng, radius = "1000", limit = "500", category } = options;
 
   const baseUrl = (process.env.NEXT_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
   const apiKey = process.env.NEXT_GEO_API_KEY || "";
@@ -32,6 +32,8 @@ export async function fetchNearbyStores(options: {
     const decodedCategory = decodeURIComponent(category);
     const businessTypeId = CATEGORY_MAP[decodedCategory] || ALL_OTHER_TYPES;
     url += `&businesstypeid=${encodeURIComponent(businessTypeId)}`;
+  } else {
+    url += `&businesstypeid=${encodeURIComponent(ALL_OTHER_TYPES)}`;
   }
 
   const headers: Record<string, string> = {
@@ -55,7 +57,7 @@ export async function fetchNearbyStores(options: {
     if (data && Array.isArray(data.result)) {
       for (const place of data.result) {
         const placeId = place.chain_id || place.place_id;
-        if (!placeId || seenIds.has(placeId)) continue;
+        if (!placeId || seenIds.has(placeId) || !place.name) continue;
         seenIds.add(placeId);
 
         const name = place.name || "";
@@ -129,7 +131,7 @@ export async function fetchNearbyStores(options: {
       }
     }
 
-    return { source: "api", stores: mappedStores };
+    return { source: "api", stores: data };
   } catch (err) {
     return { source: "static-fallback", stores: [...STORES] };
   }
