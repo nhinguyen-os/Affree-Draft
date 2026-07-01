@@ -268,13 +268,11 @@ async function login(page, payload, sendLog, sendMessage) {
 
   await page.waitForTimeout(500);
 
-  const checkboxes = page.locator('input[type="checkbox"][id^="policy-"]');
-  const count = await checkboxes.count();
+  const checkbox = page.locator('#policy-accept-all');
 
-  for (let i = 0; i < count; i++) {
-    const checkbox = checkboxes.nth(i);
-
-    if (await checkbox.isVisible() && !(await checkbox.isChecked())) {
+  await waitForVisible(checkbox, 5000);
+  if (await checkbox.isVisible()) {
+    if (!(await checkbox.isChecked())) {
       await checkbox.check();
       sendLog(`Bach Hoa Xanh: Đã click checkbox "${checkbox}"`, "success");
     }
