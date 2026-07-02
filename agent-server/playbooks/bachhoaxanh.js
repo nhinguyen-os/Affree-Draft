@@ -368,6 +368,8 @@ async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
   await page.waitForTimeout(1000);
 
   await page.goto('https://www.bachhoaxanh.com/gio-hang', { waitUntil: "load", timeout: 30000 });
+
+  sendMessage("Đi tới trang giỏ hàng.");
 }
 
 async function handleAddressPopup(page, payload, sendLog, sendMessage) {

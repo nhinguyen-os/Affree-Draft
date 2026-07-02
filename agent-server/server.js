@@ -333,12 +333,14 @@ wss.on("connection", async (ws) => {
               const optionText = String(msg.selectedText).replace(/\s+/g, " ").trim();
               const option = page.locator("label.radio-wrapper").filter({ hasText: optionText }).first();
               await option.click({ timeout: 3000 });
+              await page.waitForTimeout(100);
 
               sendLog(`Bach Hoa Xanh: Đã click lựa chọn giao hàng: ${optionText}`, "success");
+              sendMessage("Đã hoàn tất chọn thời gian giao hàng.");
               await page.mouse.click(0, 0);
+              await page.waitForTimeout(100);
               await resumeAgenticLoopBHX("submit");
             }
-            sendLog("Bach Hoa Xanh: Đã click lựa chọn giao hàng trên trang thật.", "success");
           } catch (err) {
             sendLog(`Bach Hoa Xanh: Không click được lựa chọn giao hàng trên trang thật: ${err.message}`, "warning");
           }
@@ -1414,6 +1416,7 @@ wss.on("connection", async (ws) => {
           return;
         }
       } else {
+        sendMessage("Tiến hành đặt hàng.");
         const buySelectors = [
           ".icon__cart-footer",
           'span:has-text("Đặt hàng")',
