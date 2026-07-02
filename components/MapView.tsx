@@ -193,7 +193,6 @@ export default function MapView({
   lang = "vi",
   tileUrl,
   cskdTaxonomy,
-  scrollWheelZoom = false,
 }: {
   center: [number, number];
   userLoc: { lat: number; lng: number } | null;
@@ -212,8 +211,6 @@ export default function MapView({
   tileUrl?: string;
   /** Taxonomy Loại CSKD — nếu có, legend hiển thị dạng category tree thay vì chain list. */
   cskdTaxonomy?: CskdCategory[];
-  /** true = lăn chuột zoom map (map toàn màn); false (mặc định) = để trang cuộn bình thường. */
-  scrollWheelZoom?: boolean;
 }) {
   const t = (vi: string) => tr(lang, vi);
   const [map, setMap] = useState<L.Map | null>(null);
@@ -363,7 +360,6 @@ export default function MapView({
         ref={setMap}
         center={center}
         zoom={zoomForRadius(radiusKm) ?? 13}
-        scrollWheelZoom={scrollWheelZoom}
         style={{ height: "100%", width: "100%" }}
         attributionControl={false}
         zoomControl={false}
