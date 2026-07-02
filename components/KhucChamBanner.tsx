@@ -13,6 +13,23 @@ import { DEFAULT_WIDGET, type KhucChamWidget } from "@/lib/khuccham-widget";
  */
 const YT_CHANNEL = "https://music.youtube.com/@KhucChamChannel";
 
+// Kiểu tối giản cho YouTube IFrame Player API (chỉ những gì dùng).
+type YTPlayer = {
+  loadVideoById: (id: string) => void;
+  cueVideoById: (id: string) => void;
+  destroy: () => void;
+};
+type YTNamespace = {
+  Player: new (
+    el: HTMLElement,
+    opts: {
+      videoId: string;
+      playerVars?: Record<string, number>;
+      events?: { onReady?: () => void };
+    },
+  ) => YTPlayer;
+};
+
 type Props = {
   t: (s: string) => string;
   /** Trang đích override (vd. test). Mặc định = channel YouTube Music của Khúc Chạm. */
@@ -138,8 +155,74 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
   // Mặc định MỞ mỗi lần mount/load. ✕ chỉ thu gọn cho lượt xem hiện tại (không nhớ).
   const [open, setOpen] = useState(true);
   const [videoId, setVideoId] = useState(DEFAULT_WIDGET.defaultVideoId);
-  const [autoplay, setAutoplay] = useState(false);
   const touched = useRef(false); // user đã tự chọn bài → không ghi đè khi cfg nạp xong
+  // videoId lúc player khởi tạo lần đầu (không đổi sau đó — mọi lần đổi bài qua API).
+  const initialVideoId = useRef(DEFAULT_WIDGET.defaultVideoId);
+  const playerHostRef = useRef<HTMLDivElement>(null); // div YT.Player thay iframe
+  const playerRef = useRef<YTPlayer | null>(null);
+  const playerReady = useRef(false);
+  const pendingCmd = useRef<{ fn: "load" | "cue"; id: string } | null>(null);
+  // Facade tiết kiệm: KHÔNG nạp YouTube IFrame API (~1.3MB JS + iframe) lúc mở trang.
+  // Hiện thumbnail + nút play; cú bấm ĐẦU TIÊN (nút play hoặc pill nhạc) mới boot player.
+  const [booted, setBooted] = useState(false);
+
+  // Khởi tạo YouTube IFrame Player API (chuẩn) MỘT LẦN — chỉ sau khi user bấm (booted).
+  // Dùng player.loadVideoById() để đổi bài mà KHÔNG remount iframe → giữ user-gesture
+  // → phát CÓ TIẾNG.
+  useEffect(() => {
+    if (!booted) return;
+    let alive = true;
+    const boot = () => {
+      if (!alive || !playerHostRef.current || playerRef.current) return;
+      const YT = (window as unknown as { YT?: YTNamespace }).YT;
+      if (!YT?.Player) return;
+      playerRef.current = new YT.Player(playerHostRef.current, {
+        videoId: initialVideoId.current,
+        playerVars: { rel: 0, playsinline: 1 },
+        events: {
+          onReady: () => {
+            playerReady.current = true;
+            const p = pendingCmd.current;
+            if (p && playerRef.current) {
+              if (p.fn === "load") playerRef.current.loadVideoById(p.id);
+              else playerRef.current.cueVideoById(p.id);
+              pendingCmd.current = null;
+            }
+          },
+        },
+      });
+    };
+    const w = window as unknown as { YT?: YTNamespace; onYouTubeIframeAPIReady?: () => void };
+    if (w.YT?.Player) {
+      boot();
+    } else {
+      // Nối vào callback global (có thể nhiều widget cùng chờ) rồi nạp script 1 lần.
+      const prev = w.onYouTubeIframeAPIReady;
+      w.onYouTubeIframeAPIReady = () => { prev?.(); boot(); };
+      if (!document.getElementById("yt-iframe-api")) {
+        const s = document.createElement("script");
+        s.id = "yt-iframe-api";
+        s.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(s);
+      }
+    }
+    return () => {
+      alive = false;
+      try { playerRef.current?.destroy(); } catch { /* noop */ }
+      playerRef.current = null;
+      playerReady.current = false;
+    };
+  }, [booted]);
+
+  // Gọi lệnh player; player chưa ready → xếp hàng, chạy khi onReady.
+  const runPlayer = (fn: "load" | "cue", id: string) => {
+    if (playerReady.current && playerRef.current) {
+      if (fn === "load") playerRef.current.loadVideoById(id);
+      else playerRef.current.cueVideoById(id);
+    } else {
+      pendingCmd.current = { fn, id };
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -149,13 +232,29 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
         if (!alive || !d?.widget) return;
         const w = d.widget as KhucChamWidget;
         setCfg(w);
-        if (!touched.current) setVideoId(w.defaultVideoId);
+        // Đổi bài mặc định theo sheet (nếu user chưa tự chọn) → cue (nạp, KHÔNG tự phát).
+        if (!touched.current && w.defaultVideoId && w.defaultVideoId !== videoId) {
+          setVideoId(w.defaultVideoId);
+          runPlayer("cue", w.defaultVideoId);
+        }
       })
       .catch(() => {});
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const play = (id: string) => { touched.current = true; setVideoId(id); setAutoplay(true); };
+  // Bấm pill nhạc → phát ngay bài đó CÓ TIẾNG (loadVideoById gọi trong ngữ cảnh click).
+  // Player chưa boot (facade) → xếp lệnh vào hàng đợi rồi boot; onReady sẽ phát tiếp.
+  const play = (id: string) => {
+    touched.current = true;
+    setVideoId(id);
+    if (!booted) {
+      pendingCmd.current = { fn: "load", id };
+      setBooted(true);
+      return;
+    }
+    runPlayer("load", id);
+  };
 
   const logo = cfg.logo || LOGO_FALLBACK;
   const landing = landingUrl || cfg.landingUrl;
@@ -250,12 +349,14 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
               );
             // type "nghe"
             const active = !!pill.videoId && videoId === pill.videoId;
-            if (pill.marquee)
+            // CHỈ pill đang được chọn (active) mới chạy chữ; pill khác (kể cả mặc định)
+            // hiển thị như pill thường.
+            if (active)
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => pill.videoId && play(pill.videoId)}
+                  onClick={() => (pill.videoId || cfg.defaultVideoId) && play(pill.videoId || cfg.defaultVideoId)}
                   aria-pressed={active}
                   title={t(pill.label)}
                   className={`group flex items-center overflow-hidden rounded-full border px-3 py-1 text-[11px] font-semibold text-pink-100 transition ${
@@ -274,7 +375,7 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
               <button
                 key={key}
                 type="button"
-                onClick={() => pill.videoId && play(pill.videoId)}
+                onClick={() => (pill.videoId || cfg.defaultVideoId) && play(pill.videoId || cfg.defaultVideoId)}
                 aria-pressed={active}
                 className={`${WHITE_PILL_BASE} ${active ? WHITE_PILL_ACTIVE : WHITE_PILL_IDLE}`}
               >
@@ -284,18 +385,31 @@ export function KhucChamSidePanel({ t, landingUrl, onSendLove, onLicense }: Side
           })}
         </div>
 
-        {/* Player nhúng YouTube (phát nhạc bản quyền) */}
+        {/* Player YouTube (IFrame API tạo iframe vào div này — phát nhạc bản quyền).
+            Chưa boot → facade: thumbnail bài hiện tại + nút play (0 byte JS YouTube). */}
         <div className="relative mt-2.5 aspect-video w-full overflow-hidden rounded-lg bg-black">
-          <iframe
-            key={videoId}
-            src={`https://www.youtube.com/embed/${videoId}?rel=0${autoplay ? "&autoplay=1" : ""}`}
-            title={`${t(cfg.channelName)} — ${footerTitle}`}
-            className="absolute inset-0 h-full w-full"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerPolicy="strict-origin-when-cross-origin"
-            allowFullScreen
-            loading="lazy"
-          />
+          {!booted ? (
+            <button
+              type="button"
+              onClick={() => play(videoId)}
+              aria-label={t("Phát video")}
+              className="group absolute inset-0 h-full w-full"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`}
+                alt={footerTitle}
+                loading="lazy"
+                className="h-full w-full object-cover"
+              />
+              {/* Nút play đỏ kiểu YouTube */}
+              <span className="absolute left-1/2 top-1/2 flex h-10 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-xl bg-[#f00] shadow-lg transition group-hover:scale-110">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="white" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+              </span>
+            </button>
+          ) : (
+            <div ref={playerHostRef} className="absolute inset-0 h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
+          )}
         </div>
 
         {/* Footer: tên bài đang phát + handle + nút sang YouTube Music */}

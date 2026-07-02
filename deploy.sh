@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ALIAS="gia-quanh-day.vercel.app"
+ALIAS="affree-msas.vercel.app"
 
 echo "▶ 1/4  Build local (prod)…"
 npx vercel build --prod

@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.5";
+export const APP_VERSION = "1.3.6";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,17 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.6",
+      date: "01.07.2026",
+      highlights: [
+        "Giỏ hàng trợ lý: thanh toán bằng QR (mỗi cửa hàng một mã riêng để quét chuyển khoản) hoặc nhập thẻ MỘT LẦN để trợ lý tự thanh toán cho tất cả nguồn trong giỏ",
+        "Đơn có mức mua tối thiểu (vd Co.op 200.000đ): tự thêm số lượng cho đủ mức, hiển thị rõ số lượng đã thêm và mức mua tối thiểu",
+        "Số liệu 'Mặt hàng trên kệ' tính theo lượng mặt hàng thực trên kệ ở các cửa hàng (sát thực tế điểm bán quanh bạn)",
+        "Album nhạc Khúc Chạm tính giá theo số bài (giá mỗi bài × số bài trong album)",
+        "Logo nhãn hiển thị đầy đủ, đúng nét hơn — Allo Clean giữ nguyên phần ruột logo, Beauty Republic hiện rõ chữ",
+        "Khu nhạc bản quyền đổi tên từ 'Khúc Chạm Store' thành 'Khúc Chạm Plaza'",
+      ],
+    }, {
       subVersion: "1.3.5",
       date: "30.06.2026",
       highlights: [

@@ -9,6 +9,14 @@ body {
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
+/* FIX "lướt là đứng": carousel ngang (overflow-x-auto) không khai báo overflow-y → CSS tự
+   tính overflow-y:auto → Chrome "latch" lăn DỌC vào carousel, chặn cuộn trang. Ép hidden
+   để wheel dọc chain thẳng lên trang — cuộn chạy trên compositor thread, không cần JS đỡ.
+   (Đã đo trên production: thiếu rule này + wheel handler JS cũ = 3-4 FPS, đứng hình nhiều giây.) */
+.overflow-x-auto {
+  overflow-y: hidden;
+}
+
 /* Nhãn địa chỉ chạy MỘT CHIỀU phải→trái liên tục (2 bản nối nhau, dịch -50% là khớp seamless). */
 @keyframes loc-marquee {
   from { transform: translateX(0); }
@@ -68,23 +76,25 @@ body {
   .animate-cart-bump, .animate-cart-ring, .animate-cart-plus-one { animation: none !important; }
 }
 
-/* Lửa nhấp nháy cho icon 🔥 trong "Giá hời quanh đây" */
+/* Lửa nhấp nháy cho icon 🔥 trong "Giá hời quanh đây".
+   CHỈ animate transform + opacity (compositor-only): bản cũ animate filter
+   (brightness/drop-shadow/hue-rotate) ép re-raster mỗi frame → tốn CPU/GPU nền liên tục. */
 @keyframes fire-flicker {
-  0%   { transform: scale(1)    translateY(0)    rotate(-4deg); filter: brightness(1)    drop-shadow(0 0 2px #ff6a00aa); }
-  10%  { transform: scale(1.22) translateY(-3px) rotate(3deg);  filter: brightness(1.3)  drop-shadow(0 0 6px #ff4400cc); }
-  20%  { transform: scale(1.1)  translateY(-1px) rotate(-5deg); filter: brightness(1.1)  drop-shadow(0 0 3px #ff9900bb); }
-  35%  { transform: scale(1.28) translateY(-5px) rotate(4deg);  filter: brightness(1.4)  drop-shadow(0 0 8px #ff3300dd) hue-rotate(10deg); }
-  50%  { transform: scale(1.05) translateY(-2px) rotate(-3deg); filter: brightness(1.05) drop-shadow(0 0 2px #ff6a00aa); }
-  65%  { transform: scale(1.3)  translateY(-6px) rotate(5deg);  filter: brightness(1.45) drop-shadow(0 0 10px #ff2200ee) hue-rotate(-8deg); }
-  78%  { transform: scale(1.12) translateY(-2px) rotate(-4deg); filter: brightness(1.15) drop-shadow(0 0 4px #ff8800bb); }
-  90%  { transform: scale(1.2)  translateY(-4px) rotate(2deg);  filter: brightness(1.25) drop-shadow(0 0 6px #ff4400cc); }
-  100% { transform: scale(1)    translateY(0)    rotate(-4deg); filter: brightness(1)    drop-shadow(0 0 2px #ff6a00aa); }
+  0%   { transform: scale(1)    translateY(0)    rotate(-4deg); opacity: .88; }
+  10%  { transform: scale(1.22) translateY(-3px) rotate(3deg);  opacity: 1; }
+  20%  { transform: scale(1.1)  translateY(-1px) rotate(-5deg); opacity: .92; }
+  35%  { transform: scale(1.28) translateY(-5px) rotate(4deg);  opacity: 1; }
+  50%  { transform: scale(1.05) translateY(-2px) rotate(-3deg); opacity: .9; }
+  65%  { transform: scale(1.3)  translateY(-6px) rotate(5deg);  opacity: 1; }
+  78%  { transform: scale(1.12) translateY(-2px) rotate(-4deg); opacity: .93; }
+  90%  { transform: scale(1.2)  translateY(-4px) rotate(2deg);  opacity: 1; }
+  100% { transform: scale(1)    translateY(0)    rotate(-4deg); opacity: .88; }
 }
 .animate-fire {
   display: inline-block;
   animation: fire-flicker 1.1s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
   transform-origin: bottom center;
-  will-change: transform, filter;
+  will-change: transform, opacity;
 }
 @media (prefers-reduced-motion: reduce) {
   .animate-fire { animation: none !important; }
@@ -132,12 +142,13 @@ body {
   .animate-title-marquee { animation: none !important; transform: none !important; }
 }
 
-/* Khúc Chạm Store — logo đĩa than QUAY tròn đều (hiệu ứng quay). */
+/* Khúc Chạm Plaza — logo đĩa than QUAY tròn đều (hiệu ứng quay). */
 @keyframes disc-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
 .animate-disc-spin {
+  display: inline-block;
   animation: disc-spin 5s linear infinite;
   transform-origin: center;
   will-change: transform;
@@ -153,8 +164,22 @@ body {
   transform-origin: center;
   will-change: opacity, transform;
 }
+/* Trái bóng lăn (dùng cho ⚽ WC). */
+@keyframes ball-roll {
+  0%   { transform: rotate(0deg)   translateX(0);    }
+  25%  { transform: rotate(90deg)  translateX(3px);  }
+  50%  { transform: rotate(180deg) translateX(0);    }
+  75%  { transform: rotate(270deg) translateX(-3px); }
+  100% { transform: rotate(360deg) translateX(0);    }
+}
+.animate-ball-roll {
+  display: inline-block;
+  animation: ball-roll 1.4s linear infinite;
+  transform-origin: center;
+  will-change: transform;
+}
 @media (prefers-reduced-motion: reduce) {
-  .animate-disc-spin, .animate-note-blink { animation: none !important; }
+  .animate-disc-spin, .animate-note-blink, .animate-ball-roll { animation: none !important; }
 }
 
 /**

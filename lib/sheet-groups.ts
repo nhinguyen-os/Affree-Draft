@@ -196,6 +196,14 @@ export function parsePriorityCsv(csv: string): PriorityProfile[] {
   return out;
 }
 
+/** Chuyển Google Drive /view link → direct image URL (uc?export=view). */
+function normalizeDriveUrl(url: string): string {
+  if (!url) return url;
+  const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+  if (m) return `https://lh3.googleusercontent.com/d/${m[1]}`;
+  return url;
+}
+
 /** Parse CSV tab "Nhãn tài trợ" → Sponsor[]. Dò cột theo tên header (tên · link · logo). */
 export function parseSponsorCsv(csv: string): Sponsor[] {
   const rows = splitCsv(csv).filter((r) => r.some((c) => c.trim() !== ""));
@@ -237,7 +245,7 @@ export function parseSponsorCsv(csv: string): Sponsor[] {
     out.push({
       name,
       link: ci.link >= 0 ? (r[ci.link] || "").trim() || undefined : undefined,
-      logo: ci.logo >= 0 ? (r[ci.logo] || "").trim() || undefined : undefined,
+      logo: ci.logo >= 0 ? normalizeDriveUrl((r[ci.logo] || "").trim()) || undefined : undefined,
       kind: ci.kind >= 0 ? parseKind(r[ci.kind] || "") : undefined,
     });
   }

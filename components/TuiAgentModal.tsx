@@ -140,6 +140,34 @@ export default function TuiAgentModal({
           {/* PHASE 1: liệt kê các món trong túi (gom theo chuyên trang) + thông tin nhận */}
           {phase === "form" && (
             <div className="space-y-3">
+              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng / Mua ngay ── */}
+              <section className="rounded-2xl border border-slate-200 p-3">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {t("Thông tin chung")}
+                </h3>
+                <div className="space-y-2.5">
+                  <Field label={t("Họ tên")}>
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Nguyễn Văn A")} className="input" />
+                  </Field>
+                  <Field label={t("Số điện thoại / Zalo")}>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      inputMode="tel"
+                      placeholder={t(rule.placeholderVi)}
+                      aria-invalid={phoneError}
+                      className="input"
+                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
+                    />
+                    {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
+                  </Field>
+                  <Field label={t("Địa chỉ giao hàng")}>
+                    <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} placeholder={t("Số nhà, đường, phường, quận…")} className="input resize-none" />
+                  </Field>
+                </div>
+              </section>
+
+              {/* ── Riêng từng chuyên trang: danh sách món trong túi ── */}
               {groups.map((g) => (
                 <div key={g.source} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-800">
@@ -167,34 +195,16 @@ export default function TuiAgentModal({
                 </div>
               ))}
 
-              <Field label={t("Người nhận")}>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Họ và tên")} className="input" />
-              </Field>
-              <Field label={t("Số điện thoại")}>
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  inputMode="tel"
-                  placeholder={t(rule.placeholderVi)}
-                  aria-invalid={phoneError}
-                  className="input"
-                  style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                />
-                {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
-              </Field>
-              <Field label={t("Địa chỉ giao")}>
-                <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} placeholder={t("Số nhà, đường, phường, quận…")} className="input resize-none" />
-              </Field>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+              {/* ── Thanh toán — cùng kiểu section với form giỏ hàng ── */}
+              <section className="rounded-2xl border border-slate-200 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-slate-800">{t("Thanh toán")}</span>
-                  <span className="font-semibold text-slate-800">{t("COD (tiền mặt khi nhận)")}</span>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("Thanh toán")}</h3>
+                  <span className="text-sm font-semibold text-slate-800">{t("COD (tiền mặt khi nhận)")}</span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-600">
                   {t("Túi mua trên {n} chuyên trang → trợ lý đặt lần lượt từng nơi, giao theo từng nguồn.", { n: groups.length })}
                 </p>
-              </div>
+              </section>
             </div>
           )}
 

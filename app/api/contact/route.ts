@@ -14,6 +14,7 @@ type ContactRecord = {
   area?: string;
   email?: string;
   msg?: string;
+  recipient?: string; // form "lời yêu thương": tên người thân sẽ nhận lời nhắn
 };
 
 export async function POST(req: Request) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cleanLabel, areaFromAddress } from "@/lib/geocode";
+import { cleanLabel, areaFromAddress, regionForAddress } from "@/lib/geocode";
 
 export const revalidate = 0;
 
@@ -29,6 +29,7 @@ export async function GET(req: Request) {
       label: cleanLabel(a, data?.display_name ?? ""),
       area: areaFromAddress(a),
       cc: (a.country_code ?? "").toLowerCase(),
+      region: regionForAddress(a),
     });
   } catch {
     return NextResponse.json({ label: "", area: "", cc: "" });

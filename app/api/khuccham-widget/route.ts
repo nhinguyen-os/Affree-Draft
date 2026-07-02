@@ -20,8 +20,8 @@ export async function GET() {
     ]);
     const settingsCsv = s.ok ? await s.text() : "";
     const pillsCsv = p.ok ? await p.text() : "";
-    return NextResponse.json({ widget: buildWidget(settingsCsv, pillsCsv) });
+    return NextResponse.json({ widget: buildWidget(settingsCsv, pillsCsv) }, { headers: { "Cache-Control": "public, max-age=0, s-maxage=60, stale-while-revalidate=3600" } });
   } catch {
-    return NextResponse.json({ widget: DEFAULT_WIDGET });
+    return NextResponse.json({ widget: DEFAULT_WIDGET }, { headers: { "Cache-Control": "public, max-age=0, s-maxage=15, stale-while-revalidate=60" } });
   }
 }
