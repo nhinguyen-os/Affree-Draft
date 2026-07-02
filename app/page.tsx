@@ -600,6 +600,8 @@ export default function Home() {
   const [contactConsent, setContactConsent] = useState(true);
   const [contactSubmitting, setContactSubmitting] = useState(false);
   const [contactError, setContactError] = useState("");
+  const [loveSent, setLoveSent] = useState(false);
+  const [licenseSent, setLicenseSent] = useState(false);
   const [alertPhone, setAlertPhone] = useState("");
   const [myAlert, setMyAlert] = useState<PriceAlert | null>(null);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
@@ -4698,356 +4700,470 @@ export default function Home() {
       }
 
       {/* Modal "Liên hệ dịch vụ - Affree" — form intake có phân loại nhu cầu (Phương án 1+). */}
-      {
-        contactOpen && (() => {
-          // Validate SĐT VN ngay khi gõ.
-          const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
-          const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
-          const phoneError = contactPhone.trim().length > 0 && !phoneValid;
-          // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
-          const isMusic = contactKind === "nhac-ban-quyen";
-          // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
-          const isLove = contactKind === "loi-yeu-thuong";
-          const emailValid = isMusic
-            ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
-            : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
-          // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
-          const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
-          const canSubmit =
-            phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
-            (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
-            (!isMusic || contactPurposes.length > 0);
-          // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
-          const MUSIC_PURPOSES = [
-            t("🎬 Quảng cáo / TVC"),
-            t("📱 Video MXH (YT/TikTok/FB)"),
-            t("🏪 Phát trong cửa hàng / quán"),
-            t("🎤 Sự kiện / biểu diễn"),
-            t("🎮 Game / App"),
-          ];
-          const togglePurpose = (p: string) =>
-            setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
-          // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
-          const msgPlaceholder = {
-            "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
-            "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
-            "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
-            "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
-            "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
-            "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
-          }[contactKind];
-          const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
-            { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
-            { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
-            { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
-          ];
-          return (
+      {contactOpen && (() => {
+        // Validate SĐT VN ngay khi gõ.
+        const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
+        const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
+        const phoneError = contactPhone.trim().length > 0 && !phoneValid;
+        // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
+        const isMusic = contactKind === "nhac-ban-quyen";
+        // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
+        const isLove = contactKind === "loi-yeu-thuong";
+        const emailValid = isMusic
+          ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
+          : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
+        // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
+        const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
+        const canSubmit =
+          phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
+          (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
+          (!isMusic || contactPurposes.length > 0);
+        // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
+        const MUSIC_PURPOSES = [
+          t("🎬 Quảng cáo / TVC"),
+          t("📱 Video MXH (YT/TikTok/FB)"),
+          t("🏪 Phát trong cửa hàng / quán"),
+          t("🎤 Sự kiện / biểu diễn"),
+          t("🎮 Game / App"),
+        ];
+        const togglePurpose = (p: string) =>
+          setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+        // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
+        const msgPlaceholder = {
+          "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
+          "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
+          "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
+          "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
+          "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
+          "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
+        }[contactKind];
+        const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
+          { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
+          { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
+          { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
+        ];
+        return (
+          <div
+            className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
+            style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+            onClick={() => setContactOpen(false)}
+          >
             <div
-              className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
-              style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
-              onClick={() => setContactOpen(false)}
+              className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
+                // không bị backdrop tối làm chìm chữ.
+                backdropFilter: "blur(24px) saturate(160%)",
+                WebkitBackdropFilter: "blur(24px) saturate(160%)",
+                backgroundColor: "rgba(255,255,255,0.96)",
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
+              }}
             >
-              <div
-                className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
-                  // không bị backdrop tối làm chìm chữ.
-                  backdropFilter: "blur(24px) saturate(160%)",
-                  WebkitBackdropFilter: "blur(24px) saturate(160%)",
-                  backgroundColor: "rgba(255,255,255,0.96)",
-                  boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
-                }}
-              >
-                <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
-                  <button
-                    onClick={() => setContactOpen(false)}
-                    aria-label={t("Đóng")}
-                    className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-                  </button>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
-                    {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
-                  </p>
-                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
-                    {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
-                  </h3>
-                  {!isLove && (
-                    <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                      {t("Phản hồi trong 24h")}
-                    </p>
-                  )}
-                </div>
-
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    setContactError("");
-                    if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
-                    if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
-                    if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
-                    if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
-                    if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
-                    if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
-                    if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
-                    setContactSubmitting(true);
-                    // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
-                    saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
-                    try {
-                      await fetch("/api/contact", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          kind: contactKind,
-                          name: contactName.trim(),
-                          phone: phoneDigits,
-                          area: contactArea.trim(),
-                          email: contactEmail.trim(),
-                          msg: contactMsg.trim(),
-                          // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
-                          ...(contactKind === "nhac-ban-quyen" && {
-                            company: contactCompany.trim(),
-                            purposes: contactPurposes,
-                            album: contactAlbum.trim(),
-                            scope: contactScope.trim(),
-                            budget: contactBudget.trim(),
-                          }),
-                        }),
-                      });
-                    } catch {
-                      // im lặng — vẫn báo thành công vì đã lưu localStorage
-                    }
-                    setContactSubmitting(false);
-                    setContactOpen(false);
-                    setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
-                    setTimeout(() => setToast(""), 3500);
-                  }}
-                  className="flex-1 overflow-y-auto px-5 py-4"
+              {isLove ? (
+              /* ── Header riêng cho "Gửi lời yêu thương" — tông ấm amber/rose như Khúc Chạm ── */
+              <div className="relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-rose-400 px-5 pb-5 pt-5">
+                {/* decor circles */}
+                <span className="pointer-events-none absolute -right-6 -top-6 h-28 w-28 rounded-full bg-white/10" />
+                <span className="pointer-events-none absolute -bottom-4 left-4 h-16 w-16 rounded-full bg-white/10" />
+                <button
+                  onClick={() => setContactOpen(false)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40"
                 >
-                  {!isMusic && !isLove && (
-                    <div className="mb-3">
-                      <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
-                        {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {KINDS.map((k) => {
-                          const active = contactKind === k.key;
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-white/80 pr-9">
+                  {t("Khúc Chạm Channel")}
+                </p>
+                <h3 className="mt-1 text-xl font-extrabold leading-snug text-white pr-9">
+                  {t("Gửi lời yêu thương 💚")}
+                </h3>
+                <p className="mt-1.5 text-[12px] leading-relaxed text-white/90 pr-9">
+                  {t("Gửi lời nhắn yêu thương đến người thân — lời nhắn may mắn sẽ được Khúc Chạm phát sóng độc quyền vào sáng mai 🎁")}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <a
+                    href="https://zalo.me/0888803998"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-bold text-blue-600 shadow transition hover:bg-blue-50"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.953 9.953 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2Z"/></svg>
+                    {t("Nhắn Zalo: 0888 803 998")}
+                  </a>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1.5 text-[11px] font-semibold text-white">
+                    🎰 {t("Vòng quay may mắn")}
+                  </span>
+                </div>
+              </div>
+              ) : (
+              <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
+                <button
+                  onClick={() => setContactOpen(false)}
+                  aria-label={t("Đóng")}
+                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
+                  {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : t("Liên hệ Affree")}
+                </p>
+                <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
+                  {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : t("Để lại liên hệ")}
+                </h3>
+                <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                  {t("Phản hồi trong 24h")}
+                </p>
+              </div>
+              )}
+
+              {isLove && loveSent ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-rose-50 text-3xl ring-1 ring-rose-100">
+                    <span aria-hidden="true">💚</span>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/assets/khuc-cham-logo.png"
+                      alt="Khúc Chạm"
+                      className="absolute inset-0 h-full w-full bg-rose-50 object-contain"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                    />
+                  </div>
+                  <h4 className="mt-4 text-lg font-bold text-slate-900">
+                    {t("Đã nhận lời yêu thương của bạn!")}
+                  </h4>
+                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
+                    {t("Cảm ơn bạn đã gửi lời nhắn tới Khúc Chạm 💌 — những dòng này thật sự tiếp thêm động lực cho cả nhà.")}
+                  </p>
+                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setContactMsg(""); setLoveSent(false); }}
+                      className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 active:scale-95"
+                    >
+                      {t("Gửi thêm một lời nữa")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setContactOpen(false)}
+                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    >
+                      {t("Đóng")}
+                    </button>
+                  </div>
+                </div>
+              ) : isMusic && licenseSent ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-orange-50 text-3xl ring-1 ring-orange-100">
+                    <span aria-hidden="true">🎵</span>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/assets/khuc-cham-logo.png"
+                      alt="Khúc Chạm"
+                      className="absolute inset-0 h-full w-full bg-orange-50 object-contain"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                    />
+                  </div>
+                  <h4 className="mt-4 text-lg font-bold text-slate-900">
+                    {t("Đã nhận đề nghị cấp phép của bạn!")}
+                  </h4>
+                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
+                    {t("Cảm ơn bạn đã quan tâm khai thác nhạc Khúc Chạm 🎶 — đội Affree sẽ liên hệ qua email trong 24h để trao đổi cấp phép.")}
+                  </p>
+                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setContactOpen(false)}
+                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
+                    >
+                      {t("Đóng")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setContactError("");
+                  if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
+                  if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
+                  if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
+                  if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
+                  if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
+                  if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
+                  if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
+                  setContactSubmitting(true);
+                  // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
+                  saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
+                  try {
+                    await fetch("/api/contact", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        kind: contactKind,
+                        name: contactName.trim(),
+                        phone: phoneDigits,
+                        area: contactArea.trim(),
+                        email: contactEmail.trim(),
+                        msg: contactMsg.trim(),
+                        // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
+                        ...(contactKind === "nhac-ban-quyen" && {
+                          company: contactCompany.trim(),
+                          purposes: contactPurposes,
+                          album: contactAlbum.trim(),
+                          scope: contactScope.trim(),
+                          budget: contactBudget.trim(),
+                        }),
+                      }),
+                    });
+                  } catch {
+                    // im lặng — vẫn báo thành công vì đã lưu localStorage
+                  }
+                  setContactSubmitting(false);
+                  // "Lời yêu thương" & "Cấp phép nhạc": hiện xác nhận NGAY TRONG popup, giữ popup mở.
+                  if (isLove) {
+                    setLoveSent(true);
+                    return;
+                  }
+                  if (isMusic) {
+                    setLicenseSent(true);
+                    return;
+                  }
+                  setContactOpen(false);
+                  setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
+                  setTimeout(() => setToast(""), 3500);
+                }}
+                className="flex-1 overflow-y-auto px-5 py-4"
+              >
+                {!isMusic && !isLove && (
+                <div className="mb-3">
+                  <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
+                    {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {KINDS.map((k) => {
+                      const active = contactKind === k.key;
+                      return (
+                        <button
+                          key={k.key}
+                          type="button"
+                          onClick={() => setContactKind(k.key)}
+                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${
+                            active
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
+                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                          }`}
+                        >
+                          <span className="text-base">{k.emoji}</span>
+                          <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                )}
+
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                    {t("Họ tên")} {!isLove && <span className="text-rose-500">*</span>}
+                  </span>
+                  <input
+                    type="text"
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    required={!isLove}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={t("Vd: Nguyễn Văn A")}
+                  />
+                </label>
+
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                    {t("SĐT / Zalo")} {!isLove && <span className="text-rose-500">*</span>}
+                  </span>
+                  <input
+                    type="tel"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    required={!isLove}
+                    className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${
+                      phoneError
+                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                        : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
+                    }`}
+                    placeholder={t("Vd: 09xxxxxxxx")}
+                  />
+                  {phoneError && (
+                    <span className="mt-1 block text-[11px] text-rose-600">
+                      {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
+                    </span>
+                  )}
+                </label>
+
+                {!isMusic && !isLove && (
+                <label className="mb-2.5 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
+                  <input
+                    type="text"
+                    value={contactArea}
+                    onChange={(e) => setContactArea(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
+                  />
+                </label>
+                )}
+
+                {isMusic && (
+                  <>
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                        {t("Email")} <span className="text-rose-500">*</span>
+                      </span>
+                      <input
+                        type="email"
+                        value={contactEmail}
+                        onChange={(e) => setContactEmail(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
+                      />
+                    </label>
+
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
+                      <input
+                        type="text"
+                        value={contactCompany}
+                        onChange={(e) => setContactCompany(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
+                      />
+                    </label>
+
+                    <div className="mb-2.5">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                        {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {MUSIC_PURPOSES.map((p) => {
+                          const active = contactPurposes.includes(p);
                           return (
                             <button
-                              key={k.key}
+                              key={p}
                               type="button"
-                              onClick={() => setContactKind(k.key)}
-                              className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${active
-                                ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
-                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                                }`}
+                              onClick={() => togglePurpose(p)}
+                              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                                active
+                                  ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                              }`}
                             >
-                              <span className="text-base">{k.emoji}</span>
-                              <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
+                              {p}
                             </button>
                           );
                         })}
                       </div>
                     </div>
-                  )}
 
-                  <label className="mb-2.5 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                      {t("Họ tên")} {!isLove && <span className="text-rose-500">*</span>}
-                    </span>
-                    <input
-                      type="text"
-                      value={contactName}
-                      onChange={(e) => setContactName(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      placeholder={t("Vd: Nguyễn Văn A")}
-                    />
-                  </label>
-
-                  <label className="mb-2.5 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                      {t("SĐT / Zalo")} {!isLove && <span className="text-rose-500">*</span>}
-                    </span>
-                    <input
-                      type="tel"
-                      value={contactPhone}
-                      onChange={(e) => setContactPhone(e.target.value)}
-                      required
-                      className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${phoneError
-                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                        : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
-                        }`}
-                      placeholder={t("Vd: 09xxxxxxxx")}
-                    />
-                    {phoneError && (
-                      <span className="mt-1 block text-[11px] text-rose-600">
-                        {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
-                      </span>
-                    )}
-                  </label>
-
-                  {!isMusic && !isLove && (
                     <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
+                      <select
+                        value={contactAlbum}
+                        onChange={(e) => setContactAlbum(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      >
+                        <option value="">{t("Chọn")}</option>
+                        <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
+                        {SEED_MUSIC.map((al) => (
+                          <option key={al.id} value={al.title}>{al.title}</option>
+                        ))}
+                        <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
+                      </select>
+                    </label>
+
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
                       <input
                         type="text"
-                        value={contactArea}
-                        onChange={(e) => setContactArea(e.target.value)}
+                        value={contactScope}
+                        onChange={(e) => setContactScope(e.target.value)}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
+                        placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
                       />
                     </label>
-                  )}
 
-                  {isMusic && (
-                    <>
-                      <label className="mb-2.5 block">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                          {t("Email")} <span className="text-rose-500">*</span>
-                        </span>
-                        <input
-                          type="email"
-                          value={contactEmail}
-                          onChange={(e) => setContactEmail(e.target.value)}
-                          required
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                          placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
-                        />
-                      </label>
-
-                      <label className="mb-2.5 block">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
-                        <input
-                          type="text"
-                          value={contactCompany}
-                          onChange={(e) => setContactCompany(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                          placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
-                        />
-                      </label>
-
-                      <div className="mb-2.5">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                          {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {MUSIC_PURPOSES.map((p) => {
-                            const active = contactPurposes.includes(p);
-                            return (
-                              <button
-                                key={p}
-                                type="button"
-                                onClick={() => togglePurpose(p)}
-                                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${active
-                                  ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
-                                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                                  }`}
-                              >
-                                {p}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <label className="mb-2.5 block">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
-                        <select
-                          value={contactAlbum}
-                          onChange={(e) => setContactAlbum(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        >
-                          <option value="">{t("Chọn")}</option>
-                          <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
-                          {SEED_MUSIC.map((al) => (
-                            <option key={al.id} value={al.title}>{al.title}</option>
-                          ))}
-                          <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
-                        </select>
-                      </label>
-
-                      <label className="mb-2.5 block">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
-                        <input
-                          type="text"
-                          value={contactScope}
-                          onChange={(e) => setContactScope(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                          placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
-                        />
-                      </label>
-
-                      <label className="mb-2.5 block">
-                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
-                        <input
-                          type="text"
-                          value={contactBudget}
-                          onChange={(e) => setContactBudget(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                          placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
-                        />
-                      </label>
-                    </>
-                  )}
-
-                  {(contactKind === "hop-tac" || contactKind === "b2b") && (
                     <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
                       <input
-                        type="email"
-                        value={contactEmail}
-                        onChange={(e) => setContactEmail(e.target.value)}
+                        type="text"
+                        value={contactBudget}
+                        onChange={(e) => setContactBudget(e.target.value)}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: ten@congty.com")}
+                        placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
                       />
                     </label>
-                  )}
+                  </>
+                )}
 
-                  <label className="mb-3 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{isLove ? t("Lời nhắn") : t("Nội dung cụ thể")} {isLove && <span className="text-rose-500">*</span>}</span>
-                    <textarea
-                      value={contactMsg}
-                      onChange={(e) => setContactMsg(e.target.value)}
-                      rows={3}
-                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      placeholder={msgPlaceholder}
+                {(contactKind === "hop-tac" || contactKind === "b2b") && (
+                  <label className="mb-2.5 block">
+                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                    <input
+                      type="email"
+                      value={contactEmail}
+                      onChange={(e) => setContactEmail(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      placeholder={t("Vd: ten@congty.com")}
                     />
                   </label>
+                )}
 
-                  {!isLove && (
-                    <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
-                      <input
-                        type="checkbox"
-                        checked={contactConsent}
-                        onChange={(e) => setContactConsent(e.target.checked)}
-                        className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
-                      />
-                      <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
-                    </label>
-                  )}
+                <label className="mb-3 block">
+                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{isLove ? t("Lời nhắn") : t("Nội dung cụ thể")} {isLove && <span className="text-rose-500">*</span>}</span>
+                  <textarea
+                    value={contactMsg}
+                    onChange={(e) => setContactMsg(e.target.value)}
+                    rows={3}
+                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                    placeholder={msgPlaceholder}
+                  />
+                </label>
 
-                  {contactError && (
-                    <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
-                      {contactError}
-                    </p>
-                  )}
+                {!isLove && (
+                <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={contactConsent}
+                    onChange={(e) => setContactConsent(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+                  />
+                  <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
+                </label>
+                )}
 
-                  <button
-                    type="submit"
-                    disabled={!canSubmit}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" /></svg>
-                    {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
-                  </button>
-                </form>
-              </div>
+                {contactError && (
+                  <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
+                    {contactError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
+                  {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
+                </button>
+              </form>
+              )}
             </div>
-          );
-        })()}
+          </div>
+        );
+      })()}
+
 
       {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ HOẶC từ click sponsor logo.
           Sponsor click set id = "__brand__<lower-name>" → offers filter theo brand thay vì storeId.

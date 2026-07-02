@@ -60,7 +60,7 @@ function zoomForRadius(km?: number | null): number | undefined {
   // thấy được khu vực xung quanh để định vị). z ≈ log2(156543 / (km*20)).
   // 50m→17, 100m→16, 150m→16, 300m→15, 500m→14, 700m→13, 1km→13,
   // 3km→11, 5km→11, 10km→10.
-  const z = Math.log2(156543 / (km * 20));
+  const z = Math.log2(156543 / (km * 20)) + 1;
   return Math.max(10, Math.min(18, Math.round(z)));
 }
 
