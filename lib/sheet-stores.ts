@@ -105,12 +105,22 @@ export function parseStoresCsv(csv: string): Store[] {
 
 /** Tải + parse tab "stores". Trả null nếu lỗi/rỗng để caller fallback về STORES tĩnh. */
 export async function fetchSheetStores(revalidate = 30): Promise<Store[] | null> {
-  try {
-    const res = await fetch(STORES_SHEET_CSV_URL, { next: { revalidate } });
-    if (!res.ok) return null;
-    const stores = parseStoresCsv(await res.text());
-    return stores.length ? stores : null;
-  } catch {
-    return null;
+  // Retry vài lần: Google hay 302/429 trên Vercel edge → 1 lần fail KHÔNG được rơi về null vội,
+  // vì mất sheet này = mất toàn bộ chi nhánh vật lý cho "Giá hời quanh đây".
+  let csv = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(STORES_SHEET_CSV_URL, { next: { revalidate }, redirect: "follow" });
+      if (res.ok) {
+        const text = await res.text();
+        if (text) { csv = text; break; }
+      }
+    } catch {
+      /* thử lại */
+    }
+    await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
   }
+  if (!csv) return null;
+  const stores = parseStoresCsv(csv);
+  return stores.length ? stores : null;
 }

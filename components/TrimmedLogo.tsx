@@ -18,6 +18,7 @@ export function TrimmedLogo({
   className,
   onResult,
   keyOutWhite,
+  padPx,
 }: {
   src: string;
   alt: string;
@@ -30,6 +31,8 @@ export function TrimmedLogo({
    * để logo nền trắng không tạo dải trắng cắt ngang BG.
    */
   keyOutWhite?: boolean;
+  /** Override pad pixel (mặc định -2). Dùng giá trị dương nếu logo bị crop mất content mép. */
+  padPx?: number;
 }) {
   const [finalSrc, setFinalSrc] = useState<string>(src);
   const cacheKey = useRef<string>(src);
@@ -82,10 +85,8 @@ export function TrimmedLogo({
           }
         }
         if (top < 0 || bottom < 0 || left >= w || right < 0) return;
-        // Pad ÂM (shrink vào trong): crop bỏ luôn 2px viền anti-alias quanh content.
-        // Nếu không, edge image có alpha pha hoặc màu off-shade so với fill bg → tạo line
-        // ngang/dọc giữa image và card bg. Cắt thêm 2px → image edge = solid brand color = card bg.
-        const pad = -2;
+        // Pad âm: crop 2px anti-alias viền. Caller có thể override qua prop `pad`.
+        const pad = padPx ?? -2;
         const sx = Math.max(0, left - pad);
         const sy = Math.max(0, top - pad);
         const sw = Math.min(w, right + 1 + pad) - sx;

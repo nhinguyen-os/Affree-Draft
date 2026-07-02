@@ -17,6 +17,8 @@ export interface Store {
   online?: boolean;
   /** Mã tiền tệ của cửa hàng (vd "USD"). Trống → mặc định "VND". Giá sản phẩm hiển thị theo tiền tệ này. */
   currency?: string;
+  /** Loại CSKD (cơ sở kinh doanh) — mảng các giá trị dạng "CATEGORY > Subcategory". */
+  loaiCskd?: string[];
 }
 
 export interface Product {
@@ -144,6 +146,8 @@ export interface Catalog {
   tui?: Tui[];
   /** Tên section "Đồ ăn" theo buổi ăn (tab 1sZTv gid=743152394). Trống → dùng tên base trong code. */
   mealTitles?: MealTitle[];
+  /** Giá mua tối thiểu theo chain (tab "Giá tối thiểu"). key thường-hoá → VND. */
+  minOrders?: Record<string, number>;
 }
 
 /**
@@ -196,4 +200,10 @@ export interface CartItem {
   product: Product;
   offer: RankedOffer;
   qty: number;
+  /**
+   * Phần số lượng được TỰ ĐỘNG bơm thêm (nằm trong `qty`) để đạt mức mua tối thiểu của
+   * chuỗi (vd Co.op 200k). userQty thực = qty - autoQty. Khi thêm món khác đủ ngưỡng thì
+   * phần này tự hạ về 0. 0/undefined = không có bơm tự động.
+   */
+  autoQty?: number;
 }

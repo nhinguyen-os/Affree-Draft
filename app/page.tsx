@@ -4,9 +4,11 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { CartItem, Catalog, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
-import { chainColor, chainLabel, findChainBySlug, getStore, getStores, setDynamicStores, storeCurrency } from "@/lib/stores";
+import type { CartItem, Catalog, Chain, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
+import type { CskdCategory } from "@/lib/sheet-cskd";
+import { chainColor, chainLabel, chainMinOrder, findChainBySlug, getStore, getStores, physicalStoresOfChain, setDynamicMinOrders, setDynamicStores, storeCurrency } from "@/lib/stores";
 import { TrimmedLogo } from "@/components/TrimmedLogo";
+import { MarqueeText } from "@/components/MarqueeText";
 import {
   cheapestInStock,
   directionsUrl,
@@ -20,6 +22,7 @@ import { getProfile, saveProfile } from "@/lib/profile";
 import { addAlert, getAlertForProduct, removeAlert } from "@/lib/alerts";
 import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
+import { getSavedCart, saveCart } from "@/lib/cart";
 import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
 import { type Lang, langForCountry, tr } from "@/lib/i18n";
 import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
@@ -28,6 +31,9 @@ import { Logo } from "@/components/Logo";
 import { QtyInput } from "@/components/QtyInput";
 import { KhucChamSidePanel } from "@/components/KhucChamBanner";
 import { KhucChamAlbumList, type MusicBuyItem } from "@/components/KhucChamStore";
+import { SiteStats } from "@/components/SiteStats";
+import { SubCatBar } from "@/components/SubCatBar";
+import { AppFooter } from "@/components/AppFooter";
 import type { MusicOrderLine } from "@/components/MusicOrderModal";
 import { SEED_MUSIC } from "@/lib/music";
 import type { MapMarker } from "@/components/MapView";
@@ -330,49 +336,7 @@ const ProductThumb = memo(function ProductThumb({
   );
 });
 
-/**
- * Nhãn 1 dòng: nếu CHỮ DÀI HƠN khung thì tự CUỘN ngang qua lại (marquee) để đọc được trọn vẹn
- * mà không phải nới rộng khung — dùng cho dòng vị trí trên mobile (tránh chiếm diện tích header).
- * Chữ ngắn → đứng yên (truncate bình thường).
- */
-function MarqueeText({ children, className = "" }: { children: string; className?: string }) {
-  const wrapRef = useRef<HTMLSpanElement>(null);
-  const measureRef = useRef<HTMLSpanElement>(null);
-  const [run, setRun] = useState(false);
-  const [dur, setDur] = useState(10);
-  useEffect(() => {
-    const measure = () => {
-      const w = wrapRef.current;
-      const m = measureRef.current;
-      if (!w || !m) return;
-      const over = m.scrollWidth > w.clientWidth + 2;
-      setRun(over);
-      // tốc độ ~30px/s, tối thiểu 6s
-      if (over) setDur(Math.max(6, Math.round((m.scrollWidth + 40) / 30)));
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [children]);
-  const runStyle: CSSProperties = { animationDuration: `${dur}s` };
-  return (
-    <span ref={wrapRef} className={`relative block min-w-0 flex-1 overflow-hidden text-left ${className}`}>
-      {/* bản đo ẩn để biết chữ có dài hơn khung không */}
-      <span ref={measureRef} aria-hidden className="invisible absolute left-0 top-0 whitespace-nowrap">
-        {children}
-      </span>
-      {run ? (
-        // Chạy MỘT CHIỀU phải→trái liên tục: 2 bản nối nhau, dịch -50% là khớp seamless.
-        <span className="loc-marquee-run flex w-max whitespace-nowrap" style={runStyle}>
-          <span className="pr-10">{children}</span>
-          <span className="pr-10" aria-hidden>{children}</span>
-        </span>
-      ) : (
-        <span className="block truncate">{children}</span>
-      )}
-    </span>
-  );
-}
+// MarqueeText đã tách ra components/MarqueeText.tsx để dùng chung (map popup, modal, header cửa hàng…).
 
 /** Popover chọn vị trí: định vị GPS hoặc nhập địa chỉ khác để kiểm tra. */
 function LocationPanel({
@@ -519,6 +483,9 @@ function LocationPanel({
   );
 }
 
+// Module-level cache — tồn tại qua remount khi Next.js chuyển route (/ → /slug).
+let _catalogCache: Catalog | null = null;
+
 export default function Home() {
   // rawCatalog/rawStores = dữ liệu gốc; catalog/stores đã được scope theo region.
   // Khi đã định vị trong VN: chỉ giữ CSKD trong vùng quanh user (offline) + online stores → giảm tải dữ liệu.
@@ -542,6 +509,8 @@ export default function Home() {
   const [locOpen, setLocOpen] = useState(false);
   const [verOpen, setVerOpen] = useState(false);
   const [expandedVer, setExpandedVer] = useState<string | null>(null);
+  // Sub-version cũ (trong bản mới nhất) đang mở chi tiết; null = chỉ sub mới nhất xổ.
+  const [expandedSub, setExpandedSub] = useState<string | null>(null);
   const [addrQuery, setAddrQuery] = useState("");
   const [addrResults, setAddrResults] = useState<GeoResult[]>([]);
   const [addrSearching, setAddrSearching] = useState(false);
@@ -591,6 +560,8 @@ export default function Home() {
   const [contactArea, setContactArea] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [contactMsg, setContactMsg] = useState("");
+  // Field riêng cho form "Gửi lời yêu thương" — tên người thân sẽ nhận lời nhắn.
+  const [contactRecipient, setContactRecipient] = useState("");
   // Field riêng cho form cấp phép nhạc.
   const [contactCompany, setContactCompany] = useState("");
   const [contactPurposes, setContactPurposes] = useState<string[]>([]);
@@ -600,8 +571,6 @@ export default function Home() {
   const [contactConsent, setContactConsent] = useState(true);
   const [contactSubmitting, setContactSubmitting] = useState(false);
   const [contactError, setContactError] = useState("");
-  const [loveSent, setLoveSent] = useState(false);
-  const [licenseSent, setLicenseSent] = useState(false);
   const [alertPhone, setAlertPhone] = useState("");
   const [myAlert, setMyAlert] = useState<PriceAlert | null>(null);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
@@ -635,8 +604,24 @@ export default function Home() {
   // Giỏ hàng — mua nhiều sản phẩm từ nhiều cửa hàng cùng lúc.
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  // Cửa hàng đã đặt xong — hoãn xoá khỏi giỏ tới khi ĐÓNG modal, để màn "Đã ghi nhận
+  // đơn hàng" kịp hiển thị (nếu xoá ngay, giỏ rỗng → CartModal unmount, mất màn done).
+  const [orderedStoreIds, setOrderedStoreIds] = useState<string[]>([]);
   // Increment mỗi khi addToCart → re-key icon/badge để restart animation.
   const [cartBumpKey, setCartBumpKey] = useState(0);
+  // Khôi phục giỏ hàng từ localStorage sau khi mount (dùng effect, không dùng lazy init,
+  // để tránh hydration mismatch). cartLoadedRef chặn effect lưu chạy trước khi khôi phục
+  // xong — nếu không sẽ ghi đè [] rỗng lên giỏ đã lưu ngay lần render đầu.
+  const cartLoadedRef = useRef(false);
+  useEffect(() => {
+    const saved = getSavedCart();
+    if (saved.length) setCartItems(saved);
+    cartLoadedRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (!cartLoadedRef.current) return;
+    saveCart(cartItems);
+  }, [cartItems]);
   const [infoProduct, setInfoProduct] = useState<Product | null>(null);
   // Túi đang xem chi tiết — mở qua nút ⓘ trên thẻ túi để xem danh sách SP bên trong.
   const [tuiInfo, setTuiInfo] = useState<Tui | null>(null);
@@ -658,6 +643,49 @@ export default function Home() {
   // Aspect ratio (w/h) sau trim — card width co theo để logo fill 100% chiều cao + ngang.
   const [sponsorAspect, setSponsorAspect] = useState<Record<string, number>>({});
 
+  /**
+   * Cân bằng lại phần "bơm tự động" cho mức mua tối thiểu của từng chuỗi.
+   * userQty (số khách thực muốn) = qty - autoQty. Nếu tổng userQty của chuỗi đã đạt ngưỡng
+   * → gỡ hết bơm (mọi món về userQty). Nếu chưa → dồn phần bơm vào ĐÚNG 1 món (ưu tiên món
+   * đang giữ bơm sẵn, không thì món cuối của chuỗi) cho đủ ngưỡng. Không đụng số khách tự chỉnh.
+   */
+  function rebalanceMinOrder(items: CartItem[]): CartItem[] {
+    const byChain = new Map<string, number[]>();
+    items.forEach((it, i) => {
+      const c = it.offer.store.chain;
+      const arr = byChain.get(c) ?? [];
+      arr.push(i);
+      byChain.set(c, arr);
+    });
+    const out = items.map((it) => ({ ...it }));
+    for (const [chain, idxs] of byChain) {
+      const min = chainMinOrder(chain);
+      // userQty của mỗi món (bỏ phần bơm cũ)
+      const userQty = idxs.map((i) => Math.max(1, out[i].qty - (out[i].autoQty ?? 0)));
+      const baseTotal = idxs.reduce((s, i, k) => s + out[i].offer.price * userQty[k], 0);
+      if (min <= 0 || baseTotal >= min) {
+        idxs.forEach((i, k) => { out[i].qty = userQty[k]; out[i].autoQty = 0; });
+        continue;
+      }
+      // Chọn món gánh phần bơm: ưu tiên món đang có autoQty, không thì món cuối chuỗi.
+      let carrier = idxs.findIndex((i) => (items[i].autoQty ?? 0) > 0);
+      if (carrier < 0) carrier = idxs.length - 1;
+      const gap = min - baseTotal;
+      idxs.forEach((i, k) => {
+        const price = out[i].offer.price;
+        if (k === carrier && price > 0) {
+          const add = Math.ceil(gap / price);
+          out[i].qty = userQty[k] + add;
+          out[i].autoQty = add;
+        } else {
+          out[i].qty = userQty[k];
+          out[i].autoQty = 0;
+        }
+      });
+    }
+    return out;
+  }
+
   function addToCart(p: Product, offer?: RankedOffer) {
     let ranked = offer ?? (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])?.[0];
     // Fallback: rankOffersForProduct bỏ qua offers khi store chưa đăng ký (nguồn online/food).
@@ -678,12 +706,17 @@ export default function Home() {
       const idx = prev.findIndex(
         (i) => i.product.id === p.id && i.offer.store.id === ranked.store.id,
       );
+      let next: CartItem[];
       if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-        return next;
+        // Coi số ĐANG HIỂN THỊ (qty, đã gồm phần bơm min-order) là mốc: bấm "+" → +1 so với
+        // số user thấy. Phải reset autoQty=0, nếu không rebalance tính userQty = qty - autoQty
+        // sẽ "nuốt" mất phần vừa cộng (vd 2→3 nhưng autoQty=1 → userQty=2 → hiện lại 2, tưởng lỗi).
+        next = [...prev];
+        next[idx] = { ...next[idx], qty: next[idx].qty + 1, autoQty: 0 };
+      } else {
+        next = [...prev, { product: p, offer: ranked, qty: 1, autoQty: 0 }];
       }
-      return [...prev, { product: p, offer: ranked, qty: 1 }];
+      return rebalanceMinOrder(next);
     });
     setCartBumpKey((k) => k + 1);
   }
@@ -694,7 +727,7 @@ export default function Home() {
     const store: Store = {
       id: "khuccham",
       chain: "khuccham",
-      name: "Khúc Chạm Store",
+      name: "Khúc Chạm Plaza",
       address: "",
       website: "https://music.youtube.com/@KhucChamChannel",
       online: true,
@@ -720,7 +753,7 @@ export default function Home() {
     };
   }
 
-  // Nút "+" của thẻ nhạc → thêm album/bài vào giỏ (gộp chung 1 nhóm "Khúc Chạm Store").
+  // Nút "+" của thẻ nhạc → thêm album/bài vào giỏ (gộp chung 1 nhóm "Khúc Chạm Plaza").
   function addMusicToCart(item: MusicBuyItem) {
     const offer = musicOffer(item);
     setCartItems((prev) => {
@@ -740,14 +773,14 @@ export default function Home() {
     setMusicOrder([{ id: item.id, name: item.name, image: item.image, price: item.price, qty: 1 }]);
   }
 
-  // Ghi nhận mua nhạc: mỗi dòng = 1 lượt mua tại Khúc Chạm Store.
+  // Ghi nhận mua nhạc: mỗi dòng = 1 lượt mua tại Khúc Chạm Plaza.
   async function recordMusicBuy(lines: MusicOrderLine[]) {
     for (const l of lines) {
       await addPurchase({
         productId: l.id,
         productName: l.name,
         storeId: "khuccham",
-        storeName: "Khúc Chạm Store",
+        storeName: "Khúc Chạm Plaza",
         chain: "khuccham",
         qty: l.qty ?? 1,
         unitPrice: l.price,
@@ -833,16 +866,23 @@ export default function Home() {
   }
 
   function updateCartQty(productId: string, storeId: string, qty: number) {
+    // Nút +/− trong giỏ là bộ đếm số lượng THUẦN: đặt đúng số user chọn, KHÔNG chạy
+    // rebalanceMinOrder để tự bơm lại cho đủ mức tối thiểu. (Min-order chỉ auto-bơm lúc
+    // THÊM vào giỏ.) Nhờ vậy bấm "−" giảm đúng 1, không bị kéo ngược về mức cũ.
     setCartItems((prev) =>
       prev.map((i) =>
-        i.product.id === productId && i.offer.store.id === storeId ? { ...i, qty } : i,
+        i.product.id === productId && i.offer.store.id === storeId
+          ? { ...i, qty: Math.max(1, qty), autoQty: 0 }
+          : i,
       ),
     );
   }
 
   function removeFromCart(productId: string, storeId: string) {
     setCartItems((prev) =>
-      prev.filter((i) => !(i.product.id === productId && i.offer.store.id === storeId)),
+      rebalanceMinOrder(
+        prev.filter((i) => !(i.product.id === productId && i.offer.store.id === storeId)),
+      ),
     );
   }
 
@@ -855,30 +895,32 @@ export default function Home() {
       const idx = prev.findIndex((i) => i.product.id === productId);
       if (idx < 0) return prev;
       const item = prev[idx];
-      if (item.qty <= 1) return prev.filter((_, i) => i !== idx);
+      // Giảm theo số KHÁCH thực muốn (bỏ phần bơm tự động). Về 0 → xoá món.
+      const userQty = Math.max(1, item.qty - (item.autoQty ?? 0));
+      if (userQty <= 1) return rebalanceMinOrder(prev.filter((_, i) => i !== idx));
       const next = [...prev];
-      next[idx] = { ...next[idx], qty: item.qty - 1 };
-      return next;
+      next[idx] = { ...next[idx], qty: userQty - 1, autoQty: 0 };
+      return rebalanceMinOrder(next);
     });
   }
 
   function setCartQtyFor(productId: string, qty: number) {
     if (qty <= 0) {
-      setCartItems((prev) => prev.filter((i) => i.product.id !== productId));
+      setCartItems((prev) => rebalanceMinOrder(prev.filter((i) => i.product.id !== productId)));
       return;
     }
     setCartItems((prev) => {
       const idx = prev.findIndex((i) => i.product.id === productId);
       if (idx < 0) return prev;
       const next = [...prev];
-      next[idx] = { ...next[idx], qty };
-      return next;
+      next[idx] = { ...next[idx], qty, autoQty: 0 };
+      return rebalanceMinOrder(next);
     });
   }
 
   function upsertCartQty(p: Product, qty: number) {
     if (qty <= 0) {
-      setCartItems((prev) => prev.filter((i) => i.product.id !== p.id));
+      setCartItems((prev) => rebalanceMinOrder(prev.filter((i) => i.product.id !== p.id)));
       return;
     }
     const best = (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])[0];
@@ -887,10 +929,10 @@ export default function Home() {
       const idx = prev.findIndex((i) => i.product.id === p.id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], qty };
-        return next;
+        next[idx] = { ...next[idx], qty, autoQty: 0 };
+        return rebalanceMinOrder(next);
       }
-      return [...prev, { product: p, offer: best, qty }];
+      return rebalanceMinOrder([...prev, { product: p, offer: best, qty, autoQty: 0 }]);
     });
   }
 
@@ -916,6 +958,17 @@ export default function Home() {
   }, []);
   // Hàm dịch ngắn gọn: t("chuỗi VN", { biến }). Thiếu bản dịch → giữ tiếng Việt.
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
+
+  // Cập nhật html[lang] khi user chuyển ngôn ngữ (layout.tsx hardcode "vi" cho SSR).
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
+
+  // FIX "lướt không được" (bản CSS, thay cho wheel-listener JS cũ): carousel ngang thiếu
+  // overflow-y → Chrome latch lăn dọc. globals.css ép `.overflow-x-auto { overflow-y: hidden }`
+  // → wheel dọc chain thẳng lên trang, cuộn chạy trên compositor thread. Listener JS cũ
+  // (passive:false + getComputedStyle mỗi tick) trói scroll vào main thread → máy bận là
+  // "lướt chút đứng hình" — đã đo 3-4 FPS trên production trước khi gỡ.
 
   // Tách giá trị tìm kiếm "trễ" khỏi ô nhập: gõ phím cập nhật input tức thì, còn việc
   // lọc/xếp hạng (nặng khi data lớn) chạy ở mức ưu tiên thấp → không giật khi gõ.
@@ -982,6 +1035,13 @@ export default function Home() {
         setCountry(saved.country || "");
         setRegion(saved.region || "");
         setGeoState("ok");
+        // Vị trí lưu từ trước có thể thiếu `region` (tính năng phân định vùng thêm sau) →
+        // suy lại region từ toạ độ để chip vùng hiện đúng mà không cần định vị lại.
+        if (!saved.region) {
+          reverseGeocode(saved.loc.lat, saved.loc.lng).then((r) => {
+            if (r.region) setRegion(r.region);
+          });
+        }
       }
     } catch {
       // bỏ qua nếu dữ liệu hỏng
@@ -1008,14 +1068,50 @@ export default function Home() {
     setViewCounts(getViewCounts());
   }
 
+  // Nạp catalog theo kiểu stale-while-revalidate 2 tầng:
+  //   1. Bản đã LƯU TRONG TRÌNH DUYỆT (Cache API, key "gqd-api-v1") → vẽ UI tức thì,
+  //      không phải đợi mạng (payload ~6.5MB, TTFB 0.1-1.5s).
+  //   2. Song song luôn fetch bản mới → thay state + ghi đè cache cho lần sau.
+  // Dùng Cache API thay localStorage vì payload vượt quota 5MB của localStorage.
   useEffect(() => {
-    fetch("/api/catalog")
-      .then((r) => r.json())
-      .then((d) => {
-        setRawCatalog({ products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles });
-        setSource(d.source);
-      })
-      .catch(() => setRawCatalog({ products: [], offers: [] }));
+    if (_catalogCache) { setDynamicMinOrders(_catalogCache.minOrders ?? null); setRawCatalog(_catalogCache); return; }
+    let alive = true;
+    let painted = false; // đã vẽ được gì đó (từ cache) chưa — quyết định cách xử lý lỗi mạng
+    type CatalogPayload = Catalog & { source?: string };
+    const apply = (d: CatalogPayload, fromBrowserCache: boolean) => {
+      if (!alive) return;
+      const cat = { products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles, minOrders: d.minOrders };
+      if (!fromBrowserCache) _catalogCache = cat; // bản mạng mới đáng tin để cache in-memory
+      setDynamicMinOrders(d.minOrders ?? null);
+      setRawCatalog(cat);
+      setSource(d.source ?? "");
+      painted = true;
+    };
+    (async () => {
+      // Tầng 1: bản lưu trình duyệt (bỏ qua êm nếu Cache API không khả dụng/chưa có bản lưu).
+      try {
+        if ("caches" in window) {
+          const hit = await caches.match("/api/catalog");
+          if (hit) apply(await hit.json(), true);
+        }
+      } catch { /* cache hỏng/không đọc được → chờ bản mạng */ }
+      // Tầng 2: bản mới từ mạng (CDN đã có s-maxage nên thường ~100ms).
+      try {
+        const res = await fetch("/api/catalog");
+        const copy = res.clone(); // clone TRƯỚC khi đọc body để còn ghi vào cache
+        apply(await res.json(), false);
+        try {
+          if ("caches" in window && res.ok) {
+            const c = await caches.open("gqd-api-v1");
+            await c.put("/api/catalog", copy);
+          }
+        } catch { /* hết quota/private mode → lần sau vẫn chạy đường mạng như cũ */ }
+      } catch {
+        // Mạng lỗi: nếu đã vẽ từ cache thì giữ nguyên, chưa có gì mới rơi về catalog rỗng.
+        if (!painted && alive) setRawCatalog({ products: [], offers: [] });
+      }
+    })();
+    return () => { alive = false; };
   }, []);
 
   // URL → state (chạy 1 lần sau khi catalog nạp). Slug helpers ánh xạ tên-không-dấu về brand/cat/sản phẩm gốc.
@@ -1259,9 +1355,22 @@ export default function Home() {
   const anyModalOpen =
     locOpen || verOpen || alertOpen || contactOpen || cartOpen || !!infoProduct || !!buyProduct || !!buyOffer;
   useEffect(() => {
-    if (!anyModalOpen) return;
-    const scrollY = window.scrollY;
     const body = document.body;
+    if (!anyModalOpen) {
+      // Safeguard: nếu body vẫn bị lock dù modal đã đóng → tháo lock
+      if (body.style.position === "fixed") {
+        const lockedTop = parseInt(body.style.top || "0", 10);
+        body.style.position = "";
+        body.style.top = "";
+        body.style.left = "";
+        body.style.right = "";
+        body.style.width = "";
+        body.style.overflow = "";
+        window.scrollTo(0, -lockedTop);
+      }
+      return;
+    }
+    const scrollY = window.scrollY;
     const prev = {
       position: body.style.position,
       top: body.style.top,
@@ -1295,6 +1404,29 @@ export default function Home() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  const [cskdTaxonomy, setCskdTaxonomy] = useState<CskdCategory[] | undefined>(undefined);
+  const [cskdStores, setCskdStores] = useState<Store[]>([]);
+  useEffect(() => {
+    fetch("/api/loai-cskd")
+      .then((r) => r.json())
+      .then((d) => { if (d.taxonomy?.length) setCskdTaxonomy(d.taxonomy); })
+      .catch(() => {});
+    fetch("/api/cskd-stores")
+      .then((r) => r.json())
+      .then((d) => { if (d.stores?.length) setCskdStores(d.stores); })
+      .catch(() => {});
+  }, []);
+
+  // loaiCskd đại diện theo CHAIN (lấy từ cskdStores) — để gán cho cửa hàng offer trên map
+  // so sánh giá, giúp chú thích hiển thị cây danh mục CSKD giống trang chủ.
+  const cskdByChain = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const s of cskdStores) {
+      if (s.loaiCskd?.length && !m.has(s.chain)) m.set(s.chain, s.loaiCskd);
+    }
+    return m;
+  }, [cskdStores]);
 
   function locate() {
     if (!navigator.geolocation) {
@@ -1381,14 +1513,14 @@ export default function Home() {
   }, [catalog]);
 
   const priceStats = useMemo(() => {
-    const m = new Map<string, { min: number; max: number; stores: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string }>();
+    const m = new Map<string, { min: number; max: number; stores: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string; minChain: string; soleChain: string }>();
     if (!catalog) return m;
     for (const p of catalog.products) {
       const priced = (offersByProductId.get(p.id) ?? []).filter((o) => o.price > 0);
       const inStock = priced.filter((o) => o.inStock);
       if (!inStock.length) {
         // Có giá nhưng tất cả điểm bán đều hết hàng → đánh dấu "hết hàng" (khác "chưa có giá").
-        m.set(p.id, { min: 0, max: 0, stores: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "" });
+        m.set(p.id, { min: 0, max: 0, stores: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "", minChain: "", soleChain: "" });
         continue;
       }
       const prices = inStock.map((o) => o.price);
@@ -1407,6 +1539,10 @@ export default function Home() {
         soleSource: sole ? chainLabel(getStore(sole.storeId)?.chain ?? sole.storeId) : "",
         // Link vào TRANG CHỦ web nguồn (origin), không dùng link sâu từng sản phẩm.
         soleUrl: sole ? (homepageOf(sole.productUrl) || homepageOf(getStore(sole.storeId)?.website)) : "",
+        // Chain của offer giá thấp nhất — dùng để hiện chú thích "Mua tối thiểu".
+        minChain: getStore(inStock.reduce((a, b) => a.price <= b.price ? a : b).storeId)?.chain ?? inStock[0].storeId,
+        // Chain key (không phải label) của nguồn sole — dùng để tra chainMinOrder.
+        soleChain: sole ? (getStore(sole.storeId)?.chain ?? sole.storeId) : "",
       });
     }
     return m;
@@ -1494,7 +1630,7 @@ export default function Home() {
   // Chỉ lấy sp có ≥2 nơi bán còn hàng và chênh ≥5% (mới đáng gọi là "giá hời").
   const areaDeals = useMemo(() => {
     if (!catalog) return [] as {
-      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; km: number | null;
+      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; km: number | null;
     }[];
     const storeById = new Map(getStores().map((s) => [s.id, s]));
     const rows = [];
@@ -1520,6 +1656,7 @@ export default function Home() {
       // Điểm bán còn hàng ở GIÁ THẤP NHẤT (min). Nếu đã định vị → chọn nơi giá thấp nhất
       // GẦN nhất; ghi lại khoảng cách để vừa "ưu tiên giá thấp nhất" vừa "ưu tiên gần nhất".
       let bestStore: Store | undefined;
+      let bestStoreId: string | undefined; // id nguồn giá thấp nhất (kể cả nguồn online không có store vật lý)
       let bestKm: number | null = null;
       for (const o of catalog.offers) {
         if (o.productId !== p.id || !o.inStock || o.price !== s.min) continue;
@@ -1528,12 +1665,33 @@ export default function Home() {
           userLoc && st?.lat != null && st?.lng != null
             ? distanceKm(userLoc, { lat: st.lat, lng: st.lng })
             : null;
-        if (!bestStore || (km != null && (bestKm == null || km < bestKm))) {
+        if (!bestStoreId || (km != null && (bestKm == null || km < bestKm))) {
           bestStore = st;
+          bestStoreId = o.storeId;
           bestKm = km;
         }
       }
-      if (userLoc && dealsRadiusKm != null && bestKm != null && bestKm > dealsRadiusKm) continue;
+      // Chuỗi của nơi bán rẻ nhất: từ store map, hoặc suy từ prefix id ("bhx-…" → "bhx").
+      const dealChain = (bestStore?.chain ?? (bestStoreId ? (getStore(bestStoreId)?.chain ?? bestStoreId.split("-")[0]) : "")) as Chain | "";
+      // Nếu offer rẻ nhất KHÔNG map được cửa hàng cụ thể (id lệch danh sách stores) → lấy CHI NHÁNH
+      // GẦN NHẤT cùng chuỗi để hiện tên + địa chỉ thật (giá chuỗi đồng nhất nên chi nhánh nào cũng đúng giá).
+      let dealStore = bestStore;
+      let dealKm = bestKm;
+      if (!dealStore && dealChain) {
+        const cs = physicalStoresOfChain(dealChain as Chain).filter((s2) => s2.lat != null && s2.lng != null);
+        if (cs.length) {
+          if (userLoc) {
+            dealStore = cs.reduce((a, b) =>
+              distanceKm(userLoc, { lat: a.lat as number, lng: a.lng as number }) <=
+              distanceKm(userLoc, { lat: b.lat as number, lng: b.lng as number }) ? a : b);
+            dealKm = distanceKm(userLoc, { lat: dealStore.lat as number, lng: dealStore.lng as number });
+          } else {
+            dealStore = cs[0];
+          }
+        }
+      }
+      if (userLoc && dealsRadiusKm != null && dealKm != null && dealKm > dealsRadiusKm) continue;
+      const dealStoreName = dealStore?.name ?? (dealChain ? chainLabel(dealChain) : "");
       rows.push({
         product: p,
         now,
@@ -1541,8 +1699,9 @@ export default function Home() {
         save: was - now,
         disc,
         currency: s.currency,
-        storeName: bestStore?.name ?? "",
-        km: bestKm,
+        storeName: dealStoreName,
+        storeChain: dealStore?.chain ?? dealChain,
+        km: dealKm,
       });
     }
     // Đã định vị → xếp theo điểm gộp "rẻ + gần" (giá hời cao và càng gần càng tốt);
@@ -1588,6 +1747,14 @@ export default function Home() {
   // Dãy chip lọc theo NGÀNH HÀNG (cột "category" trong sheet, vd "Gia vị", "Nước lau sàn"…).
   // Nếu đã chọn TỆP ở trên → chỉ hiện ngành hàng THUỘC tệp đó; chưa chọn tệp → hiện tất cả.
   // Xếp theo số lượng sản phẩm giảm dần.
+  // Tổng sản phẩm trong tệp đang chọn (không lọc thêm theo activeCat) — dùng cho parent header.
+  const tepTotalCount = useMemo(() => {
+    if (!catalog || !activeTep) return 0;
+    return catalog.products.filter((p) =>
+      (p.groups?.includes(activeTep) || categoryGroup(p) === activeTep) && passCountry(p.id)
+    ).length;
+  }, [catalog, activeTep, passCountry]);
+
   const catChips = useMemo(() => {
     if (!catalog) return [] as string[];
     const base = activeTep
@@ -1715,8 +1882,9 @@ export default function Home() {
     const count: Record<string, number> = {};
     for (const p of orderedMatches) {
       const chainsForP = new Set<string>();
-      for (const o of catalog.offers) {
-        if (o.productId !== p.id) continue;
+      // Tra qua index offersByProductId (O(offers của riêng p)) thay vì quét toàn bộ
+      // catalog.offers cho TỪNG sản phẩm — trước đây O(n×m) ~11,5 triệu vòng gây đứng hình.
+      for (const o of offersByProductId.get(p.id) ?? []) {
         const st = getStore(o.storeId);
         if (st?.chain) chainsForP.add(st.chain);
       }
@@ -1726,7 +1894,7 @@ export default function Home() {
     let bestN = 0;
     for (const [c, n] of Object.entries(count)) if (n > bestN) { best = c; bestN = n; }
     return best && bestN / orderedMatches.length >= 0.6 ? best : null;
-  }, [catalog, orderedMatches, activeChain]);
+  }, [catalog, orderedMatches, activeChain, offersByProductId]);
 
   // Hash chuỗi → [0,1): tạo "mức bán chạy" giả định ổn định theo (khu vực + sản phẩm).
   function seedRand(str: string): number {
@@ -1880,7 +2048,7 @@ export default function Home() {
   // Danh mục túi ghép/đôi/đa dạng — nhận diện để render TÚI thay vì sản phẩm lẻ.
   const TUI_CAT_RE = /túi ghép|túi đôi|túi.*đa dạng/i;
   const isTuiActive = !!activeTep && TUI_CAT_RE.test(activeTep) && !!catalog?.tui?.length;
-  // Đang xem trang "Xem tất cả" của Nhạc bản quyền (activeTep) → render Khúc Chạm Store đầy đủ.
+  // Đang xem trang "Xem tất cả" của Nhạc bản quyền (activeTep) → render Khúc Chạm Plaza đầy đủ.
   const isMusicActive = !!activeTep && /nhạc bản quyền|nhac ban quyen/i.test(activeTep);
   const loaiLabel = (l: string) => (l === "T2" ? t("Túi đôi") : l === "TĐD" ? t("Túi đa dạng") : t("Túi ghép"));
   // Giá combo: dùng giaCombo nếu sheet có; nếu trống (vd nguồn SanPham) → cộng giá thành viên từ catalog.
@@ -1910,14 +2078,12 @@ export default function Home() {
     [catalog, selected, userLoc, storesReady]
   );
 
-  // Cửa hàng online (không toạ độ → distanceKm=null) luôn giữ; cửa hàng có vị trí thì
-  // chỉ qua khi nằm trong bán kính. radiusKm=null → không lọc.
-  const withinRadius = (d: number | null) => radiusKm == null || d == null || d <= radiusKm;
-
-  // Offer trong bán kính — mọi thứ (rẻ nhất, tiết kiệm, marker) tính trên tập này cho nhất quán.
+  // Offer trong bán kính — online (store.online=true) luôn giữ; physical phải có distanceKm ≤ radiusKm.
+  // radiusKm=null → không lọc.
   const offers = useMemo(
-    () => (radiusKm != null ? allOffers.filter((o) => withinRadius(o.distanceKm)) : allOffers),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => radiusKm == null
+      ? allOffers
+      : allOffers.filter((o) => o.store.online || (o.distanceKm != null && o.distanceKm <= radiusKm)),
     [allOffers, radiusKm]
   );
   const cheapest = cheapestInStock(offers);
@@ -1996,26 +2162,29 @@ export default function Home() {
   }, [catalog, selected, priceStats]);
 
   const center: [number, number] = userLoc && userLoc.lat ? [userLoc.lat, userLoc.lng] : HCM_CENTER;
+  // Vị trí map user đang xem (pan/zoom tay trên homepage map) → sync sang product map.
+  const [mapView, setMapView] = useState<[number, number] | null>(null);
+  const syncedCenter: [number, number] = mapView ?? center;
 
   const markers: MapMarker[] = useMemo(() => {
     if (selected && offers.length) {
       return offers.map((o) => ({
-        store: o.store,
+        // Gán loaiCskd theo chain (nếu store chưa có) → chú thích map hiện cây danh mục như trang chủ.
+        store: o.store.loaiCskd?.length ? o.store : { ...o.store, loaiCskd: cskdByChain.get(o.store.chain) },
         price: o.price,
         inStock: o.inStock,
         cheapest: cheapest?.storeId === o.storeId,
         nearest: nearestStoreId === o.storeId,
       }));
     }
-    let stores = getStores();
+    // Khi đang ở CSKD mode (có taxonomy), dùng cskdStores để marker có loaiCskd
+    let stores = (cskdTaxonomy && cskdStores.length > 0) ? cskdStores : getStores();
     // Lọc theo QUỐC GIA: store nằm ngoài quốc gia user đang đứng → ẩn khỏi map.
-    // Hiện toàn bộ store của catalog là VN (Vietnam bbox: lat 8.0-23.5, lng 102-110).
-    // User ở quốc gia khác (vd Canada/Mỹ) → không hiện store VN trên map nữa.
     if (country && country !== "vn") {
       stores = stores.filter((s) => {
         if (s.lat == null || s.lng == null) return false;
         const inVN = s.lat >= 8 && s.lat <= 23.5 && s.lng >= 102 && s.lng <= 110;
-        return !inVN; // giữ store ngoài VN; bỏ store trong VN
+        return !inVN;
       });
     }
     if (radiusKm != null && userLoc) {
@@ -2027,10 +2196,10 @@ export default function Home() {
     }
     return stores.map((s) => ({ store: s }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady]);
+  }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady, cskdTaxonomy, cskdStores, cskdByChain]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
-  async function recordBuy(o: RankedOffer) {
+  async function recordBuy(o: RankedOffer, note?: string) {
     setToast(t("Đã ghi nhận mua {product} tại {store}", { product: o.product.name, store: o.store.name }));
     setTimeout(() => setToast(""), 3500);
     await addPurchase({
@@ -2044,6 +2213,7 @@ export default function Home() {
       buyerLat: userLoc?.lat,
       buyerLng: userLoc?.lng,
       buyerAddr: userAddr || undefined,
+      buyerNote: note?.trim() || undefined,
     });
   }
 
@@ -2375,30 +2545,6 @@ export default function Home() {
       <header ref={headerRef} className="sticky top-0 z-[2100] border-b border-white/40 bg-white/70 backdrop-blur-2xl" style={{ WebkitBackdropFilter: "blur(32px)" }}>
         <div className="mx-auto max-w-6xl px-3 py-3 sm:px-4">
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Nút Quay lại: hiện khi đang xem trang con (filter/route khác `/`).
-              Click → reset filter + về `/` để user luôn có lối thoát rõ ràng. */}
-            {(query.trim() || quickFilter || activeTep || activeCat || activeBrand || activeChain || selected) && (
-              <button
-                onClick={() => {
-                  setSelected(null);
-                  setActiveTep(null);
-                  setActiveCat(null);
-                  setActiveBrand(null);
-                  setActiveChain(null);
-                  setQuickFilter(null);
-                  setQuery("");
-                  setPage(1);
-                  router.push("/");
-                }}
-                title={t("Quay lại trang chính")}
-                aria-label={t("Quay lại trang chính")}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 active:scale-95"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
-              </button>
-            )}
             <Link
               href="/"
               onClick={() => {
@@ -2526,12 +2672,6 @@ export default function Home() {
             >
               🤖 Agent Demo
             </Link> */}
-              <button
-                onClick={() => setTxnnLiveOpen(true)}
-                className="shrink-0 whitespace-nowrap rounded-full border border-teal-300 bg-teal-50 px-2.5 py-1.5 text-sm font-medium text-teal-800 hover:bg-teal-100 sm:px-3"
-              >
-                🛒 Mua hàng TXNN
-              </button>
             </div>
           </div>
           {/* Mobile-only: thanh vị trí (full-width) ở dòng dưới — để dòng trên gọn cho Logo + Giỏ hàng + Lịch sử. */}
@@ -2622,24 +2762,61 @@ export default function Home() {
                   )}
                 </p>
                 <div className="mb-1 flex flex-col gap-3">
-                  {VERSION_HISTORY[0].children.map((sub) => (
-                    <div key={sub.subVersion} className="flex flex-col gap-1.5">
-                      <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                          v{sub.subVersion}
-                        </span>
-                        {sub.date && <span className="font-normal text-slate-400">· {sub.date}</span>}
-                      </p>
-                      <ol className="flex flex-col gap-1 pl-1">
-                        {sub.highlights.map((it, i) => (
-                          <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
-                            <span className="shrink-0 font-mono text-[11px] font-semibold text-emerald-600">{i + 1}.</span>
-                            <span>{it}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  ))}
+                  {VERSION_HISTORY[0].children.map((sub, idx) => {
+                    // Sub MỚI NHẤT (idx 0) luôn xổ; sub cũ hơn thu gọn, bấm "Xem chi tiết" mới mở.
+                    if (idx === 0) {
+                      return (
+                        <div key={sub.subVersion} className="flex flex-col gap-1.5">
+                          <p className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                              v{sub.subVersion}
+                            </span>
+                            {sub.date && <span className="font-normal text-slate-400">· {sub.date}</span>}
+                          </p>
+                          <ol className="flex flex-col gap-1 pl-1">
+                            {sub.highlights.map((it, i) => (
+                              <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                                <span className="shrink-0 font-mono text-[11px] font-semibold text-emerald-600">{i + 1}.</span>
+                                <span>{it}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      );
+                    }
+                    const isOpen = expandedSub === sub.subVersion;
+                    return (
+                      <div key={sub.subVersion} className="rounded-xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSub(isOpen ? null : sub.subVersion)}
+                          aria-expanded={isOpen}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">v{sub.subVersion}</span>
+                            {sub.date && <span className="font-normal text-slate-400">{sub.date}</span>}
+                          </span>
+                          <span className="flex items-center gap-1 font-normal text-slate-500">
+                            {isOpen ? t("Thu gọn") : t("Xem chi tiết")}
+                            <svg className={`transition ${isOpen ? "rotate-180" : ""}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="m6 9 6 6 6-6" />
+                            </svg>
+                          </span>
+                        </button>
+                        {isOpen && (
+                          <ol className="flex flex-col gap-1 border-t border-slate-100 px-3 py-2.5 pl-4">
+                            {sub.highlights.map((it, i) => (
+                              <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
+                                <span className="shrink-0 font-mono text-[11px] font-semibold text-slate-500">{i + 1}.</span>
+                                <span>{it}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -2888,8 +3065,11 @@ export default function Home() {
                   userAddr={userAddr}
                   markers={markers}
                   radiusKm={radiusKm}
+                  onRadiusChange={setRadiusKm}
+                  onViewChange={(c) => setMapView(c)}
                   onStorePick={setStoreProducts}
                   lang={lang}
+                  cskdTaxonomy={cskdTaxonomy}
                 />
               </div>
             </div>
@@ -2912,6 +3092,7 @@ export default function Home() {
               onSendLove={() => {
                 setContactKind("loi-yeu-thuong");
                 setContactMsg("");
+                setContactRecipient("");
                 setContactOpen(true);
               }}
               onLicense={() => {
@@ -2972,6 +3153,8 @@ export default function Home() {
                             return sp ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={sp.logo} alt={s.label} className="h-full w-full object-cover" />
+                            ) : s.emoji?.includes("⚽") ? (
+                              <span className="animate-spin inline-block">{s.emoji}</span>
                             ) : (
                               s.emoji
                             );
@@ -3040,7 +3223,7 @@ export default function Home() {
                           ở giữa thẻ, có khoảng đệm tự nhiên quanh logo, không méo/crop. */}
                         <span className="relative">
                           <span
-                            className={`flex h-20 w-20 items-center justify-center overflow-hidden ${TILE_GLASS}`}
+                            className={`flex h-20 w-20 items-center justify-center overflow-hidden p-2 ${TILE_GLASS}`}
                             // Vuông 80×80 đồng kích thước với tile 'Dịch vụ quanh đây' để 2 section
                             // đồng phong cách. Logo tự dò màu nền brand + trim lề rỗng (TrimmedLogo).
                             style={{
@@ -3053,6 +3236,7 @@ export default function Home() {
                                 alt={sp.name}
                                 className="h-full w-full object-contain"
                                 keyOutWhite={!!SPONSOR_FILL_OVERRIDES[sp.name]}
+                                padPx={sp.name === "Beauty Republic" ? 2 : undefined}
                                 onResult={({ fillColor }) => {
                                   if (fillColor) setSponsorFill((m) => (m[sp.name] === fillColor ? m : { ...m, [sp.name]: fillColor }));
                                 }}
@@ -3135,7 +3319,7 @@ export default function Home() {
                       </svg>
                       {t("Bán kính")}
                     </span>
-                    {[0.5, 1, 2, 3, 5].map((r) => (
+                    {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
                       <button
                         key={r}
                         type="button"
@@ -3237,6 +3421,9 @@ export default function Home() {
                         <div className="mt-0.5 min-h-[16px] line-clamp-1 text-[11px] font-medium text-emerald-600">
                           {d.km != null && <>📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}</>}
                         </div>
+                        {d.storeChain && chainMinOrder(d.storeChain) > 0 && (
+                          <div className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(d.storeChain), d.currency) })}</div>
+                        )}
                         <div className="mt-auto pt-2 flex gap-1.5">
                           <button
                             type="button"
@@ -3295,37 +3482,70 @@ export default function Home() {
               {(query.trim() || quickFilter || activeTep || activeCat || activeBrand || activeChain) && (
                 <>
                   <div
-                    className="sticky z-20 -mx-4 mb-5 flex items-center justify-between gap-2 border-b border-slate-200/70 bg-slate-50/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80"
+                    className="sticky z-20 -mx-4 mb-5 border-b border-slate-200 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80"
                     style={{ top: headerH }}
                   >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <button
-                        onClick={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50 active:scale-95"
-                        aria-label={t("Quay lại trang chủ")}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M15 18l-6-6 6-6" />
-                        </svg>
-                        {t("Quay lại")}
-                      </button>
-                      <span className="flex min-w-0 flex-col">
-                        <h2 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-800">
-                          {activeBrand && activeCat
+                    {activeTep ? (
+                      /* ── 2-tầng giống PNJ: tầng cha (circle button) + tầng con SubCatBar ── */
+                      <>
+                        {/* Tầng cha: tên tệp + circle back về trang chủ — giống PNJ store header */}
+                        <div className="flex items-center gap-2 px-3 pt-4 pb-3">
+                          <button
+                            onClick={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
+                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 active:bg-slate-200"
+                          >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M15 18l-6-6 6-6" />
+                            </svg>
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              {(() => { const g = (catalog?.danhMucGroups ?? catalog?.groups ?? []).find(g => g.label === activeTep); return g?.emoji ? <span>{g.emoji}</span> : null; })()}
+                              <h1 className="truncate text-base font-bold text-slate-900">{prettyCat(activeTep)}</h1>
+                            </div>
+                            {catalog && !isMusicActive && (
+                              <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                                {isTuiActive ? t("{n} túi", { n: catalog.tui!.length }) : t("{n} sản phẩm", { n: tepTotalCount })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {/* Tầng con: SubCatBar chỉ hiện khi đang trong ngành hàng cụ thể */}
+                        {activeCat && (
+                          <div className="border-t border-slate-200">
+                            <SubCatBar
+                              backLabel={t("Quay lại")}
+                              onBack={() => { setActiveCat(null); setPage(1); }}
+                              emoji={null}
+                              title={prettyCat(activeCat)}
+                              count={catalog && !isMusicActive ? orderedMatches.length : undefined}
+                              t={t}
+                            />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      /* ── 1-tầng: brand / chain / search / quickFilter ── */
+                      <SubCatBar
+                        backLabel={t("Quay lại")}
+                        onBack={() => { setActiveTep(null); setActiveCat(null); setActiveBrand(null); setActiveChain(null); setQuickFilter(null); setQuery(""); setPage(1); }}
+                        emoji={null}
+                        title={
+                          activeBrand && activeCat
                             ? `${activeBrand} · ${prettyCat(activeCat)}`
                             : activeBrand
                               ? activeBrand
                               : activeChain
                                 ? chainLabel(activeChain)
-                                : activeCat && !activeTep
-                                  ? prettyCat(activeCat)
-                                  : activeTep && !query
-                                    ? prettyCat(activeTep)
-                                    : query
-                                      ? t("Kết quả")
-                                      : quickFilter
-                                        ? t(QUICK_FILTERS.find((q) => q.key === quickFilter)!.label)
-                                        : t("Kết quả")}
+                                : query
+                                  ? t("Kết quả")
+                                  : quickFilter
+                                    ? t(QUICK_FILTERS.find((q) => q.key === quickFilter)!.label)
+                                    : t("Kết quả")
+                        }
+                        count={catalog && !isMusicActive ? (isTuiActive ? catalog.tui!.length : orderedMatches.length) : undefined}
+                        countUnit={isTuiActive ? t("túi") : undefined}
+                        badges={<>
                           {activeBrand && (
                             <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                               {t("Nhãn hàng")}
@@ -3344,31 +3564,13 @@ export default function Home() {
                               📍 {areaName}
                             </span>
                           )}
-                        </h2>
-                        {/* Sub-title: "Bán tại: <Chuỗi>" khi sp đang xem chủ yếu từ 1 chuỗi
-                          (Mục đích: vào /nganh/do-uong toàn sp Circle K → user thấy ngay
-                          nguồn bán). Ẩn khi đã filter theo chuỗi (header chính đã hiện tên). */}
-                        {dominantChain && !activeChain && (
-                          <span className="mt-0.5 truncate text-[11px] font-medium text-slate-500">
-                            {t("Bán tại")}:{" "}
-                            <span
-                              className="font-semibold"
-                              style={{ color: chainColor(dominantChain) }}
-                            >
-                              {chainLabel(dominantChain)}
-                            </span>
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                    {catalog && !isMusicActive && (
-                      <span className="shrink-0 text-xs text-slate-400">
-                        {isTuiActive ? t("{n} túi", { n: catalog.tui!.length }) : t("{n} sản phẩm", { n: orderedMatches.length })}
-                      </span>
+                        </>}
+                        t={t}
+                      />
                     )}
                   </div>
                   {isMusicActive ? (
-                    <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} showAll headerH={headerH} />
+                    <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} showAll headerH={headerH} cartQtyForId={(id) => cartItems.filter((i) => i.product.id === id).reduce((s, i) => s + i.qty, 0)} />
                   ) : isTuiActive ? (
                     <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                       {catalog!.tui!.map((tu) => (
@@ -3428,6 +3630,122 @@ export default function Home() {
                         </li>
                       ))}
                     </ul>
+                  ) : activeTep && !activeCat && !query.trim() && !quickFilter && !activeBrand && !activeChain ? (
+                    // Grouped carousel: mỗi sub-category 1 hàng ngang, click "Xem tất cả →" mới ra lưới
+                    <>
+                      {!catalog ? (
+                        // Catalog đang load — hiện skeleton
+                        <div className="mt-5 flex flex-col gap-6">
+                          {[1, 2].map((i) => (
+                            <div key={i}>
+                              <div className="mb-2.5 h-4 w-32 animate-pulse rounded bg-slate-200" />
+                              <div className="flex gap-3 overflow-hidden py-3">
+                                {[1, 2, 3, 4].map((j) => (
+                                  <div key={j} className="h-52 w-36 shrink-0 animate-pulse rounded-2xl bg-slate-100" />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {(() => {
+                        const catMap = new Map<string, typeof orderedMatches>();
+                        for (const p of orderedMatches) {
+                          const cat = (p.category || "").trim() || "Khác";
+                          if (!catMap.has(cat)) catMap.set(cat, []);
+                          catMap.get(cat)!.push(p);
+                        }
+                        return [...catMap.entries()].map(([cat, catProducts]) => (
+                          <section key={cat} className="mt-5">
+                            <div className="mb-2.5 flex items-center justify-between">
+                              <h3 className="text-sm font-semibold text-slate-700">
+                                <span className="mr-1">{CAT_EMOJI[cat] ?? "🛒"}</span>{prettyCat(cat)}
+                              </h3>
+                              <button
+                                onClick={() => { setActiveCat(cat); setPage(1); }}
+                                className="shrink-0 text-xs font-medium text-emerald-600 hover:underline"
+                              >
+                                {t("Xem tất cả →")}
+                              </button>
+                            </div>
+                            <EdgeFadeRow className="flex gap-3 overflow-x-auto py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                              {catProducts.slice(0, 12).map((p) => {
+                                const st = priceStats.get(p.id);
+                                const tags = recoTags.get(p.id) ?? [];
+                                const compare = canCompare(p);
+                                return (
+                                  <div key={p.id} className="w-36 shrink-0 sm:w-40">
+                                    <div className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]">
+                                      <div className="mb-3 flex min-h-[20px] flex-wrap items-start gap-1">
+                                        {tags.map((tag) => (
+                                          <span key={tag.key} className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold shadow-sm ${tag.cls}`}>{tag.label}</span>
+                                        ))}
+                                      </div>
+                                      <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
+                                        <ProductThumb product={p} fill />
+                                      </div>
+                                      <span
+                                        role="button" tabIndex={0}
+                                        onClick={(e) => { e.stopPropagation(); setInfoProduct(p); }}
+                                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(p); } }}
+                                        aria-label={t("Xem thông tin & chứng nhận")} title={t("Xem thông tin & chứng nhận")}
+                                        className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
+                                      >
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
+                                      </span>
+                                      <span className="mb-1.5 block h-[10px]" />
+                                      <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{p.name}</span>
+                                      <span className="mt-0.5 truncate text-xs text-slate-400">{p.brand} · {t(p.unit)}</span>
+                                      {st && st.stores > 0 ? (
+                                        <>
+                                          <span className="mt-1.5 inline-flex items-center gap-1 text-sm font-bold text-rose-600">
+                                            <svg className="shrink-0 text-rose-500" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
+                                            {formatMoney(st.min, st.currency)}
+                                          </span>
+                                          <span className="mt-0.5 flex min-h-[16px] items-center gap-1.5">
+                                            {(() => {
+                                              const listed = p.listedPrice;
+                                              const km = p.discountPct ?? (listed && listed > st.min ? (listed - st.min) / listed : 0);
+                                              if (!listed || listed <= st.min) return null;
+                                              return (<><span className="text-[10px] text-slate-400 line-through">{formatMoney(listed, st.currency)}</span>{km > 0 && (<span className="rounded bg-rose-100 px-1 py-0.5 text-[9px] font-bold text-rose-700">-{Math.round(km * 100)}%</span>)}</>);
+                                            })()}
+                                          </span>
+                                          <span className="mt-0.5 truncate text-xs text-slate-500">
+                                            {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                          </span>
+                                          {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
+                                        </>
+                                      ) : st && st.outOfStock ? (
+                                        <span className="mt-1.5 text-xs font-medium text-red-500">{t("Hết hàng")}</span>
+                                      ) : (
+                                        <span className="mt-1.5 text-xs text-slate-400">{t("Chưa có giá")}</span>
+                                      )}
+                                      <span className="mt-auto block w-full pt-2">
+                                        {compare ? (
+                                          <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1 rounded-lg border border-slate-200 bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                            {t("So sánh")}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                          </span>
+                                        ) : (
+                                          <span className="flex gap-1">
+                                            <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); addToCart(p); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }} className="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-base font-bold text-amber-600 hover:bg-amber-100">
+                                              +
+                                              {cartQtyFor(p.id) > 0 && (<span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyFor(p.id)}</span>)}
+                                            </span>
+                                            <span onClick={(e) => { e.stopPropagation(); openBuyAgent(p); }} className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border border-slate-200 bg-amber-500 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                              {t("Mua ngay")}
+                                            </span>
+                                          </span>
+                                        )}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </EdgeFadeRow>
+                          </section>
+                        ));
+                      })()}
+                    </>
                   ) : (<>
                     <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                       {pageItems.map((p) => {
@@ -3486,6 +3804,7 @@ export default function Home() {
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
                                     {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
                                   </span>
+                                  {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                 </>
                               ) : st && st.outOfStock ? (
                                 <span className="mt-1.5 text-sm font-medium text-red-500">{t("Hết hàng")}</span>
@@ -3493,31 +3812,31 @@ export default function Home() {
                                 <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                               )}
                               <span className="mt-auto block w-full pt-2.5">
-                                {compare ? (
-                                  <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
-                                    {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                <span className="flex gap-1">
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => { e.stopPropagation(); addToCart(p); }}
+                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }}
+                                    className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
+                                  >
+                                    +
+                                    {cartQtyFor(p.id) > 0 && (
+                                      <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
+                                        {cartQtyFor(p.id)}
+                                      </span>
+                                    )}
                                   </span>
-                                ) : (
-                                  <span className="flex gap-1">
-                                    <span
-                                      role="button"
-                                      tabIndex={0}
-                                      onClick={(e) => { e.stopPropagation(); addToCart(p); }}
-                                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }}
-                                      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
-                                    >
-                                      +
-                                      {cartQtyFor(p.id) > 0 && (
-                                        <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                          {cartQtyFor(p.id)}
-                                        </span>
-                                      )}
+                                  {compare ? (
+                                    <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                      {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                                     </span>
+                                  ) : (
                                     <span onClick={(e) => { e.stopPropagation(); openBuyAgent(p); }} className="flex flex-1 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
                                       {t("Mua ngay")}
                                     </span>
-                                  </span>
-                                )}
+                                  )}
+                                </span>
                               </span>
                             </div>
                           </li>
@@ -3562,7 +3881,7 @@ export default function Home() {
                         <div className="mb-2.5 flex items-end justify-between gap-3">
                           <div className="flex min-w-0 flex-col leading-tight">
                             <h2 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
-                              {emoji && <span className="mr-1.5">{emoji}</span>}{t(displayName ?? name)}
+                              {emoji && <span className={`mr-1.5${emoji?.includes("⚽") ? " animate-spin inline-block" : ""}`}>{emoji}</span>}{t(displayName ?? name)}
                             </h2>
                           </div>
                           <button
@@ -3664,7 +3983,7 @@ export default function Home() {
                               <span className="animate-note-blink pointer-events-none absolute -bottom-1 -left-1 text-xs text-amber-500 [animation-delay:.4s]" aria-hidden="true">♪</span>
                             </a>
                             <h2 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
-                              {emoji && <span className="mr-1.5">{emoji}</span>}{t(displayName ?? name)}
+                              {emoji && <span className={`mr-1.5${emoji?.includes("⚽") ? " animate-spin inline-block" : ""}`}>{emoji}</span>}{t(displayName ?? name)}
                             </h2>
                           </div>
                           <button
@@ -3674,7 +3993,7 @@ export default function Home() {
                             {t("Xem tất cả →")}
                           </button>
                         </div>
-                        <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} headerH={headerH} />
+                        <KhucChamAlbumList t={t} onBuy={addMusicToCart} onBuyNow={openMusicOrder} headerH={headerH} cartQtyForId={(id) => cartItems.filter((i) => i.product.id === id).reduce((s, i) => s + i.qty, 0)} />
                       </section>
                     );
                   }
@@ -3685,7 +4004,7 @@ export default function Home() {
                       <div className="mb-2.5 flex items-end justify-between gap-3">
                         <div className="flex min-w-0 flex-col leading-tight">
                           <h2 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
-                            {emoji && <span className="mr-1.5">{emoji}</span>}{t(displayName ?? name)}
+                            {emoji && <span className={`mr-1.5${emoji?.includes("⚽") ? " animate-spin inline-block" : ""}`}>{emoji}</span>}{t(displayName ?? name)}
                           </h2>
                         </div>
                         {products.length > 0 && (
@@ -3771,16 +4090,31 @@ export default function Home() {
                                     <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                                   )}
                                   <span className="mt-auto block w-full pt-2.5">
-                                    {compare ? (
-                                      <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
-                                        {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                    <span className="flex gap-1">
+                                      <span
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={(e) => { e.stopPropagation(); addToCart(p); }}
+                                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); addToCart(p); } }}
+                                        className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
+                                      >
+                                        +
+                                        {cartQtyFor(p.id) > 0 && (
+                                          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
+                                            {cartQtyFor(p.id)}
+                                          </span>
+                                        )}
                                       </span>
-                                    ) : (
-                                      <span onClick={(e) => { e.stopPropagation(); openBuyForm(p); }} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
-                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                        {t("Vào mua")}
-                                      </span>
-                                    )}
+                                      {compare ? (
+                                        <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-emerald-600 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
+                                          {t("So sánh giá")}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                        </span>
+                                      ) : (
+                                        <span onClick={(e) => { e.stopPropagation(); openBuyAgent(p); }} className="flex flex-1 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-500 py-2 text-xs font-semibold text-white transition-colors duration-200 group-hover:bg-amber-600">
+                                          {t("Mua ngay")}
+                                        </span>
+                                      )}
+                                    </span>
                                   </span>
                                 </div>
                               </li>
@@ -3844,6 +4178,7 @@ export default function Home() {
                                       <span className="mt-0.5 truncate text-xs text-slate-500">
                                         {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
                                       </span>
+                                      {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                     </>
                                   ) : st && st.outOfStock ? (
                                     <span className="mt-1.5 text-xs font-medium text-red-500">{t("Hết hàng")}</span>
@@ -4257,6 +4592,20 @@ export default function Home() {
 
                                     <div className="flex items-center gap-2">
                                       <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
+                                        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
+                                        title={t("Thêm vào giỏ")}
+                                        aria-label={t("Thêm vào giỏ")}
+                                      >
+                                        +
+                                        {cartItems.filter((i) => i.product.id === o.product.id && i.offer.store.id === o.storeId).reduce((s, i) => s + i.qty, 0) > 0 && (
+                                          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
+                                            {cartItems.filter((i) => i.product.id === o.product.id && i.offer.store.id === o.storeId).reduce((s, i) => s + i.qty, 0)}
+                                          </span>
+                                        )}
+                                      </button>
+                                      <button
                                         onClick={() => setBuyOffer(o)}
                                         className="inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-amber-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-amber-600"
                                       >
@@ -4266,20 +4615,6 @@ export default function Home() {
                                           <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
                                         </svg>
                                         {t("Mua ngay")}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={(e) => { e.stopPropagation(); addToCart(o.product, o); }}
-                                        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-amber-50 text-xl font-bold text-amber-600 transition hover:bg-amber-100"
-                                        title={t("Thêm vào giỏ")}
-                                        aria-label={t("Thêm vào giỏ")}
-                                      >
-                                        +
-                                        {cartQtyFor(o.product.id) > 0 && (
-                                          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                            {cartQtyFor(o.product.id)}
-                                          </span>
-                                        )}
                                       </button>
                                     </div>
                                   </div>
@@ -4361,52 +4696,58 @@ export default function Home() {
                     {
                       selected && (
                         <div className="mt-4 hidden overflow-hidden rounded-xl border border-slate-200 lg:block">
+                          {/* Header đồng bộ với map trang chủ: địa chỉ (chạy chữ) + chip bán kính */}
                           {userLoc && (
-                            <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-100 bg-white px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                              <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                                  <circle cx="12" cy="10" r="3" />
+                            <div className="border-b border-slate-100 px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" />
                                 </svg>
-                                {t("Bán kính")}
-                              </span>
-                              {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
-                                <button
-                                  key={r}
-                                  onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
-                                  className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs transition ${radiusKm === r
-                                    ? "border-emerald-600 bg-emerald-600 text-white"
-                                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                                    }`}
-                                >
-                                  {r < 1 ? `${Math.round(r * 1000)}m` : "1km"}
-                                </button>
-                              ))}
-                              {radiusKm !== null && (
-                                <button
-                                  onClick={() => setRadiusKm(null)}
-                                  title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
-                                  className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-600 transition hover:bg-rose-100"
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M18 6 6 18M6 6l12 12" />
-                                  </svg>
-                                  {t("Bỏ giới hạn")}
-                                </button>
-                              )}
+                                <MarqueeText className="text-xs font-medium text-slate-600">
+                                  {userAddr || t("Vị trí của bạn")}
+                                </MarqueeText>
+                              </div>
+                              <div className="mt-1.5 flex items-center gap-1 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
+                                  <button
+                                    key={r}
+                                    type="button"
+                                    onClick={() => setRadiusKm((cur) => (cur === r ? null : r))}
+                                    className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] transition ${radiusKm === r
+                                      ? "border-emerald-600 bg-emerald-600 text-white"
+                                      : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                                      }`}
+                                  >
+                                    {r < 1 ? `${Math.round(r * 1000)}m` : `${r}km`}
+                                  </button>
+                                ))}
+                                {radiusKm !== null && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setRadiusKm(null)}
+                                    title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
+                                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 transition hover:bg-rose-100"
+                                  >
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                                    {t("Bỏ giới hạn")}
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           )}
                           <div className="relative z-0 lg:h-[380px]">
                             <MapView
-                              center={center}
+                              center={syncedCenter}
                               userLoc={userLoc}
                               userAddr={userAddr}
                               markers={markers}
                               highlightId={hoverStore}
                               radiusKm={radiusKm}
+                              onRadiusChange={setRadiusKm}
                               lang={lang}
                               onBuy={(store) => openBuyForm(selected, store)}
                               onStorePick={setStoreProducts}
+                              cskdTaxonomy={cskdTaxonomy}
                             />
                           </div>
                         </div>
@@ -4464,7 +4805,6 @@ export default function Home() {
               className={`overflow-hidden rounded-xl border border-slate-200 lg:hidden ${mobileView === "map" ? "block" : "hidden"
                 }`}
             >
-              {/* Header bán kính — hiện khi đã có vị trí (dù xem map thuần hay chi tiết sp) */}
               {userLoc && (
                 <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-100 bg-white px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
@@ -4502,14 +4842,18 @@ export default function Home() {
               )}
               <div className={`relative z-0 ${mobileView === "map" ? "h-[calc(100vh-11rem)]" : "lg:h-[420px]"}`}>
                 <MapView
-                  center={center}
+                  center={selected ? syncedCenter : center}
                   userLoc={userLoc}
                   userAddr={userAddr}
                   markers={markers}
                   highlightId={hoverStore}
                   radiusKm={radiusKm}
+                  onRadiusChange={setRadiusKm}
+                  onViewChange={!selected ? (c) => setMapView(c) : undefined}
                   lang={lang}
                   onStorePick={setStoreProducts}
+                  cskdTaxonomy={cskdTaxonomy}
+                  scrollWheelZoom={mobileView === "map"}
                   onBuy={
                     selected
                       ? (store) => openBuyForm(selected, store)
@@ -4521,40 +4865,16 @@ export default function Home() {
           )}
       </main>
 
-      <footer className="mt-8 border-t border-slate-200 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-7 pb-24 sm:pb-7 lg:pb-7">
-          <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-between sm:text-left">
-            <a
-              href="https://one-solution.vn"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center opacity-90 transition hover:opacity-100"
-              title="One Solution"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/assets/os-logo.png" alt="One Solution" className="h-9 w-auto" />
-            </a>
-            <p className="text-xs leading-relaxed text-slate-500 sm:text-right">
-              © {new Date().getFullYear()} <b className="text-slate-700">Affree</b> — {t("sản phẩm của")}{" "}
-              <a
-                href="https://one-solution.vn"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-semibold text-slate-700 transition hover:text-emerald-600"
-              >
-                One Solution
-              </a>
-              .<br className="hidden sm:block" />
-              <b className="text-slate-700">{t("Kết nối mua bán - Không thu phí")}</b>
-              <br />
-              {t("Tìm gì cũng có - Giá hời quanh đây")}
-            </p>
-          </div>
-          <p className="mx-auto mt-5 max-w-2xl border-t border-slate-100 pt-4 text-center text-[11px] leading-relaxed text-slate-400">
-            {t("Giá & thông tin được tổng hợp từ nguồn công khai, có thể thay đổi theo thời gian. Hình ảnh, logo và thương hiệu thuộc về chủ sở hữu tương ứng; Affree là dịch vụ so sánh giá & điều hướng mua hàng. Yêu cầu gỡ nội dung: liên hệ One Solution.")}
-          </p>
-        </div>
-      </footer>
+      <div className="mx-auto max-w-6xl px-4">
+        <SiteStats
+          t={t}
+          products={catalog?.offers?.length ?? 0}
+          stores={catalog ? new Set(catalog.offers.map((o) => o.storeId)).size : 0}
+          brands={catalog ? new Set(catalog.products.map((p) => p.brand).filter(Boolean)).size : 0}
+        />
+      </div>
+
+      <AppFooter lang={lang} />
 
       <button
         onClick={() => setMobileView((v) => (v === "list" ? "map" : "list"))}
@@ -4608,21 +4928,35 @@ export default function Home() {
           <CartModal
             items={cartItems}
             lang={lang}
-            onClose={() => setCartOpen(false)}
+            onClose={() => {
+              setCartOpen(false);
+              // Đóng modal xong mới dọn các cửa hàng đã đặt khỏi giỏ (đã hoãn từ onOrdered).
+              if (orderedStoreIds.length) {
+                const ok = new Set(orderedStoreIds);
+                setCartItems((prev) => prev.filter((i) => !ok.has(i.offer.store.id)));
+                setOrderedStoreIds([]);
+              }
+            }}
             onUpdateQty={updateCartQty}
             onRemove={(pid, sid) => {
               removeFromCart(pid, sid);
               if (cartItems.length <= 1) setCartOpen(false);
             }}
-            onOrderWithAgent={(offers) => {
-              setCartOpen(false);
-              // Giỏ toàn nhạc bản quyền → form đặt nhạc (không agentic).
+            onOrderWithAgent={() => {
+              // Giỏ toàn nhạc bản quyền → form đặt nhạc (không agentic). Trả true = đã xử lý.
               const allMusic = cartItems.length > 0 && cartItems.every((i) => i.offer.store.id === "khuccham");
               if (allMusic) {
+                setCartOpen(false);
                 setMusicOrder(cartItems.map((i) => ({ id: i.product.id, name: i.product.name, image: i.product.image || "", price: i.offer.price, qty: i.qty })));
-              } else if (offers[0]) {
-                setBuyOffer(offers[0]);
+                return true;
               }
+              // Giỏ thường → để CartModal tự đặt nhiều cửa hàng (placeAll).
+              return false;
+            }}
+            onOrdered={(okStoreIds) => {
+              // KHÔNG xoá ngay — ghi nhận để dọn khi đóng modal, tránh giỏ rỗng làm
+              // CartModal unmount trước khi màn "Đã ghi nhận đơn hàng" kịp hiển thị.
+              setOrderedStoreIds(okStoreIds);
             }}
           />
         )
@@ -4671,10 +5005,21 @@ export default function Home() {
             alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
             geoAddr={userAddr}
             defaultAddress={userAddr}
-            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
+            defaultQty={(() => {
+              const base = cartQtyFor(buyOffer.product.id) || 1;
+              const min = chainMinOrder(buyOffer.store.chain);
+              if (min > 0 && buyOffer.price > 0) {
+                const chainTotal = cartItems
+                  .filter((i) => i.offer.store.chain === buyOffer.store.chain && i.product.id !== buyOffer.product.id)
+                  .reduce((s, i) => s + i.offer.price * i.qty, 0);
+                const needed = Math.max(0, min - chainTotal);
+                return Math.max(base, Math.ceil(needed / buyOffer.price));
+              }
+              return base;
+            })()}
             onClose={() => setBuyOffer(null)}
-            onPlaced={(code, chosen) => {
-              recordBuy(chosen);
+            onPlaced={(code, chosen, note) => {
+              recordBuy(chosen, note);
               setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -4690,8 +5035,8 @@ export default function Home() {
             geoAddr={userAddr}
             defaultAddress={userAddr}
             onClose={() => setTxnnLiveOpen(false)}
-            onPlaced={(code, chosen) => {
-              recordBuy(chosen);
+            onPlaced={(code, chosen, note) => {
+              recordBuy(chosen, note);
               setToast(t("TXNN đã hoàn tất · {code}", { code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -4700,470 +5045,441 @@ export default function Home() {
       }
 
       {/* Modal "Liên hệ dịch vụ - Affree" — form intake có phân loại nhu cầu (Phương án 1+). */}
-      {contactOpen && (() => {
-        // Validate SĐT VN ngay khi gõ.
-        const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
-        const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
-        const phoneError = contactPhone.trim().length > 0 && !phoneValid;
-        // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
-        const isMusic = contactKind === "nhac-ban-quyen";
-        // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
-        const isLove = contactKind === "loi-yeu-thuong";
-        const emailValid = isMusic
-          ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
-          : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
-        // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
-        const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
-        const canSubmit =
-          phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
-          (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
-          (!isMusic || contactPurposes.length > 0);
-        // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
-        const MUSIC_PURPOSES = [
-          t("🎬 Quảng cáo / TVC"),
-          t("📱 Video MXH (YT/TikTok/FB)"),
-          t("🏪 Phát trong cửa hàng / quán"),
-          t("🎤 Sự kiện / biểu diễn"),
-          t("🎮 Game / App"),
-        ];
-        const togglePurpose = (p: string) =>
-          setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
-        // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
-        const msgPlaceholder = {
-          "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
-          "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
-          "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
-          "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
-          "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
-          "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
-        }[contactKind];
-        const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
-          { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
-          { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
-          { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
-        ];
-        return (
-          <div
-            className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
-            style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
-            onClick={() => setContactOpen(false)}
-          >
+      {
+        contactOpen && (() => {
+          // Validate SĐT VN ngay khi gõ.
+          const phoneDigits = contactPhone.replace(/[\s.\-()]/g, "").replace(/^(\+?84)/, "0");
+          const phoneValid = /^0[35789]\d{8}$/.test(phoneDigits);
+          const phoneError = contactPhone.trim().length > 0 && !phoneValid;
+          // Form cấp phép nhạc: email BẮT BUỘC (để gửi hợp đồng/license).
+          const isMusic = contactKind === "nhac-ban-quyen";
+          // Form "Gửi lời yêu thương": tối giản — chỉ cần lời nhắn; tên/SĐT tùy chọn.
+          const isLove = contactKind === "loi-yeu-thuong";
+          const emailValid = isMusic
+            ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())
+            : (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()));
+          // SĐT: bắt buộc & hợp lệ cho form thường/nhạc; với "lời yêu thương" thì tùy chọn (rỗng cũng được).
+          const phoneOk = isLove ? (!contactPhone.trim() || phoneValid) : phoneValid;
+          const canSubmit =
+            phoneOk && emailValid && (isLove || contactConsent) && !contactSubmitting &&
+            (isLove ? contactMsg.trim().length > 0 : contactName.trim().length >= 2) &&
+            (!isMusic || contactPurposes.length > 0);
+          // Mục đích khai thác cho form cấp phép nhạc (KHÔNG có "Khác").
+          const MUSIC_PURPOSES = [
+            t("🎬 Quảng cáo / TVC"),
+            t("📱 Video MXH (YT/TikTok/FB)"),
+            t("🏪 Phát trong cửa hàng / quán"),
+            t("🎤 Sự kiện / biểu diễn"),
+            t("🎮 Game / App"),
+          ];
+          const togglePurpose = (p: string) =>
+            setContactPurposes((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+          // Placeholder thay đổi theo nhu cầu đã chọn — gợi ý cho khách điền cụ thể.
+          const msgPlaceholder = {
+            "tu-van": t("Vd: tư vấn so giá sữa cho quán cà phê, ngân sách 3tr/tháng…"),
+            "hop-tac": t("Vd: muốn đăng sản phẩm mới lên Affree, làm nhãn tài trợ…"),
+            "b2b": t("Vd: lấy sỉ 500kg gạo/tháng, cần báo giá kho bãi…"),
+            "khac": t("Vd: báo lỗi giá, hợp tác sự kiện, đề xuất tính năng…"),
+            "nhac-ban-quyen": t("Vd: mô tả dự án, deadline phát hành, kênh đăng…"),
+            "loi-yeu-thuong": t("Vd: Cảm ơn Khúc Chạm vì những bài hát chữa lành…"),
+          }[contactKind];
+          const KINDS: Array<{ key: ContactKind; emoji: string; label: string }> = [
+            { key: "tu-van", emoji: "🛒", label: t("Tư vấn mua sắm") },
+            { key: "hop-tac", emoji: "🤝", label: t("Hợp tác bán hàng") },
+            { key: "b2b", emoji: "📦", label: t("Phân phối / B2B") },
+          ];
+          return (
             <div
-              className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
-                // không bị backdrop tối làm chìm chữ.
-                backdropFilter: "blur(24px) saturate(160%)",
-                WebkitBackdropFilter: "blur(24px) saturate(160%)",
-                backgroundColor: "rgba(255,255,255,0.96)",
-                boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
-              }}
+              className="fixed inset-0 z-[2100] flex items-center justify-center p-4"
+              style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+              onClick={() => setContactOpen(false)}
             >
-              {isLove ? (
-              /* ── Header riêng cho "Gửi lời yêu thương" — tông ấm amber/rose như Khúc Chạm ── */
-              <div className="relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-rose-400 px-5 pb-5 pt-5">
-                {/* decor circles */}
-                <span className="pointer-events-none absolute -right-6 -top-6 h-28 w-28 rounded-full bg-white/10" />
-                <span className="pointer-events-none absolute -bottom-4 left-4 h-16 w-16 rounded-full bg-white/10" />
-                <button
-                  onClick={() => setContactOpen(false)}
-                  aria-label={t("Đóng")}
-                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                </button>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-white/80 pr-9">
-                  {t("Khúc Chạm Channel")}
-                </p>
-                <h3 className="mt-1 text-xl font-extrabold leading-snug text-white pr-9">
-                  {t("Gửi lời yêu thương 💚")}
-                </h3>
-                <p className="mt-1.5 text-[12px] leading-relaxed text-white/90 pr-9">
-                  {t("Gửi lời nhắn yêu thương đến người thân — lời nhắn may mắn sẽ được Khúc Chạm phát sóng độc quyền vào sáng mai 🎁")}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <a
-                    href="https://zalo.me/0888803998"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-bold text-blue-600 shadow transition hover:bg-blue-50"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.953 9.953 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2Z"/></svg>
-                    {t("Nhắn Zalo: 0888 803 998")}
-                  </a>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1.5 text-[11px] font-semibold text-white">
-                    🎰 {t("Vòng quay may mắn")}
-                  </span>
-                </div>
-              </div>
-              ) : (
-              <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
-                <button
-                  onClick={() => setContactOpen(false)}
-                  aria-label={t("Đóng")}
-                  className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                </button>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
-                  {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : t("Liên hệ Affree")}
-                </p>
-                <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
-                  {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : t("Để lại liên hệ")}
-                </h3>
-                <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                  {t("Phản hồi trong 24h")}
-                </p>
-              </div>
-              )}
-
-              {isLove && loveSent ? (
-                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-rose-50 text-3xl ring-1 ring-rose-100">
-                    <span aria-hidden="true">💚</span>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src="/assets/khuc-cham-logo.png"
-                      alt="Khúc Chạm"
-                      className="absolute inset-0 h-full w-full bg-rose-50 object-contain"
-                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                    />
-                  </div>
-                  <h4 className="mt-4 text-lg font-bold text-slate-900">
-                    {t("Đã nhận lời yêu thương của bạn!")}
-                  </h4>
-                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
-                    {t("Cảm ơn bạn đã gửi lời nhắn tới Khúc Chạm 💌 — những dòng này thật sự tiếp thêm động lực cho cả nhà.")}
-                  </p>
-                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
-                    <button
-                      type="button"
-                      onClick={() => { setContactMsg(""); setLoveSent(false); }}
-                      className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 active:scale-95"
-                    >
-                      {t("Gửi thêm một lời nữa")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setContactOpen(false)}
-                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
-                    >
-                      {t("Đóng")}
-                    </button>
-                  </div>
-                </div>
-              ) : isMusic && licenseSent ? (
-                <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-                  <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-orange-50 text-3xl ring-1 ring-orange-100">
-                    <span aria-hidden="true">🎵</span>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src="/assets/khuc-cham-logo.png"
-                      alt="Khúc Chạm"
-                      className="absolute inset-0 h-full w-full bg-orange-50 object-contain"
-                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                    />
-                  </div>
-                  <h4 className="mt-4 text-lg font-bold text-slate-900">
-                    {t("Đã nhận đề nghị cấp phép của bạn!")}
-                  </h4>
-                  <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-slate-600">
-                    {t("Cảm ơn bạn đã quan tâm khai thác nhạc Khúc Chạm 🎶 — đội Affree sẽ liên hệ qua email trong 24h để trao đổi cấp phép.")}
-                  </p>
-                  <div className="mt-6 flex w-full max-w-xs flex-col gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setContactOpen(false)}
-                      className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95"
-                    >
-                      {t("Đóng")}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setContactError("");
-                  if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
-                  if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
-                  if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
-                  if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
-                  if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
-                  if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
-                  if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
-                  setContactSubmitting(true);
-                  // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
-                  saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
-                  try {
-                    await fetch("/api/contact", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        kind: contactKind,
-                        name: contactName.trim(),
-                        phone: phoneDigits,
-                        area: contactArea.trim(),
-                        email: contactEmail.trim(),
-                        msg: contactMsg.trim(),
-                        // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
-                        ...(contactKind === "nhac-ban-quyen" && {
-                          company: contactCompany.trim(),
-                          purposes: contactPurposes,
-                          album: contactAlbum.trim(),
-                          scope: contactScope.trim(),
-                          budget: contactBudget.trim(),
-                        }),
-                      }),
-                    });
-                  } catch {
-                    // im lặng — vẫn báo thành công vì đã lưu localStorage
-                  }
-                  setContactSubmitting(false);
-                  // "Lời yêu thương" & "Cấp phép nhạc": hiện xác nhận NGAY TRONG popup, giữ popup mở.
-                  if (isLove) {
-                    setLoveSent(true);
-                    return;
-                  }
-                  if (isMusic) {
-                    setLicenseSent(true);
-                    return;
-                  }
-                  setContactOpen(false);
-                  setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
-                  setTimeout(() => setToast(""), 3500);
+              <div
+                className="relative flex w-full max-w-md max-h-[90vh] flex-col overflow-hidden rounded-3xl"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  // Nền trắng sữa đặc giống popup mua hàng (OrderAgentModal) → label/text RÕ,
+                  // không bị backdrop tối làm chìm chữ.
+                  backdropFilter: "blur(24px) saturate(160%)",
+                  WebkitBackdropFilter: "blur(24px) saturate(160%)",
+                  backgroundColor: "rgba(255,255,255,0.96)",
+                  boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
                 }}
-                className="flex-1 overflow-y-auto px-5 py-4"
               >
-                {!isMusic && !isLove && (
-                <div className="mb-3">
-                  <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
-                    {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {KINDS.map((k) => {
-                      const active = contactKind === k.key;
-                      return (
-                        <button
-                          key={k.key}
-                          type="button"
-                          onClick={() => setContactKind(k.key)}
-                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${
-                            active
-                              ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
-                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                          }`}
-                        >
-                          <span className="text-base">{k.emoji}</span>
-                          <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                )}
-
-                <label className="mb-2.5 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                    {t("Họ tên")} {!isLove && <span className="text-rose-500">*</span>}
-                  </span>
-                  <input
-                    type="text"
-                    value={contactName}
-                    onChange={(e) => setContactName(e.target.value)}
-                    required={!isLove}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                    placeholder={t("Vd: Nguyễn Văn A")}
-                  />
-                </label>
-
-                <label className="mb-2.5 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                    {t("SĐT / Zalo")} {!isLove && <span className="text-rose-500">*</span>}
-                  </span>
-                  <input
-                    type="tel"
-                    value={contactPhone}
-                    onChange={(e) => setContactPhone(e.target.value)}
-                    required={!isLove}
-                    className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${
-                      phoneError
-                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                        : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
-                    }`}
-                    placeholder={t("Vd: 09xxxxxxxx")}
-                  />
-                  {phoneError && (
-                    <span className="mt-1 block text-[11px] text-rose-600">
-                      {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
-                    </span>
+                <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
+                  <button
+                    onClick={() => setContactOpen(false)}
+                    aria-label={t("Đóng")}
+                    className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-slate-500 shadow-sm transition hover:bg-white hover:text-slate-800"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                  </button>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
+                    {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
+                  </p>
+                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
+                    {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
+                  </h3>
+                  {!isLove && (
+                    <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                      {t("Phản hồi trong 24h")}
+                    </p>
                   )}
-                </label>
+                  {isLove && (
+                    <p className="mt-1.5 text-[11px] font-medium leading-snug text-slate-500 pr-9">
+                      {t("Gửi lời nhắn yêu thương đến người thân — lời nhắn may mắn sẽ được Khúc Chạm phát sóng độc quyền vào sáng mai 🎁")}
+                    </p>
+                  )}
+                </div>
 
-                {!isMusic && !isLove && (
-                <label className="mb-2.5 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
-                  <input
-                    type="text"
-                    value={contactArea}
-                    onChange={(e) => setContactArea(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                    placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
-                  />
-                </label>
-                )}
-
-                {isMusic && (
-                  <>
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                        {t("Email")} <span className="text-rose-500">*</span>
-                      </span>
-                      <input
-                        type="email"
-                        value={contactEmail}
-                        onChange={(e) => setContactEmail(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
-                      />
-                    </label>
-
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
-                      <input
-                        type="text"
-                        value={contactCompany}
-                        onChange={(e) => setContactCompany(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
-                      />
-                    </label>
-
-                    <div className="mb-2.5">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
-                        {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {MUSIC_PURPOSES.map((p) => {
-                          const active = contactPurposes.includes(p);
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setContactError("");
+                    if (isLove && !contactMsg.trim()) { setContactError(t("Vui lòng nhập lời nhắn")); return; }
+                    if (!isLove && contactName.trim().length < 2) { setContactError(t("Vui lòng nhập họ tên (≥ 2 ký tự)")); return; }
+                    if (!phoneOk) { setContactError(t("Số điện thoại không hợp lệ — dùng định dạng 09/03/05/07/08")); return; }
+                    if (isMusic && !contactEmail.trim()) { setContactError(t("Vui lòng nhập email để nhận hợp đồng cấp phép")); return; }
+                    if (!emailValid) { setContactError(t("Email không hợp lệ")); return; }
+                    if (isMusic && contactPurposes.length === 0) { setContactError(t("Chọn ít nhất 1 mục đích khai thác")); return; }
+                    if (!isLove && !contactConsent) { setContactError(t("Vui lòng tick đồng ý liên hệ qua SĐT")); return; }
+                    setContactSubmitting(true);
+                    // Lưu tên + SĐT + khu vực vào profile cho lần sau auto-fill.
+                    saveProfile({ name: contactName.trim(), phone: phoneDigits, address: contactArea.trim() });
+                    try {
+                      await fetch("/api/contact", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          kind: contactKind,
+                          name: contactName.trim(),
+                          phone: phoneDigits,
+                          area: contactArea.trim(),
+                          email: contactEmail.trim(),
+                          msg: contactMsg.trim(),
+                          // Người nhận lời nhắn (chỉ form "lời yêu thương").
+                          ...(isLove && { recipient: contactRecipient.trim() }),
+                          // Field riêng form cấp phép nhạc (chỉ gửi khi đúng loại).
+                          ...(contactKind === "nhac-ban-quyen" && {
+                            company: contactCompany.trim(),
+                            purposes: contactPurposes,
+                            album: contactAlbum.trim(),
+                            scope: contactScope.trim(),
+                            budget: contactBudget.trim(),
+                          }),
+                        }),
+                      });
+                    } catch {
+                      // im lặng — vẫn báo thành công vì đã lưu localStorage
+                    }
+                    setContactSubmitting(false);
+                    setContactOpen(false);
+                    setToast(t("Đã ghi nhận — đội Affree sẽ liên hệ sớm. Cảm ơn bạn!"));
+                    setTimeout(() => setToast(""), 3500);
+                  }}
+                  className="flex-1 overflow-y-auto px-5 py-4"
+                >
+                  {!isMusic && !isLove && (
+                    <div className="mb-3">
+                      <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
+                        {t("Bạn cần Affree hỗ trợ gì?")} <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {KINDS.map((k) => {
+                          const active = contactKind === k.key;
                           return (
                             <button
-                              key={p}
+                              key={k.key}
                               type="button"
-                              onClick={() => togglePurpose(p)}
-                              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
-                                active
-                                  ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
-                                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                              }`}
+                              onClick={() => setContactKind(k.key)}
+                              className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-xs transition ${active
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200"
+                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                                }`}
                             >
-                              {p}
+                              <span className="text-base">{k.emoji}</span>
+                              <span className="line-clamp-2 font-medium leading-tight">{k.label}</span>
                             </button>
                           );
                         })}
                       </div>
                     </div>
+                  )}
 
-                    <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
-                      <select
-                        value={contactAlbum}
-                        onChange={(e) => setContactAlbum(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      >
-                        <option value="">{t("Chọn")}</option>
-                        <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
-                        {SEED_MUSIC.map((al) => (
-                          <option key={al.id} value={al.title}>{al.title}</option>
-                        ))}
-                        <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
-                      </select>
-                    </label>
+                  {/* Form "lời yêu thương": lời nhắn (field bắt buộc DUY NHẤT) lên đầu,
+                      thông tin liên hệ tùy chọn gom xuống dưới cho đúng tinh thần tối giản. */}
+                  {isLove && (
+                    <>
+                      <label className="mb-3 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Lời nhắn yêu thương")} <span className="text-rose-500">*</span>
+                        </span>
+                        <textarea
+                          value={contactMsg}
+                          onChange={(e) => setContactMsg(e.target.value)}
+                          rows={4}
+                          autoFocus
+                          className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={msgPlaceholder}
+                        />
+                      </label>
 
+                      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        {t("Thông tin liên hệ (tùy chọn)")}
+                      </p>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Gửi đến ai (người thân)")}
+                        </span>
+                        <input
+                          type="text"
+                          value={contactRecipient}
+                          onChange={(e) => setContactRecipient(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: Mẹ, Ba, người thương…")}
+                        />
+                      </label>
+
+                      <div className="mb-1 grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Tên người gửi")}</span>
+                          <input
+                            type="text"
+                            value={contactName}
+                            onChange={(e) => setContactName(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                            placeholder={t("Vd: Nguyễn Văn A")}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("SĐT / Zalo")}</span>
+                          <input
+                            type="tel"
+                            value={contactPhone}
+                            onChange={(e) => setContactPhone(e.target.value)}
+                            className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${phoneError
+                              ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                              : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
+                              }`}
+                            placeholder={t("Vd: 09xxxxxxxx")}
+                          />
+                        </label>
+                      </div>
+                      {phoneError ? (
+                        <span className="mb-2 block text-[11px] text-rose-600">
+                          {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
+                        </span>
+                      ) : (
+                        <span className="mb-2 block text-[11px] text-slate-400">
+                          {t("Để Khúc Chạm kết nối nếu lời nhắn được chọn phát sóng 💚")}
+                        </span>
+                      )}
+                    </>
+                  )}
+
+                  {!isLove && (
                     <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                        {t("Họ tên")} <span className="text-rose-500">*</span>
+                      </span>
                       <input
                         type="text"
-                        value={contactScope}
-                        onChange={(e) => setContactScope(e.target.value)}
+                        value={contactName}
+                        onChange={(e) => setContactName(e.target.value)}
+                        required
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
+                        placeholder={t("Vd: Nguyễn Văn A")}
                       />
                     </label>
+                  )}
 
+                  {!isLove && (
                     <label className="mb-2.5 block">
-                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                        {t("SĐT / Zalo")} <span className="text-rose-500">*</span>
+                      </span>
+                      <input
+                        type="tel"
+                        value={contactPhone}
+                        onChange={(e) => setContactPhone(e.target.value)}
+                        required
+                        className={`w-full rounded-xl border bg-white px-3 py-2 text-sm outline-none focus:ring-2 ${phoneError
+                          ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                          : "border-slate-200 focus:border-emerald-400 focus:ring-emerald-100"
+                          }`}
+                        placeholder={t("Vd: 09xxxxxxxx")}
+                      />
+                      {phoneError && (
+                        <span className="mt-1 block text-[11px] text-rose-600">
+                          {t("Số chưa đúng định dạng — bắt đầu bằng 03/05/07/08/09, đủ 10 số")}
+                        </span>
+                      )}
+                    </label>
+                  )}
+
+                  {!isMusic && !isLove && (
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Khu vực")}</span>
                       <input
                         type="text"
-                        value={contactBudget}
-                        onChange={(e) => setContactBudget(e.target.value)}
+                        value={contactArea}
+                        onChange={(e) => setContactArea(e.target.value)}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
+                        placeholder={t("Vd: TP HCM, Q1 (tự điền từ định vị)")}
                       />
                     </label>
-                  </>
-                )}
+                  )}
 
-                {(contactKind === "hop-tac" || contactKind === "b2b") && (
-                  <label className="mb-2.5 block">
-                    <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
-                    <input
-                      type="email"
-                      value={contactEmail}
-                      onChange={(e) => setContactEmail(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                      placeholder={t("Vd: ten@congty.com")}
-                    />
-                  </label>
-                )}
+                  {isMusic && (
+                    <>
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Email")} <span className="text-rose-500">*</span>
+                        </span>
+                        <input
+                          type="email"
+                          value={contactEmail}
+                          onChange={(e) => setContactEmail(e.target.value)}
+                          required
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: ten@congty.com (nhận hợp đồng cấp phép)")}
+                        />
+                      </label>
 
-                <label className="mb-3 block">
-                  <span className="mb-1 block text-[11px] font-medium text-slate-600">{isLove ? t("Lời nhắn") : t("Nội dung cụ thể")} {isLove && <span className="text-rose-500">*</span>}</span>
-                  <textarea
-                    value={contactMsg}
-                    onChange={(e) => setContactMsg(e.target.value)}
-                    rows={3}
-                    className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                    placeholder={msgPlaceholder}
-                  />
-                </label>
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Đơn vị / thương hiệu")}</span>
+                        <input
+                          type="text"
+                          value={contactCompany}
+                          onChange={(e) => setContactCompany(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: Cá nhân, hoặc Công ty ABC")}
+                        />
+                      </label>
 
-                {!isLove && (
-                <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={contactConsent}
-                    onChange={(e) => setContactConsent(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
-                  />
-                  <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
-                </label>
-                )}
+                      <div className="mb-2.5">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                          {t("Mục đích khai thác")} <span className="text-rose-500">*</span>
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MUSIC_PURPOSES.map((p) => {
+                            const active = contactPurposes.includes(p);
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => togglePurpose(p)}
+                                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${active
+                                  ? "border-orange-400 bg-orange-50 text-orange-700 ring-1 ring-orange-200"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                                  }`}
+                              >
+                                {p}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
 
-                {contactError && (
-                  <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
-                    {contactError}
-                  </p>
-                )}
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Bài / Album quan tâm")}</span>
+                        <select
+                          value={contactAlbum}
+                          onChange={(e) => setContactAlbum(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        >
+                          <option value="">{t("Chọn")}</option>
+                          <option value={t("Toàn bộ kho nhạc")}>{t("Toàn bộ kho nhạc")}</option>
+                          {SEED_MUSIC.map((al) => (
+                            <option key={al.id} value={al.title}>{al.title}</option>
+                          ))}
+                          <option value={t("Chưa rõ, cần tư vấn")}>{t("Chưa rõ, cần tư vấn")}</option>
+                        </select>
+                      </label>
 
-                <button
-                  type="submit"
-                  disabled={!canSubmit}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
-                  {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
-                </button>
-              </form>
-              )}
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Phạm vi & thời hạn")}</span>
+                        <input
+                          type="text"
+                          value={contactScope}
+                          onChange={(e) => setContactScope(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: VN, 12 tháng / Toàn cầu, vĩnh viễn")}
+                        />
+                      </label>
+
+                      <label className="mb-2.5 block">
+                        <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Ngân sách dự kiến")}</span>
+                        <input
+                          type="text"
+                          value={contactBudget}
+                          onChange={(e) => setContactBudget(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          placeholder={t("Vd: 5–10tr (để gợi ý gói phù hợp)")}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {(contactKind === "hop-tac" || contactKind === "b2b") && (
+                    <label className="mb-2.5 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Email")}</span>
+                      <input
+                        type="email"
+                        value={contactEmail}
+                        onChange={(e) => setContactEmail(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={t("Vd: ten@congty.com")}
+                      />
+                    </label>
+                  )}
+
+                  {!isLove && (
+                    <label className="mb-3 block">
+                      <span className="mb-1 block text-[11px] font-medium text-slate-600">{t("Nội dung cụ thể")}</span>
+                      <textarea
+                        value={contactMsg}
+                        onChange={(e) => setContactMsg(e.target.value)}
+                        rows={3}
+                        className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        placeholder={msgPlaceholder}
+                      />
+                    </label>
+                  )}
+
+                  {!isLove && (
+                    <label className="mb-3 flex items-start gap-2 text-[12px] text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={contactConsent}
+                        onChange={(e) => setContactConsent(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 cursor-pointer accent-emerald-600"
+                      />
+                      <span>{t("Tôi đồng ý Affree liên hệ lại qua SĐT/Zalo đã cung cấp.")}</span>
+                    </label>
+                  )}
+
+                  {contactError && (
+                    <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 ring-1 ring-rose-100">
+                      {contactError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={!canSubmit}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" /></svg>
+                    {contactSubmitting ? t("Đang gửi…") : isMusic ? t("Gửi đề nghị cấp phép") : isLove ? t("Gửi lời yêu thương") : t("Gửi liên hệ")}
+                  </button>
+                </form>
+              </div>
             </div>
-          </div>
-        );
-      })()}
-
+          );
+        })()}
 
       {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ HOẶC từ click sponsor logo.
           Sponsor click set id = "__brand__<lower-name>" → offers filter theo brand thay vì storeId.
@@ -5439,54 +5755,77 @@ export default function Home() {
                 {t("Điền thông tin nhận hàng, shop sẽ liên hệ xác nhận và giao tận nơi.")}
               </p>
 
-              <div className="space-y-2.5">
-                <input
-                  value={buyName}
-                  onChange={(e) => setBuyName(e.target.value)}
-                  placeholder={t("Họ tên người nhận *")}
-                  autoFocus
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                />
-                <input
-                  value={buyPhone}
-                  onChange={(e) => setBuyPhone(e.target.value)}
-                  type="tel"
-                  inputMode="tel"
-                  placeholder={t("Số điện thoại / Zalo *")}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                />
-                <input
-                  value={buyAddr}
-                  onChange={(e) => setBuyAddr(e.target.value)}
-                  placeholder={t("Địa chỉ giao hàng")}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                />
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-slate-500">{t("Số lượng")}</span>
-                  <div className="flex items-center overflow-hidden rounded-lg border border-slate-300">
-                    <button
-                      onClick={() => setBuyQty((q) => Math.max(1, q - 1))}
-                      className="px-3 py-2 text-slate-600 transition hover:bg-slate-100"
-                    >
-                      −
-                    </button>
-                    <span className="min-w-[2.5rem] text-center text-sm font-semibold">{buyQty}</span>
-                    <button
-                      onClick={() => setBuyQty((q) => Math.min(99, q + 1))}
-                      className="px-3 py-2 text-slate-600 transition hover:bg-slate-100"
-                    >
-                      +
-                    </button>
-                  </div>
+              {/* Cấu trúc field ĐỒNG BỘ với form giỏ hàng (CartModal): label + placeholder giống nhau */}
+              <section className="rounded-2xl border border-slate-200 p-3">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {t("Thông tin chung")}
+                </h3>
+                <div className="space-y-2.5">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-800">{t("Họ tên")}</span>
+                    <input
+                      value={buyName}
+                      onChange={(e) => setBuyName(e.target.value)}
+                      placeholder={t("Nguyễn Văn A")}
+                      autoFocus
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-800">{t("Số điện thoại / Zalo")}</span>
+                    <input
+                      value={buyPhone}
+                      onChange={(e) => setBuyPhone(e.target.value)}
+                      type="tel"
+                      inputMode="tel"
+                      placeholder="0912 345 678"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-800">{t("Địa chỉ giao hàng")}</span>
+                    <textarea
+                      value={buyAddr}
+                      onChange={(e) => setBuyAddr(e.target.value)}
+                      rows={2}
+                      placeholder={t("Số nhà, đường, phường, quận…")}
+                      className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </label>
                 </div>
-                <textarea
-                  value={buyNote}
-                  onChange={(e) => setBuyNote(e.target.value)}
-                  rows={2}
-                  placeholder={t("Ghi chú (tuỳ chọn): màu sắc, kích cỡ, thời gian nhận…")}
-                  className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                />
-              </div>
+              </section>
+              <section className="mt-3 rounded-2xl border border-slate-200 p-3">
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-slate-500">{t("Số lượng")}</span>
+                    <div className="flex items-center overflow-hidden rounded-lg border border-slate-300">
+                      <button
+                        onClick={() => setBuyQty((q) => Math.max(1, q - 1))}
+                        className="px-3 py-2 text-slate-600 transition hover:bg-slate-100"
+                      >
+                        −
+                      </button>
+                      <span className="min-w-[2.5rem] text-center text-sm font-semibold">{buyQty}</span>
+                      <button
+                        onClick={() => setBuyQty((q) => Math.min(99, q + 1))}
+                        className="px-3 py-2 text-slate-600 transition hover:bg-slate-100"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-800">{t("Ghi chú")}</span>
+                    <textarea
+                      value={buyNote}
+                      onChange={(e) => setBuyNote(e.target.value)}
+                      rows={2}
+                      placeholder={t("Ghi chú (tuỳ chọn): màu sắc, kích cỡ, thời gian nhận…")}
+                      className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </label>
+                </div>
+              </section>
 
               <button
                 onClick={submitBuy}

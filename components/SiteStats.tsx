@@ -116,7 +116,7 @@ export function SiteStats({ t, products, stores, brands }: Props) {
   if (totals && totals.carts > 0)
     activity.push({ emoji: "🛒", value: totals.carts, label: t("Lượt thêm giỏ"), accent: "text-pink-600" });
   const scale: StatItem[] = [
-    { emoji: "📦", value: products, label: t("Sản phẩm so giá"), accent: "text-slate-800" },
+    { emoji: "📦", value: products, label: t("Mặt hàng trên kệ"), accent: "text-slate-800" },
     { emoji: "🏪", value: stores, label: t("Điểm bán quanh bạn"), accent: "text-slate-800" },
     { emoji: "🏷️", value: brands, label: t("Nhãn hiệu"), accent: "text-slate-800" },
   ];
@@ -130,7 +130,7 @@ export function SiteStats({ t, products, stores, brands }: Props) {
       <div className="mb-4 flex items-center justify-center gap-2 text-center">
         <span className="text-lg sm:text-xl" aria-hidden>📊</span>
         <h2 className="text-base font-bold text-slate-700 sm:text-lg">
-          {t("Affree trong những con số")}
+          {t("Số liệu Affree")}
         </h2>
       </div>
       <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-center sm:gap-0">

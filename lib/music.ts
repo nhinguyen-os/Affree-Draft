@@ -1,5 +1,5 @@
 /**
- * Dữ liệu "Khúc Chạm Store" (nhạc bản quyền) — types + seed nhúng sẵn + helper tách ID YouTube.
+ * Dữ liệu "Khúc Chạm Plaza" (nhạc bản quyền) — types + seed nhúng sẵn + helper tách ID YouTube.
  * Module THUẦN (không gọi server) nên import được cả ở client (component) lẫn server (sheet-music).
  *
  * Nguồn động: tab "KhucCham" trong Google Sheet cấu hình (xem lib/sheet-music.ts).

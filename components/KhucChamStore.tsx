@@ -49,9 +49,11 @@ type Props = {
   detailId?: string | null;
   /** Đổi album đang mở (null = đóng) → cha cập nhật URL. Có truyền = chế độ "controlled". */
   onDetailChange?: (id: string | null) => void;
+  /** Trả về qty trong giỏ theo item id (để hiện badge trên nút +). */
+  cartQtyForId?: (id: string) => number;
 };
 
-export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH = 0, detailId, onDetailChange }: Props) {
+export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH = 0, detailId, onDetailChange, cartQtyForId }: Props) {
   const [albums, setAlbums] = useState<MusicAlbum[]>(SEED_MUSIC);
   // Bài đang nghe thử (popup embed). null = đóng.
   const [preview, setPreview] = useState<MusicSong | null>(null);
@@ -189,11 +191,14 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
                     tabIndex={0}
                     onClick={() => onBuy(albumItem(al))}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onBuy(albumItem(al)); }}
-                    className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
+                    className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
                     aria-label={t("Thêm album vào giỏ")}
                     title={t("Thêm album vào giỏ")}
                   >
                     +
+                    {(cartQtyForId?.(albumItem(al).id) ?? 0) > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyForId!(albumItem(al).id)}</span>
+                    )}
                   </span>
                   <span
                     onClick={() => onBuyNow(albumItem(al))}
@@ -242,11 +247,14 @@ export function KhucChamAlbumList({ t, onBuy, onBuyNow, showAll = false, headerH
                       tabIndex={0}
                       onClick={() => onBuy(songItem(s))}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onBuy(songItem(s)); }}
-                      className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
+                      className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
                       aria-label={t("Thêm bài vào giỏ")}
                       title={t("Thêm bài vào giỏ")}
                     >
                       +
+                      {(cartQtyForId?.(songItem(s).id) ?? 0) > 0 && (
+                        <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">{cartQtyForId!(songItem(s).id)}</span>
+                      )}
                     </span>
                     <span
                       onClick={() => onBuyNow(songItem(s))}

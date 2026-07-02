@@ -6,6 +6,7 @@ import { storeCurrency } from "@/lib/stores";
 import { distanceKm } from "@/lib/util";
 import { ChainBadge } from "@/components/ChainBadge";
 import { ProductCard } from "@/components/ProductCard";
+import { SubCatBar } from "@/components/SubCatBar";
 import { categoryGroup, GROUP_TILE, CATEGORY_GROUPS, DEFAULT_TILE_EMOJIS } from "@/lib/categories";
 import { type Lang, tr } from "@/lib/i18n";
 
@@ -109,22 +110,14 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
         {activeSection && activeSectionData ? (
           /* ── Sub-view: lưới 2 cột tất cả sản phẩm trong danh mục ── */
           <>
-            {/* Breadcrumb row — giống trang chủ */}
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setActiveSection(null)}
-                  className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-                  {t("Quay lại")}
-                </button>
-                <h2 className="text-sm font-semibold text-slate-800">
-                  <span className="mr-1">{activeEmoji}</span>{t(activeSection!)}
-                </h2>
-              </div>
-              <span className="text-xs text-slate-400">{activeSectionData.items.length} {t("sản phẩm")}</span>
-            </div>
+            <SubCatBar
+              backLabel={t("Quay lại")}
+              onBack={() => setActiveSection(null)}
+              emoji={activeEmoji}
+              title={t(activeSection!)}
+              count={activeSectionData.items.length}
+              t={t}
+            />
           <ul className="grid grid-cols-2 gap-3 px-3 pb-3 sm:grid-cols-3">
             {activeSectionData.items.map(({ offer: o, product: p }) => (
               <li key={p.id}>
@@ -158,7 +151,6 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     <div className="mb-2.5 flex items-center justify-between">
                       <h2 className="text-sm font-semibold text-slate-700">
                         <span className="mr-1">{emoji}</span>{t(name)}
-                        <span className="ml-1.5 text-xs font-normal text-slate-400">({secItems.length})</span>
                       </h2>
                       <button
                         onClick={() => setActiveSection(name)}

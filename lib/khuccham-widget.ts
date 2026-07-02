@@ -142,15 +142,23 @@ export function parsePills(csv: string): WidgetPill[] {
 /** Gộp 2 CSV → KhucChamWidget hoàn chỉnh (mọi trường thiếu → lấy DEFAULT_WIDGET). */
 export function buildWidget(settingsCsv: string, pillsCsv: string): KhucChamWidget {
   const s = parseWidgetSettings(settingsCsv);
-  const pills = parsePills(pillsCsv);
+  const rawPills = parsePills(pillsCsv);
   // Logo chỉ nhận khi là URL/đường dẫn hợp lệ (http… hoặc /…); placeholder/ghi chú → bỏ, dùng mặc định.
   const logo = s.logo && /^(https?:\/\/|\/)/.test(s.logo.trim()) ? s.logo.trim() : DEFAULT_WIDGET.logo;
+  // Pill "nghe" không có videoId (sheet thiếu cột link) → fallback về DEFAULT_WIDGET pill cùng label.
+  const pills = (rawPills.length ? rawPills : DEFAULT_WIDGET.pills).map((p) => {
+    if (p.type === "nghe" && !p.videoId) {
+      const def = DEFAULT_WIDGET.pills.find((d) => d.type === "nghe" && d.label === p.label);
+      if (def?.videoId) return { ...p, videoId: def.videoId };
+    }
+    return p;
+  });
   return {
     channelName: s.channelName || DEFAULT_WIDGET.channelName,
     logo,
     landingUrl: s.landingUrl || DEFAULT_WIDGET.landingUrl,
     handle: s.handle ?? DEFAULT_WIDGET.handle,
     defaultVideoId: s.defaultVideoId || DEFAULT_WIDGET.defaultVideoId,
-    pills: pills.length ? pills : DEFAULT_WIDGET.pills,
+    pills,
   };
 }
