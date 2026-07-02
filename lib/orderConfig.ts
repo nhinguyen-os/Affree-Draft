@@ -18,6 +18,8 @@ export interface OrderSourceConfig {
   payments: string[]; // các hình thức nguồn hỗ trợ (hiển thị tham khảo)
   note?: string; // ghi chú riêng của nguồn
   requirements: string[]; // tóm tắt "cần gì" hiển thị đầu form
+  minQty?: number; // số lượng tối thiểu mỗi đơn (mặc định 1)
+  minOrder?: number; // số tiền mua tối thiểu (VND) — không khai báo = không ràng buộc
 }
 
 const DEFAULT_ONLINE: OrderSourceConfig = {
@@ -42,24 +44,25 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     requirements: ["Số điện thoại (xác minh OTP)", "Địa chỉ giao", "Khung giờ giao"],
   },
   concung: {
-    auth: "guest-phone",
+    auth: "account-login",
     needEmail: false,
     needStorePick: false,
     needSlot: false,
     captcha: false,
     payments: ["COD", "Chuyển khoản", "Thẻ"],
-    requirements: ["Số điện thoại (mua nhanh, không cần đăng nhập)", "Địa chỉ giao"],
+    requirements: ["Đăng nhập tài khoản Con Cưng (SĐT + mật khẩu)", "Địa chỉ giao"],
   },
   coop: {
-    auth: "phone-otp",
+    auth: "account-login",
     needEmail: false,
     needStorePick: true,
     needSlot: true,
     captcha: false,
     payments: ["COD", "VNPAY", "MoMo"],
     note: "Freeship đơn từ 200.000đ trong bán kính 6km.",
+    minOrder: 200000,
     requirements: [
-      "Số điện thoại (đăng nhập OTP)",
+      "Đăng nhập tài khoản Co.opmart",
       "Địa chỉ giao",
       "Khung giờ giao",
     ],
@@ -79,14 +82,14 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     ],
   },
   pnj: {
-    auth: "phone-otp",
+    auth: "account-login",
     needEmail: true,
     needStorePick: false,
     needSlot: false,
     captcha: false,
     payments: ["COD", "VNPAY", "Thẻ nội địa/Quốc tế"],
     note: "PNJ hỗ trợ giao hàng nhanh trong 3 giờ tại nhiều khu vực.",
-    requirements: ["Số điện thoại (nhận OTP)", "Họ tên & Địa chỉ giao hàng", "Email nhận hóa đơn"],
+    requirements: ["Đăng nhập tài khoản MyPNJ", "Họ tên & Địa chỉ giao hàng", "Email nhận hóa đơn"],
   },
 };
 

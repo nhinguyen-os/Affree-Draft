@@ -199,6 +199,7 @@ const EN_DICT: Record<string, string> = {
   "Rẻ nhất": "Cheapest",
   "Còn hàng": "In stock",
   "cách bạn {km} km": "{km} km away",
+  "Mua tối thiểu {x}": "Min order {x}",
   "Đắt hơn {amount}": "{amount} more",
   "Mua": "Buy",
   "Chỉ đường": "Directions",
@@ -397,6 +398,7 @@ const EN_DICT: Record<string, string> = {
   // SiteStats section
   "Affree trong những con số": "Affree by the numbers",
   "Thống kê Affree": "Affree stats",
+  "Số liệu Affree": "Affree stats",
   "Lượt truy cập": "Visits",
   "Đơn đã tạo": "Orders placed",
   "Lượt thêm giỏ": "Cart adds",
@@ -423,18 +425,18 @@ const EN_DICT: Record<string, string> = {
   "Tạm tính cả túi": "Bundle subtotal",
   "Để trợ lý đặt cả túi →": "Let the assistant order the bundle →",
   "Đã đặt cả túi {tui}": "Ordered bundle {tui}",
-  // Khúc Chạm Store — trang chi tiết album + card bài hát
+  // Khúc Chạm Plaza — trang chi tiết album + card bài hát
   "Bài hát": "Song",
   "Bài hát trong album": "Songs in album",
   "Danh sách bài hát": "Track list",
   // Form đặt mua nhạc (MusicOrderModal)
-  "Đặt mua nhạc · Khúc Chạm Store": "Order music · Khúc Chạm Store",
+  "Đặt mua nhạc · Khúc Chạm Plaza": "Order music · Khúc Chạm Plaza",
   "Đã đặt mua": "Order placed",
   "Nhạc bản quyền — sản phẩm số": "Licensed music — digital product",
   "Email (nhận link nhạc)": "Email (to receive the music link)",
   "Ghi chú (tuỳ chọn)": "Note (optional)",
-  "Lời nhắn cho Khúc Chạm Store…": "Message for Khúc Chạm Store…",
-  "Sản phẩm số: Khúc Chạm Store liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.": "Digital product: Khúc Chạm Store will contact you via phone/Zalo or email to send the licensed music link after you order.",
+  "Lời nhắn cho Khúc Chạm Plaza…": "Message for Khúc Chạm Plaza…",
+  "Sản phẩm số: Khúc Chạm Plaza liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.": "Digital product: Khúc Chạm Plaza will contact you via phone/Zalo or email to send the licensed music link after you order.",
   "Đã đặt mua nhạc!": "Music ordered!",
   "Mã đơn:": "Order code:",
   "Đặt mua": "Place order",

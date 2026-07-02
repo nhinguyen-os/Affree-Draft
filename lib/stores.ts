@@ -14,12 +14,14 @@ interface SourceMeta {
   logo?: string;
   /** Tiền tệ mặc định của nguồn (fallback khi tab "stores" chưa khai báo cột currency). */
   currency?: string;
+  /** Giá trị đơn hàng tối thiểu (VND). 0 hoặc undefined = không giới hạn. */
+  minOrder?: number;
 }
 
 export const SOURCE_META: Record<string, SourceMeta> = {
   bhx: { label: "Bách Hóa Xanh", color: "#1aa64b", home: "https://www.bachhoaxanh.com" },
   concung: { label: "Con Cưng", color: "#e6007e", home: "https://concung.com" },
-  coop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn" },
+  coop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn", minOrder: 200000 },
   aeon: { label: "AEON", color: "#8e0d3c", home: "https://aeoneshop.com" },
   shopee: { label: "Shopee", color: "#ee4d2d", home: "https://shopee.vn", online: true },
   spe: { label: "Shopee", color: "#ee4d2d", home: "https://shopee.vn", online: true },
@@ -27,7 +29,7 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   gf: { label: "GrabFood", color: "#00b14f", home: "https://food.grab.com", online: true },
   thxl: { label: "Tạp Hóa Xe Lam", color: "#16a34a", home: "https://taphoaxelam.com", online: true },
   tdat: { label: "Thiên Đường Ẩm Thực", color: "#f59e0b", home: "https://foodparadise.vn", online: true },
-  cop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn" },
+  cop: { label: "Co.opmart", color: "#0067b1", home: "https://cooponline.vn", minOrder: 200000 },
   pnj: { label: "PNJ", color: "#c9a227", home: "https://www.pnj.com.vn", online: true },
   dalathasfarm: { label: "Dalat Hasfarm", color: "#2e7d32", home: "https://dalathasfarm.com", online: true },
   ichiban: { label: "Ichiban Market", color: "#d32f2f", home: "https://ichibanmarket.com.vn", online: true },
@@ -35,11 +37,37 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   krmart: { label: "Korea Mart", color: "#003478", home: "https://xinchaokoreamart.com", online: true },
   astrabean: { label: "Astrabean", color: "#6f4e37", home: "https://day-sales.com/store/astrabean/product", currency: "USD" },
   tuoixanhnhanhngon: { label: "Tươi Xanh Nhanh Ngon", color: "#0f766e", home: "https://tuoixanhnhanhngon.timdaythay.com", online: true },
-  khuccham: { label: "Khúc Chạm Store", color: "#f97316", home: "https://music.youtube.com/@KhucChamChannel", online: true },
+  khuccham: { label: "Khúc Chạm Plaza", color: "#f97316", home: "https://music.youtube.com/@KhucChamChannel", online: true, logo: "https://yt3.googleusercontent.com/ytc/AIdro_nBoSfZ7Bk3OkViT3fL0oVfBrqNjbDqkJNhRBsNgg=s176-c-k-c0x00ffffff-no-rj" },
+  circlek: { label: "Circle K", color: "#ed1c24", home: "https://www.circlek.com.vn" },
+  "7eleven": { label: "7-Eleven", color: "#ee7203", home: "https://www.7-eleven.vn" },
+  gs25: { label: "GS25", color: "#0072ce", home: "https://gs25.com.vn" },
+  phuclong: { label: "Phúc Long", color: "#1b5e20", home: "https://phuclong.com.vn" },
+  highlands: { label: "Highlands Coffee", color: "#a4161a", home: "https://www.highlandscoffee.com.vn" },
+  hoasenhome: { label: "Hoa Sen Home", color: "#00529c", home: "https://hoasenhome.vn" },
+  premiumoutlets: { label: "Premium Outlets", color: "#6b7280", home: "https://www.premiumoutlets.com" },
+  costco: { label: "Costco", color: "#e31837", home: "https://www.costco.com" },
   other: { label: "Khác", color: "#3948e6", home: "", online: true },
 };
 
 const DEFAULT_COLOR = "#3948e6";
+
+// Override giá tối thiểu nạp từ sheet (tab "Giá tối thiểu"). Ưu tiên hơn SOURCE_META tĩnh.
+let dynamicMinOrders: Record<string, number> | null = null;
+
+/** Nạp bảng giá tối thiểu theo chain từ sheet (key thường-hoá). null/rỗng → dùng SOURCE_META. */
+export function setDynamicMinOrders(map: Record<string, number> | null): void {
+  if (!map || Object.keys(map).length === 0) { dynamicMinOrders = null; return; }
+  dynamicMinOrders = Object.fromEntries(
+    Object.entries(map).map(([k, v]) => [(k ?? "").toLowerCase(), v]),
+  );
+}
+
+/** Giá trị đơn hàng tối thiểu (VND) của chain. 0 = không giới hạn. Sheet override > SOURCE_META. */
+export function chainMinOrder(chain: Chain): number {
+  const key = (chain ?? "").toLowerCase();
+  if (dynamicMinOrders && key in dynamicMinOrders) return dynamicMinOrders[key];
+  return (SOURCE_META[chain] ?? SOURCE_META[key])?.minOrder ?? 0;
+}
 
 /** Tên hiển thị của nguồn, có fallback cho nguồn lạ. Tra cứu không phân biệt hoa/thường (vd THXL, TDAT). */
 export function chainLabel(chain: Chain): string {

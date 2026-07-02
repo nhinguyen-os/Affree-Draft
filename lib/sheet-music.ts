@@ -1,7 +1,7 @@
 import { SEED_MUSIC, musicSlug, ytPlaylistId, ytVideoId, type MusicAlbum } from "./music";
 
 /**
- * Khúc Chạm Store — đọc tab "KhucCham" trong sheet cấu hình 1sZTv (dò theo TÊN tab, không cần gid).
+ * Khúc Chạm Plaza — đọc tab "KhucCham" trong sheet cấu hình 1sZTv (dò theo TÊN tab, không cần gid).
  *
  * Mỗi DÒNG = 1 BÀI HÁT. Các dòng cùng tên `album` được gom lại thành 1 album, giữ thứ tự nhập.
  * Dòng ĐỂ TRỐNG cột `album` = "bài lẻ thuần": chỉ hiện thẻ "Bài hát" (mua lẻ), KHÔNG tạo thẻ Album.

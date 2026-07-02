@@ -7,7 +7,7 @@ import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
 
 /**
- * Form đặt mua NHẠC BẢN QUYỀN (Khúc Chạm Store) — sản phẩm SỐ.
+ * Form đặt mua NHẠC BẢN QUYỀN (Khúc Chạm Plaza) — sản phẩm SỐ.
  * Đơn giản, KHÔNG dùng màn agentic (không OTP/đăng nhập/địa chỉ giao/khung giờ): chỉ cần
  * người nhận + SĐT/Zalo + email để nhận link nhạc. Đặt xong → mã đơn, Khúc Chạm liên hệ gửi nhạc.
  */
@@ -88,7 +88,7 @@ export default function MusicOrderModal({
         <div className="flex items-center justify-between border-b border-white/20 px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-base font-bold text-slate-900">
-              {phase === "done" ? t("Đã đặt mua") : t("Đặt mua nhạc · Khúc Chạm Store")}
+              {phase === "done" ? t("Đã đặt mua") : t("Đặt mua nhạc · Khúc Chạm Plaza")}
             </h2>
             <p className="truncate text-xs text-slate-700">🎵 {t("Nhạc bản quyền — sản phẩm số")}</p>
           </div>
@@ -100,58 +100,69 @@ export default function MusicOrderModal({
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
           {phase === "form" && (
             <div className="space-y-3">
-              {/* Danh sách mục đặt */}
-              <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                {items.map((l) => (
-                  <div key={l.id} className="flex items-center gap-2.5">
-                    {l.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={l.image} alt={l.name} className="h-10 w-10 shrink-0 rounded-lg bg-white object-cover" />
-                    ) : (
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-lg">🎵</div>
-                    )}
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{l.name}</p>
-                    <span className="shrink-0 text-sm font-semibold text-emerald-600">
-                      {formatMoney(l.price * (l.qty ?? 1))}{(l.qty ?? 1) > 1 ? ` ×${l.qty}` : ""}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng / Mua ngay ── */}
+              <section className="rounded-2xl border border-slate-200 p-3">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {t("Thông tin chung")}
+                </h3>
+                <div className="space-y-2.5">
+                  <Field label={t("Họ tên")}>
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Nguyễn Văn A")} className="input" />
+                  </Field>
+                  <Field label={t("Số điện thoại / Zalo")}>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      inputMode="tel"
+                      placeholder={t(rule.placeholderVi)}
+                      aria-invalid={phoneError}
+                      className="input"
+                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
+                    />
+                    {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
+                  </Field>
+                </div>
+              </section>
 
-              <Field label={t("Người nhận")}>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Họ và tên")} className="input" />
-              </Field>
-              <Field label={t("Số điện thoại / Zalo")}>
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  inputMode="tel"
-                  placeholder={t(rule.placeholderVi)}
-                  aria-invalid={phoneError}
-                  className="input"
-                  style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                />
-                {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
-              </Field>
-              <Field label={t("Email (nhận link nhạc)")}>
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  inputMode="email"
-                  placeholder="email@vidu.com"
-                  aria-invalid={emailError}
-                  className="input"
-                  style={emailError ? { borderColor: "#ef4444" } : undefined}
-                />
-                {emailError && <span className="mt-1 block text-xs text-rose-600">{t("Email không hợp lệ.")}</span>}
-              </Field>
-              <Field label={t("Ghi chú (tuỳ chọn)")}>
-                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t("Lời nhắn cho Khúc Chạm Store…")} className="input resize-none" />
-              </Field>
+              {/* ── Riêng Khúc Chạm Plaza: danh sách nhạc + email nhận link + lời nhắn ── */}
+              <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
+                <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  {items.map((l) => (
+                    <div key={l.id} className="flex items-center gap-2.5">
+                      {l.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={l.image} alt={l.name} className="h-10 w-10 shrink-0 rounded-lg bg-white object-cover" />
+                      ) : (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-lg">🎵</div>
+                      )}
+                      <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{l.name}</p>
+                      <span className="shrink-0 text-sm font-semibold text-emerald-600">
+                        {formatMoney(l.price * (l.qty ?? 1))}{(l.qty ?? 1) > 1 ? ` ×${l.qty}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
 
-              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] text-slate-600">
-                {t("Sản phẩm số: Khúc Chạm Store liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.")}
-              </p>
+                <Field label={t("Email (nhận link nhạc)")}>
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    inputMode="email"
+                    placeholder="email@vidu.com"
+                    aria-invalid={emailError}
+                    className="input"
+                    style={emailError ? { borderColor: "#ef4444" } : undefined}
+                  />
+                  {emailError && <span className="mt-1 block text-xs text-rose-600">{t("Email không hợp lệ.")}</span>}
+                </Field>
+                <Field label={t("Ghi chú")}>
+                  <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t("Lời nhắn cho Khúc Chạm Plaza…")} className="input resize-none" />
+                </Field>
+
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] text-slate-600">
+                  {t("Sản phẩm số: Khúc Chạm Plaza liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.")}
+                </p>
+              </section>
             </div>
           )}
 

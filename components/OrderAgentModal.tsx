@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "react-qr-code";
 import type { RankedOffer } from "@/lib/types";
-import { chainLabel, storeCurrency } from "@/lib/stores";
+import { chainLabel, chainMinOrder, storeCurrency } from "@/lib/stores";
 import { distanceKm, formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { geocode } from "@/lib/geocode";
@@ -19,7 +20,8 @@ import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-ag
  * resume trước khi làm thật.
  */
 
-type StepKind = "auto" | "otp" | "login" | "captcha" | "qr" | "confirm" | "success";
+type StepKind = "auto" | "otp" | "login" | "captcha" | "qr" | "confirm" | "success" | "payment-select";
+type DemoPayMethod = "cod" | "qr" | "card";
 type Step = { kind: StepKind; label: string };
 type CoopOrderResult = {
   phase?: "otp" | "cart" | "ordered";
@@ -287,7 +289,7 @@ export default function OrderAgentModal({
   defaultAddress?: string;
   defaultQty?: number;
   onClose: () => void;
-  onPlaced: (orderCode: string, chosen: RankedOffer) => void;
+  onPlaced: (orderCode: string, chosen: RankedOffer, note?: string) => void;
   lang?: Lang;
 }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
@@ -298,9 +300,12 @@ export default function OrderAgentModal({
   const chain = chainLabel(activeOffer.store.chain);
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
-  const isCoopReal = activeOffer.store.chain === "coop";
-  const isTXNNReal = activeOffer.store.chain === "tuoixanhnhanhngon";
-  const isBHXReal = activeOffer.store.chain === "bhx";
+  // DEMO_MODE: tắt tích hợp thật (BHX/Coop/TXNN cần agent-server/kết nối) → mọi nguồn
+  // chạy luồng mô phỏng để test 3 phương thức thanh toán không cần kết nối.
+  const DEMO_MODE = true;
+  const isCoopReal = !DEMO_MODE && activeOffer.store.chain === "coop";
+  const isTXNNReal = !DEMO_MODE && activeOffer.store.chain === "tuoixanhnhanhngon";
+  const isBHXReal = !DEMO_MODE && activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
@@ -321,6 +326,8 @@ export default function OrderAgentModal({
   const [password, setPassword] = useState("");
   const [qty, setQty] = useState(defaultQty && defaultQty > 0 ? Math.floor(defaultQty) : 1);
   const [slot, setSlot] = useState(SLOTS[0]);
+  // Ghi chú cho cửa hàng — đồng bộ cấu trúc với ô ghi chú từng cửa hàng của giỏ (CartModal).
+  const [note, setNote] = useState("");
   const [coopDeliveryDate, setCoopDeliveryDate] = useState("");
   const [coopSlotFrom, setCoopSlotFrom] = useState("");
   const [coopSlotTo, setCoopSlotTo] = useState("");
@@ -359,6 +366,11 @@ export default function OrderAgentModal({
   // Mã OTP MÔ PHỎNG (bản demo chưa kết nối SMS thật): sinh ngẫu nhiên 6 số khi tới bước OTP,
   // hiển thị như "tin nhắn" để bạn nhập thử. KHÔNG phải mã thật từ cửa hàng.
   const [simOtp, setSimOtp] = useState("");
+  const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod>("cod");
+  const [cardNum, setCardNum] = useState("");
+  const [cardExp, setCardExp] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
+  const [cardSaved, setCardSaved] = useState(true);
   const [orderCode, setOrderCode] = useState("");
   const [coopBusy, setCoopBusy] = useState(false);
   const [coopFlowId, setCoopFlowId] = useState("");
@@ -463,7 +475,7 @@ export default function OrderAgentModal({
       s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
     }
 
-    s.push({ kind: "auto", label: t("Chọn thanh toán COD…") });
+    s.push({ kind: "payment-select", label: t("Chọn phương thức thanh toán") });
 
     if (cfg.captcha) {
       s.push({ kind: "captcha", label: t('{chain} yêu cầu xác minh "Tôi không phải robot"', { chain }) });
@@ -582,17 +594,46 @@ export default function OrderAgentModal({
       placedRef.current = true;
       setOrderCode(serverState.orderCode);
       setPhase("done");
-      onPlaced(serverState.orderCode, activeOffer);
+      onPlaced(serverState.orderCode, activeOffer, note);
       return;
     }
     if (["failed", "cancelled", "expired"].includes(serverState.status)) {
       setSubmitError(serverState.error || serverState.message);
     }
-  }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp]);
+  }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp, note]);
+
+  // Demo: tự chạy qua bước "auto" sau 1.2s; đến bước "success" → chuyển phase done.
+  useEffect(() => {
+    if (phase !== "running" || sessionId || !current) return;
+    if (current.kind === "success") {
+      const timer = window.setTimeout(() => {
+        setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+        setPhase("done");
+        onPlaced("DEMO", activeOffer, note);
+      }, 800);
+      return () => window.clearTimeout(timer);
+    }
+    if (current.kind === "auto") {
+      const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
+      return () => window.clearTimeout(timer);
+    }
+    if (current.kind === "otp") {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const timer = window.setTimeout(() => setSimOtp(code), 2000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
 
   const total = activeOffer.price * qty;
   const coopMinTotal = 200000;
   const coopBelowMinimum = isCoopReal && total < coopMinTotal;
+  // Ràng buộc tối thiểu: số lượng từ cfg (mặc định 1); giá mua tối thiểu lấy từ sheet
+  // "Giá tối thiểu" qua chainMinOrder (0 = không ràng buộc).
+  const minQty = cfg.minQty ?? 1;
+  const minOrderRaw = chainMinOrder(activeOffer.store.chain);
+  const minOrder = minOrderRaw > 0 ? minOrderRaw : null;
+  const curCode = storeCurrency(activeOffer.store.id);
+  const belowMinOrder = minOrder != null && total < minOrder;
   const todayInput = formatDateInput(new Date());
   const coopDeliveryDates = (coopResult?.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
   const coopDeliverySlots =
@@ -685,16 +726,24 @@ export default function OrderAgentModal({
     !!name.trim() &&
     phoneValid &&
     !!address.trim() &&
+    qty >= minQty &&
+    !belowMinOrder &&
     (!cfg.needEmail || emailValid) &&
     (!isCoopReal || coopCanStart);
 
+  // BHX cho khách tự chọn COD / QR / Thẻ (demoPayMethod). QR & Thẻ = thanh toán online.
+  const bhxPayOnline = isBHXReal && (demoPayMethod === "qr" || demoPayMethod === "card");
   const usesQrPayment =
     isTXNNReal ||
-    isBHXReal ||
+    bhxPayOnline ||
     steps.some((item) => item.kind === "qr") ||
     serverState?.status === "waiting_for_qr_payment" ||
     serverState?.status === "verifying_payment";
-  const paymentLabel = usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
+  const paymentLabel = isTXNNReal
+    ? t("QR chuyển khoản")
+    : isBHXReal || (!sessionId && !isCoopReal)
+      ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? t("Thẻ tín dụng/ghi nợ") : t("COD (tiền mặt khi nhận)")
+      : usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
   const paymentConfirmBusy = paymentConfirmSubmitting || serverState?.status === "verifying_payment";
   const popupFrameTs = serverState?.popup?.updatedAt || serverState?.updatedAt;
   const popupFrameSrc = sessionId && popupFrameTs
@@ -977,6 +1026,7 @@ export default function OrderAgentModal({
               buyerPhone: phone,
               buyerAddress: address,
               chain: activeOffer.store.chain,
+              paymentMethod: demoPayMethod,
             },
           }),
         );
@@ -1249,7 +1299,7 @@ export default function OrderAgentModal({
       setOrderCode(code);
       setCoopStep("success");
       setPhase("done");
-      onPlaced(code, activeOffer);
+      onPlaced(code, activeOffer, note);
     } catch (err) {
       setCoopError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1514,7 +1564,7 @@ export default function OrderAgentModal({
                 paymentUrl: message.orderUrl,
               },
             }));
-            onPlaced(code, activeOffer);
+            onPlaced(code, activeOffer, note);
             ws.close();
           }
         } catch {
@@ -2555,6 +2605,52 @@ export default function OrderAgentModal({
           {/* PHASE 1: form thông tin cần có */}
           {phase === "form" && (
             <div className="space-y-3">
+              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng (CartModal) ── */}
+              <section className="rounded-2xl border border-slate-200 p-3">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {t("Thông tin chung")}
+                </h3>
+                <div className="space-y-2.5">
+                  <Field label={t("Họ tên")}>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder={t("Nguyễn Văn A")}
+                      className="input"
+                    />
+                  </Field>
+
+                  <Field label={t("Số điện thoại / Zalo")}>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      inputMode="tel"
+                      placeholder={t(rule.placeholderVi)}
+                      aria-invalid={phoneError}
+                      className="input"
+                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
+                    />
+                    {phoneError && (
+                      <span className="mt-1 block text-xs text-rose-600">
+                        {t(rule.errorVi)}
+                      </span>
+                    )}
+                  </Field>
+
+                  <Field label={t("Địa chỉ giao hàng")}>
+                    <textarea
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      rows={2}
+                      placeholder={t("Số nhà, đường, phường, quận…")}
+                      className="input resize-none"
+                    />
+                  </Field>
+                </div>
+              </section>
+
+              {/* ── Cửa hàng & sản phẩm — như section từng cửa hàng của giỏ ── */}
+              <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
               {/* Sản phẩm đang đặt — qty control nằm bên phải */}
               <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 {activeOffer.product.image ? (
@@ -2587,8 +2683,9 @@ export default function OrderAgentModal({
                   <span className="text-[10px] font-medium text-slate-400">{t("Số lượng")}</span>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setQty((q) => Math.max(1, q - 1))}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100"
+                      onClick={() => setQty((q) => Math.max(minQty, q - 1))}
+                      disabled={qty <= minQty}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       −
                     </button>
@@ -2602,6 +2699,23 @@ export default function OrderAgentModal({
                   </div>
                 </div>
               </div>
+
+              {/* Ghi chú tối thiểu cho KH biết */}
+              {(minQty > 1 || minOrder != null) && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                  {minQty > 1 && <div>{t("Số lượng tối thiểu: {n} sản phẩm/đơn.", { n: minQty })}</div>}
+                  {minOrder != null && (
+                    <div>
+                      {t("Mua tối thiểu: {amount}.", { amount: formatMoney(minOrder, curCode) })}
+                      {belowMinOrder && (
+                        <span className="ml-1 font-semibold text-rose-600">
+                          {t("(còn thiếu {amount})", { amount: formatMoney(minOrder - total, curCode) })}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Khung giờ giao — chỉ hiện khi cần */}
               {cfg.needSlot && (
@@ -2637,32 +2751,6 @@ export default function OrderAgentModal({
                   <p className="mt-1.5 text-[11px] text-slate-700">ℹ️ {t(cfg.note)}</p>
                 )}
               </div>
-
-              <Field label={t("Người nhận")}>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={t("Họ và tên")}
-                  className="input"
-                />
-              </Field>
-
-              <Field label={t("Số điện thoại")}>
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  inputMode="tel"
-                  placeholder={t(rule.placeholderVi)}
-                  aria-invalid={phoneError}
-                  className="input"
-                  style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                />
-                {phoneError && (
-                  <span className="mt-1 block text-xs text-rose-600">
-                    {t(rule.errorVi)}
-                  </span>
-                )}
-              </Field>
 
               {cfg.needEmail && (
                 <Field label={t("Email (đăng nhập tài khoản)")}>
@@ -2703,15 +2791,17 @@ export default function OrderAgentModal({
                 </Field>
               )}
 
-              <Field label={t("Địa chỉ giao")}>
+              {/* Ghi chú cho cửa hàng — đồng bộ với ô ghi chú từng cửa hàng của giỏ */}
+              <Field label={t("Ghi chú")}>
                 <textarea
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
                   rows={2}
-                  placeholder={t("Số nhà, đường, phường, quận…")}
+                  placeholder={t("Ghi chú (tuỳ chọn): màu sắc, kích cỡ, thời gian nhận…")}
                   className="input resize-none"
                 />
               </Field>
+              </section>
 
               {/* Địa chỉ giao khác vị trí định vị → gợi ý chọn lại nơi mua */}
               {showRepick && (
@@ -2800,55 +2890,45 @@ export default function OrderAgentModal({
                 </div>
               )}
 
-              <div className={cfg.needSlot && !isCoopReal ? "grid grid-cols-2 gap-3" : ""}>
-                <Field label={t("Số lượng")}>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setQty((q) => Math.max(1, q - 1))}
-                      className="h-9 w-9 shrink-0 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100"
-                    >
-                      −
-                    </button>
-                    <span className="w-8 text-center text-sm font-semibold">{qty}</span>
-                    <button
-                      onClick={() => setQty((q) => q + 1)}
-                      className="h-9 w-9 shrink-0 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100"
-                    >
-                      +
-                    </button>
+              {/* ── Thanh toán — tabs ngang CÙNG CẤU TRÚC với form giỏ hàng ── */}
+              {isBHXReal || (!isCoopReal && !isTXNNReal) ? (
+                <section className="rounded-2xl border border-slate-200 p-3">
+                  <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {t("Thanh toán")}
+                  </h3>
+                  <div className="mb-3 flex gap-1.5">
+                    {(["qr", "card", "cod"] as DemoPayMethod[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setDemoPayMethod(m)}
+                        className={`flex-1 rounded-lg border py-1.5 text-xs font-semibold transition-colors ${demoPayMethod === m ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}
+                      >
+                        {m === "qr" ? "📱 QR" : m === "card" ? "💳 " + t("Thẻ") : "💵 COD"}
+                      </button>
+                    ))}
                   </div>
-                </Field>
-
-                {cfg.needSlot && !isCoopReal && !isBHXReal && (
-                  <Field label={t("Khung giờ giao")}>
-                    <select
-                      value={slot}
-                      onChange={(e) => setSlot(e.target.value)}
-                      className="input"
-                    >
-                      {SLOTS.map((s) => (
-                        <option key={s} value={s}>
-                          {t(s)}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-              </div>
-
-              <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500">{t("Thanh toán")}</span>
-                  <span className="font-semibold text-slate-800">{paymentLabel}</span>
-                </div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {usesQrPayment
-                    ? t("Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý.")
-                    : isCoopReal
-                      ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
-                      : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
-                </p>
-              </div>
+                  <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    {demoPayMethod === "cod"
+                      ? "💵 " + t("Trợ lý sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
+                      : (demoPayMethod === "qr" ? "📱 " : "💳 ") + t("Trợ lý sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
+                  </p>
+                </section>
+              ) : (
+                <section className="rounded-2xl border border-slate-200 p-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("Thanh toán")}</h3>
+                    <span className="text-sm font-semibold text-slate-800">{paymentLabel}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    {usesQrPayment
+                      ? t("Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý.")
+                      : isCoopReal
+                        ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
+                        : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
+                  </p>
+                </section>
+              )}
 
               {
                 coopBelowMinimum && (
@@ -2866,59 +2946,6 @@ export default function OrderAgentModal({
                 )
               }
 
-              <div className="flex items-center justify-between border-t border-slate-200 pt-3">
-                <span className="text-sm text-slate-500">{t("Tạm tính")}</span>
-                <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
-              </div>
-              {
-                isTXNNReal && (
-                  <button
-                    disabled={!canStart}
-                    onClick={createSession}
-                    className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {submitting ? t("Đang tạo phiên đặt hàng…") : t("Để trợ lý đặt giúp →")}
-                  </button>)
-              }
-              {
-                (isCoopReal || isBHXReal) && (
-                  <button
-                    disabled={!canStart || coopBusy}
-                    onClick={() => {
-                      flushProfile({ name, phone, address });
-                      if (isCoopReal) {
-                        void startCoopOrder();
-                      } else if (isBHXReal) {
-                        startBHXOrder().catch((err) => {
-                          console.error("Bach Hoa Xanh order error:", err);
-                          alert(err instanceof Error ? err.message : String(err));
-                        });
-                      } else {
-                        setStepIndex(0);
-                        setOtp("");
-                        setOtpError(false);
-                        setSimOtp("");
-                        setPhase("running");
-                      }
-                    }}
-                    className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {coopBusy
-                      ? t("Đang kết nối Co.op…")
-                      : isCoopReal
-                        ? t("Đăng nhập Co.op và thêm vào giỏ →")
-                        : t("Để trợ lý đặt giúp →")}
-                  </button>)
-              }
-              {
-                !canStart && (
-                  <p className="text-center text-xs text-slate-400">
-                    {isCoopReal
-                      ? t("Nhập đủ tên, số điện thoại, mật khẩu, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
-                      : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
-                  </p>
-                )
-              }
             </div >
           )
           }
@@ -3239,6 +3266,100 @@ export default function OrderAgentModal({
                               </span>
                               {t("Tôi không phải là người máy")}
                             </button>
+                          </PauseBox>
+                        )}
+
+                        {isCurrent && s.kind === "payment-select" && (
+                          <PauseBox tone="blue" hint={t("💳 Chọn cách thanh toán phù hợp với bạn.")}>
+                            <div className="space-y-2">
+                              {/* 3 lựa chọn */}
+                              {(["cod", "qr", "card"] as DemoPayMethod[]).map((m) => {
+                                const labels: Record<DemoPayMethod, string> = {
+                                  cod: "💵 " + t("COD — Tiền mặt khi nhận hàng"),
+                                  qr:  "📱 " + t("QR chuyển khoản"),
+                                  card:"💳 " + t("Thanh toán bằng thẻ"),
+                                };
+                                return (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() => setDemoPayMethod(m)}
+                                    className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition ${demoPayMethod === m ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
+                                  >
+                                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${demoPayMethod === m ? "border-emerald-500" : "border-slate-300"}`}>
+                                      {demoPayMethod === m && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
+                                    </span>
+                                    {labels[m]}
+                                  </button>
+                                );
+                              })}
+
+                              {/* QR demo */}
+                              {demoPayMethod === "qr" && (
+                                <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
+                                  <p className="mb-2 text-xs font-medium text-slate-500">{t("Quét mã để chuyển khoản")}</p>
+                                  <div className="mx-auto flex h-36 w-36 items-center justify-center rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                                    <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={120} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
+                                  </div>
+                                  <p className="mt-2 text-xs text-slate-400">{t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}</p>
+                                </div>
+                              )}
+
+                              {/* Card form */}
+                              {demoPayMethod === "card" && (
+                                <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                                  <div>
+                                    <label className="text-[11px] font-medium text-slate-500">{t("Số thẻ")}</label>
+                                    <input
+                                      value={cardNum}
+                                      onChange={(e) => setCardNum(e.target.value.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim())}
+                                      placeholder="1234 5678 9012 3456"
+                                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                                    />
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <div className="flex-1">
+                                      <label className="text-[11px] font-medium text-slate-500">{t("MM/YY")}</label>
+                                      <input
+                                        value={cardExp}
+                                        onChange={(e) => {
+                                          const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                                          setCardExp(v.length > 2 ? v.slice(0,2) + "/" + v.slice(2) : v);
+                                        }}
+                                        placeholder="MM/YY"
+                                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                                      />
+                                    </div>
+                                    <div className="flex-1">
+                                      <label className="text-[11px] font-medium text-slate-500">CVV</label>
+                                      <input
+                                        value={cardCvv}
+                                        onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                                        placeholder="•••"
+                                        type="password"
+                                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                                      />
+                                    </div>
+                                  </div>
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                                    <input type="checkbox" checked={cardSaved} onChange={(e) => setCardSaved(e.target.checked)} className="accent-emerald-600" />
+                                    {t("Lưu thẻ để mua nhanh lần sau")}
+                                  </label>
+                                  <div className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                    {t("Thông tin thẻ được mã hoá, không lưu số thẻ thật, không chia sẻ bên thứ 3.")}
+                                  </div>
+                                </div>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => setStepIndex((x) => x + 1)}
+                                className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                              >
+                                {demoPayMethod === "cod" ? t("Xác nhận COD →") : demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
+                              </button>
+                            </div>
                           </PauseBox>
                         )}
 
@@ -3624,22 +3745,41 @@ export default function OrderAgentModal({
                 <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
               </div>
               <button
-                disabled={!canStart}
+                disabled={!canStart || (isCoopReal || isBHXReal ? coopBusy : false)}
                 onClick={() => {
                   flushProfile({ name, phone, address });
-                  setStepIndex(0);
-                  setOtp("");
-                  setOtpError(false);
-                  setSimOtp("");
-                  setPhase("running");
+                  if (isTXNNReal) {
+                    void createSession();
+                  } else if (isCoopReal) {
+                    void startCoopOrder();
+                  } else if (isBHXReal) {
+                    startBHXOrder().catch((err) => {
+                      console.error("Bach Hoa Xanh order error:", err);
+                      alert(err instanceof Error ? err.message : String(err));
+                    });
+                  } else {
+                    setStepIndex(0);
+                    setOtp("");
+                    setOtpError(false);
+                    setSimOtp("");
+                    setPhase("running");
+                  }
                 }}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-150 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
               >
-                {t("Để trợ lý đặt giúp →")}
+                {isTXNNReal && submitting
+                  ? t("Đang tạo phiên đặt hàng…")
+                  : coopBusy
+                    ? t("Đang kết nối Co.op…")
+                    : isCoopReal
+                      ? t("Đăng nhập Co.op và thêm vào giỏ →")
+                      : t("Để trợ lý đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
-                  {t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
+                  {isCoopReal
+                    ? t("Nhập đủ tên, số điện thoại, mật khẩu, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
+                    : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
                 </p>
               )}
             </div>

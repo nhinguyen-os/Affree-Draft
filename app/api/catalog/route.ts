@@ -6,6 +6,7 @@ import { fetchSimilarGroups } from "@/lib/sheet-similar";
 import { fetchTui } from "@/lib/sheet-tui";
 import { fetchDiscountMap } from "@/lib/sheet-discount";
 import { fetchSheetStores } from "@/lib/sheet-stores";
+import { fetchChainMinOrders } from "@/lib/sheet-store-rules";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
@@ -13,6 +14,21 @@ import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 // sau lấy từ cache (~100ms). Sửa sheet hiện sau ≤30s. Trade-off chấp nhận: trước đây
 // revalidate=0 khiến mọi user đợi 3.5s; giờ chỉ 1 user/30s phải đợi.
 export const revalidate = 30;
+
+// Header cache cho response JSON: CDN Vercel giữ 300s + serve bản cũ trong lúc refetch
+// (stale-while-revalidate) → TTFB ~100ms thay vì 1.5-3.5s. max-age=0 để TRÌNH DUYỆT luôn
+// hỏi lại CDN (client tự lưu bản cache riêng qua Cache API ở page.tsx — xem "gqd-api-v1").
+// Nguồn fallback/seed KHÔNG cache CDN lâu (tránh ghim data lỗi 5 phút ở edge).
+function jsonCached(data: Record<string, unknown>) {
+  const isFallback = data.source === "seed" || data.source === "seed-fallback";
+  return NextResponse.json(data, {
+    headers: {
+      "Cache-Control": isFallback
+        ? "public, max-age=0, s-maxage=15, stale-while-revalidate=60"
+        : "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+    },
+  });
+}
 
 // Nguồn catalog CHÍNH: Google Sheet "Danh sách sản phẩm" (định dạng product_id) trong
 // folder Affree mới. Đọc trực tiếp CSV (không qua Apps Script). Override bằng env CATALOG_CSV_URL.
@@ -73,12 +89,13 @@ export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
   // Mọi nguồn sheet (admin sửa) dùng chung 30s để sửa sheet → reload là thấy gần như ngay.
-  const [, sheetGroups, similarGroups, discountMap, tui] = await Promise.all([
+  const [, sheetGroups, similarGroups, discountMap, tui, minOrders] = await Promise.all([
     fetchSheetStores(30).then(setDynamicStores),
     fetchSheetGroups(30),
     fetchSimilarGroups(30),
     fetchDiscountMap(30),
     fetchTui(30),
+    fetchChainMinOrders(60),
   ]);
 
   /**
@@ -123,6 +140,7 @@ export async function GET() {
     similarGroups: similarGroups.length ? similarGroups : catalog.similarGroups,
     tui: tui.length ? tui : catalog.tui,
     mealTitles: catalog.mealTitles?.length ? catalog.mealTitles : sheetGroups.mealTitles,
+    minOrders,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
@@ -133,7 +151,7 @@ export async function GET() {
       if (res.ok) {
         const parsed = parseCsv(await res.text());
         if (parsed.products.length) {
-          return NextResponse.json({ source: "sheet-csv", ...withGroups(withImages(parsed)) });
+          return jsonCached({ source: "sheet-csv", ...withGroups(withImages(parsed)) });
         }
       }
     } catch {
@@ -144,8 +162,8 @@ export async function GET() {
   // Công tắc: lấy data từ tab catalog làm nguồn chính.
   if (process.env.CATALOG_SOURCE === "catalog-tab") {
     const tab = await fetchCatalogTab();
-    if (tab) return NextResponse.json({ source: "catalog-tab", ...withGroups(withImages(tab)) });
-    return NextResponse.json({
+    if (tab) return jsonCached({ source: "catalog-tab", ...withGroups(withImages(tab)) });
+    return jsonCached({
       source: "seed-fallback",
       error: "tab catalog rỗng hoặc lỗi",
       ...withGroups(SEED_CATALOG),
@@ -155,12 +173,12 @@ export async function GET() {
   // 0. Master sheet (1645 sp: giá + ảnh + link thật) — nguồn chính mặc định.
   const master = await fetchMasterCatalog(revalidate);
   if (master) {
-    return NextResponse.json({ source: "master-sheet", ...withGroups(withImages(master)) });
+    return jsonCached({ source: "master-sheet", ...withGroups(withImages(master)) });
   }
 
   const tab = await fetchCatalogTab();
   if (tab) {
-    return NextResponse.json({ source: "apps-script", ...withGroups(withImages(tab)) });
+    return jsonCached({ source: "apps-script", ...withGroups(withImages(tab)) });
   }
 
   const csvUrl = process.env.SHEET_CSV_URL;
@@ -169,13 +187,13 @@ export async function GET() {
       const res = await fetch(csvUrl, { next: { revalidate } });
       if (!res.ok) throw new Error(`Sheet HTTP ${res.status}`);
       const catalog = withGroups(withImages(parseCsv(await res.text())));
-      return NextResponse.json({ source: "sheet-csv", ...catalog });
+      return jsonCached({ source: "sheet-csv", ...catalog });
     } catch (err) {
-      return NextResponse.json({ source: "seed-fallback", error: String(err), ...withGroups(SEED_CATALOG) });
+      return jsonCached({ source: "seed-fallback", error: String(err), ...withGroups(SEED_CATALOG) });
     }
   }
 
-  return NextResponse.json({ source: "seed", ...withGroups(SEED_CATALOG) });
+  return jsonCached({ source: "seed", ...withGroups(SEED_CATALOG) });
 }
 
 function parseCsv(csv: string): Catalog {
