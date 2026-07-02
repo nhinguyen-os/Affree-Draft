@@ -10,10 +10,13 @@ import { fetchChainMinOrders } from "@/lib/sheet-store-rules";
 import { setDynamicStores } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
-// Cache 30s ở Vercel edge — request đầu mỗi 30s mới đập Google Sheets (~3.5s), các request
-// sau lấy từ cache (~100ms). Sửa sheet hiện sau ≤30s. Trade-off chấp nhận: trước đây
-// revalidate=0 khiến mọi user đợi 3.5s; giờ chỉ 1 user/30s phải đợi.
-export const revalidate = 30;
+// KHÔNG prerender: response 10MB không cache được Next.js data cache (>2MB), nên prerender
+// build-time bị đóng băng — CDN phục vụ stale mãi vì background revalidate của response
+// lớn không hoàn thành (2026-07-02: prod bhx-bhx-* stores có giá bị chia 1000 do build-time
+// snapshot cũ). Force-dynamic + revalidate=0 → mỗi request fetch fresh sheet. TTFB ~3-4s
+// cho user đầu; các user sau đến qua CDN cache (s-maxage=300 stale-while-revalidate).
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 // Header cache cho response JSON: CDN Vercel giữ 300s + serve bản cũ trong lúc refetch
 // (stale-while-revalidate) → TTFB ~100ms thay vì 1.5-3.5s. max-age=0 để TRÌNH DUYỆT luôn
