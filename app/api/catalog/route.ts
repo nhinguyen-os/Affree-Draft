@@ -289,11 +289,19 @@ function parseCsv(csv: string): Catalog {
       .replace(/\.(?=\d{3}\b)/g, "") // "40.500" → "40500"; KHÔNG đụng "6.49"
       .replace(",", ".") // phẩy thập phân → chấm
       .replace(/[^\d.]/g, "");
+    let priceNum = priceRaw ? Number(priceRaw) : 0;
+    // Defensive: một số dòng cũ trong sheet vẫn giữ format nghìn-VND ("40.5" cho 40.500đ)
+    // → Vercel edge fetch có lúc trả bản CSV cached này. Với chain VND (mọi chain trừ
+    // astrabean/USD), nếu giá < 1000 mà là số thập phân → coi như thousand-VND, × 1000.
+    const chainRaw = (ci.chain >= 0 ? (r[ci.chain] ?? "") : "").trim().toLowerCase();
+    if (priceNum > 0 && priceNum < 1000 && chainRaw !== "astrabean" && chainRaw !== "phin lab") {
+      priceNum = Math.round(priceNum * 1000);
+    }
     const stockRaw = (r[ci.inStock] ?? "").trim().toLowerCase();
     offers.push({
       productId,
       storeId,
-      price: priceRaw ? Number(priceRaw) : 0,
+      price: priceNum,
       inStock: !["0", "false", "het", "hết", "no", "out"].includes(stockRaw),
       productUrl: (r[ci.productUrl] ?? "").trim(),
       lastChecked: ((r[ci.lastChecked] ?? "").trim() || new Date().toISOString()),
