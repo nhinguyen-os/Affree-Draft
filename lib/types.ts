@@ -114,14 +114,16 @@ export interface TuiItem {
   productId: string;
   name: string;
   gia: number;
-  /** Chuỗi/nguồn của SP: THXL · bhx · coop · spe… (túi đa chain → các item khác chain). */
+  /** NGUỒN ĐÍCH mua SP (cột nguon_mua): THXL · bhx · coop · spe… — nơi trợ lý đặt món này. */
   chain: string;
 }
 
-/** Túi ghép (combo): nhiều SP đơn gộp lại, có giá combo. loai: TĐG=đơn ghép · T2=đôi · TĐD=đa dạng. */
+/** Túi ghép (combo): nhiều SP đơn gộp lại, có giá combo. loai: TĐG=đơn ghép · T2=đôi · TĐD=đa dạng.
+ *  Món trong túi lấy từ nhiều NGUỒN ĐÍCH trên Affree (item.chain) — trợ lý đặt tại từng nguồn. */
 export interface Tui {
   maTui: string;
   tenTui: string;
+  /** LEGACY — tab Tui mới không còn cột chuyên trang; giữ field cho seed/nguồn cũ, app KHÔNG hiển thị. */
   chuyenTrang: string;
   loai: string;
   giaCombo: number;

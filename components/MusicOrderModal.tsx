@@ -1,15 +1,41 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "react-qr-code";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
+import { getSavedCard, saveCard, type SavedCard } from "@/lib/cards";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
+import { acquireBodyScrollLock } from "@/lib/scroll-lock";
+import OrderInfoSection from "./OrderInfoSection";
+
+// Loại thẻ chấp nhận (đồng bộ với CartModal) — chip sáng theo đầu số đang gõ.
+const CARD_BRANDS = ["Visa", "Mastercard", "JCB", "Amex", "Napas"] as const;
+type CardBrand = (typeof CARD_BRANDS)[number];
+const CARD_BRAND_STYLE: Record<CardBrand, string> = {
+  Visa: "border-[#1A1F71] bg-[#1A1F71]/5 text-[#1A1F71]",
+  Mastercard: "border-[#EB001B] bg-[#EB001B]/5 text-[#EB001B]",
+  JCB: "border-emerald-600 bg-emerald-50 text-emerald-700",
+  Amex: "border-sky-600 bg-sky-50 text-sky-700",
+  Napas: "border-teal-600 bg-teal-50 text-teal-700",
+};
+function detectCardBrand(num: string): CardBrand | null {
+  const n = num.replace(/\s/g, "");
+  if (!n) return null;
+  if (n.startsWith("9704")) return "Napas";
+  if (/^4/.test(n)) return "Visa";
+  if (/^(5[1-5]|2[2-7])/.test(n)) return "Mastercard";
+  if (/^3[47]/.test(n)) return "Amex";
+  if (/^35/.test(n)) return "JCB";
+  return null;
+}
 
 /**
  * Form đặt mua NHẠC BẢN QUYỀN (Khúc Chạm Plaza) — sản phẩm SỐ.
- * Đơn giản, KHÔNG dùng màn agentic (không OTP/đăng nhập/địa chỉ giao/khung giờ): chỉ cần
- * người nhận + SĐT/Zalo + email để nhận link nhạc. Đặt xong → mã đơn, Khúc Chạm liên hệ gửi nhạc.
+ * Đơn giản, KHÔNG dùng màn agentic (không đăng nhập/địa chỉ giao/khung giờ): người nhận +
+ * SĐT/Zalo + email để nhận link nhạc + CHỌN thanh toán (QR/Thẻ — không COD vì là sản phẩm số).
+ * Đặt xong → mã đơn, Khúc Chạm liên hệ gửi nhạc.
  */
 export interface MusicOrderLine {
   id: string;
@@ -43,25 +69,54 @@ export default function MusicOrderModal({
   const [note, setNote] = useState("");
   const [orderCode, setOrderCode] = useState("");
 
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // Thanh toán — QR / Thẻ (KHÔNG COD: nhạc là sản phẩm số giao qua email/Zalo). null = chưa chọn.
+  type PayMethod = "qr" | "card";
+  const [payMethod, setPayMethod] = useState<PayMethod | null>(null);
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardName, setCardName] = useState("");
+  const [cardExp, setCardExp] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
+  const [savedCard] = useState<SavedCard | null>(() => getSavedCard());
+  const [useNewCard, setUseNewCard] = useState(false);
+
+  // Khoá scroll nền — refcount chung (xem lib/scroll-lock.ts).
+  useEffect(() => acquireBodyScrollLock(), []);
   useEffect(() => { saveProfile({ name, phone }); }, [name, phone]);
 
-  const rule = useMemo(() => phoneRule(), []);
+  // Cùng rule VND với OrderInfoSection để canOrder khớp với lỗi hiển thị trong form.
+  const rule = useMemo(() => phoneRule("VND"), []);
   const phoneValid = rule.test(phone);
   const phoneError = phone.trim().length > 0 && !phoneValid;
   const emailValid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const emailError = email.trim().length > 0 && !emailValid;
-  // Cần email HOẶC SĐT để Khúc Chạm gửi nhạc; tên bắt buộc.
-  const canOrder = !!name.trim() && (phoneValid || (!!email.trim() && emailValid)) && !emailError;
 
   const total = items.reduce((s, l) => s + l.price * (l.qty ?? 1), 0);
 
+  // Thanh toán: dùng thẻ ĐÃ LƯU (mặc định khi có) hay thẻ mới.
+  const usingSavedCard = !!savedCard && !useNewCard;
+  const newCardReady =
+    cardNumber.replace(/\s/g, "").length >= 12 &&
+    cardName.trim().length > 0 &&
+    /^\d{2}\/\d{2}$/.test(cardExp) &&
+    cardCvv.length >= 3;
+  const cardReady = usingSavedCard || newCardReady;
+  const activeCardNumber = usingSavedCard ? savedCard!.number : cardNumber;
+  const cardBrand = usingSavedCard ? (savedCard!.brand as CardBrand | null) : detectCardBrand(activeCardNumber);
+  const cardLast4 = activeCardNumber.replace(/\D/g, "").slice(-4);
+  const maskedCardLabel = `${cardBrand ?? t("Thẻ")} ****${cardLast4}`;
+  // Đã chọn thanh toán hợp lệ: QR (chỉ cần chọn) hoặc Thẻ (phải đủ thông tin thẻ).
+  const paymentReady = payMethod === "qr" || (payMethod === "card" && cardReady);
+
+  // Cần email HOẶC SĐT để Khúc Chạm gửi nhạc; tên bắt buộc; đã chọn thanh toán.
+  const canOrder =
+    !!name.trim() && (phoneValid || (!!email.trim() && emailValid)) && !emailError && paymentReady;
+
   const place = () => {
     flushProfile({ name, phone });
+    // Thẻ mới hợp lệ → lưu lại (localStorage, không CVV) cho lần sau chọn nhanh.
+    if (payMethod === "card" && !usingSavedCard && newCardReady) {
+      saveCard({ number: cardNumber, name: cardName, exp: cardExp, brand: detectCardBrand(cardNumber) });
+    }
     const code = "KC-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100);
     setOrderCode(code);
     setPhase("done");
@@ -100,29 +155,15 @@ export default function MusicOrderModal({
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
           {phase === "form" && (
             <div className="space-y-3">
-              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng / Mua ngay ── */}
-              <section className="rounded-2xl border border-slate-200 p-3">
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {t("Thông tin chung")}
-                </h3>
-                <div className="space-y-2.5">
-                  <Field label={t("Họ tên")}>
-                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Nguyễn Văn A")} className="input" />
-                  </Field>
-                  <Field label={t("Số điện thoại / Zalo")}>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      inputMode="tel"
-                      placeholder={t(rule.placeholderVi)}
-                      aria-invalid={phoneError}
-                      className="input"
-                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                    />
-                    {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
-                  </Field>
-                </div>
-              </section>
+              {/* ── Thông tin chung — MODULE CHUNG với form giỏ hàng / Mua ngay (sản phẩm số → không cần địa chỉ) ── */}
+              <OrderInfoSection
+                lang={lang}
+                name={name}
+                phone={phone}
+                onName={setName}
+                onPhone={setPhone}
+                showAddress={false}
+              />
 
               {/* ── Riêng Khúc Chạm Plaza: danh sách nhạc + email nhận link + lời nhắn ── */}
               <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
@@ -163,6 +204,113 @@ export default function MusicOrderModal({
                   {t("Sản phẩm số: Khúc Chạm Plaza liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.")}
                 </p>
               </section>
+
+              {/* ── Thanh toán (QR / Thẻ — KHÔNG COD vì nhạc là sản phẩm số) ── */}
+              <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("Thanh toán")}</h3>
+                <div className="flex gap-1.5">
+                  {(["qr", "card"] as PayMethod[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPayMethod(m)}
+                      className={`flex-1 rounded-lg border py-1.5 text-xs font-semibold transition-colors ${payMethod === m ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`}
+                    >
+                      {m === "qr" ? "📱 QR" : "💳 " + t("Thẻ")}
+                    </button>
+                  ))}
+                </div>
+
+                {/* QR chuyển khoản — hiện mã để quét ngay (đơn nhạc đặt xong luôn, không có bước trợ lý). */}
+                {payMethod === "qr" && (
+                  <div className="flex flex-col items-center gap-2 rounded-xl bg-slate-50 px-3 py-3">
+                    <div className="rounded-lg bg-white p-2">
+                      <QRCode value={`AFFREE|KHUCCHAM|${total}|${(name || "").trim()}|${orderCode || "PENDING"}`} size={128} />
+                    </div>
+                    <p className="text-center text-[11px] text-slate-500">
+                      📱 {t("Quét mã để chuyển khoản")} <b className="text-emerald-600">{formatMoney(total)}</b> {t("cho Khúc Chạm Plaza.")}
+                    </p>
+                  </div>
+                )}
+
+                {/* Thẻ đã lưu (lần mua trước) → mặc định dùng lại; hoặc nhập thẻ mới. */}
+                {payMethod === "card" && usingSavedCard && savedCard && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-400 bg-emerald-50/60 px-3 py-2 ring-1 ring-emerald-200">
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cardBrand ? CARD_BRAND_STYLE[cardBrand] : "border-slate-300 text-slate-500"}`}>
+                        {cardBrand ?? t("Thẻ")}
+                      </span>
+                      <span className="flex-1 truncate font-mono text-sm text-slate-800">****{cardLast4}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] text-slate-400">{"✓ " + t("Dùng {card} thanh toán.", { card: maskedCardLabel })}</p>
+                      <button
+                        type="button"
+                        onClick={() => setUseNewCard(true)}
+                        className="shrink-0 text-[11px] font-medium text-emerald-600 underline-offset-2 hover:underline"
+                      >
+                        {t("Dùng thẻ khác")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {payMethod === "card" && !usingSavedCard && (
+                  <div className="space-y-2">
+                    {savedCard && (
+                      <button
+                        type="button"
+                        onClick={() => setUseNewCard(false)}
+                        className="text-[11px] font-medium text-emerald-600 underline-offset-2 hover:underline"
+                      >
+                        ← {t("Dùng thẻ đã lưu")} ({savedCard.brand ?? t("Thẻ")} ****{savedCard.number.replace(/\D/g, "").slice(-4)})
+                      </button>
+                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {CARD_BRANDS.map((b) => (
+                        <span key={b} className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cardBrand === b ? CARD_BRAND_STYLE[b] : "border-slate-200 text-slate-300"}`}>{b}</span>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={19}
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(e.target.value.replace(/\D/g, "").replace(/(.{4})/g, "$1 ").trim())}
+                      placeholder={t("Số thẻ") + " 0000 0000 0000 0000"}
+                      className="input font-mono"
+                    />
+                    <input
+                      type="text"
+                      value={cardName}
+                      onChange={(e) => setCardName(e.target.value.toUpperCase())}
+                      placeholder={t("Tên chủ thẻ")}
+                      className="input font-mono"
+                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        maxLength={5}
+                        value={cardExp}
+                        onChange={(e) => { const v = e.target.value.replace(/\D/g, ""); setCardExp(v.length > 2 ? `${v.slice(0, 2)}/${v.slice(2)}` : v); }}
+                        placeholder="MM/YY"
+                        className="input font-mono"
+                      />
+                      <input
+                        type="password"
+                        maxLength={4}
+                        value={cardCvv}
+                        onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, ""))}
+                        placeholder="CVV"
+                        className="input font-mono"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      {cardReady ? "✓ " + t("Dùng {card} thanh toán.", { card: maskedCardLabel }) : "💳 " + t("Điền đủ thông tin thẻ để đặt.")}
+                    </p>
+                  </div>
+                )}
+              </section>
             </div>
           )}
 
@@ -180,6 +328,7 @@ export default function MusicOrderModal({
                 ))}
                 <div className="border-t border-slate-200 pt-1.5">
                   {!!email.trim() && <Row k="Email" v={email} />}
+                  <Row k={t("Thanh toán")} v={payMethod === "qr" ? t("QR chuyển khoản") : maskedCardLabel} />
                   <Row k={t("Tổng")} v={formatMoney(total)} strong />
                 </div>
               </div>
@@ -202,7 +351,11 @@ export default function MusicOrderModal({
               {t("Đặt mua")}
             </button>
             {!canOrder && (
-              <p className="mt-1.5 text-center text-xs text-slate-400">{t("Nhập tên và SĐT/Zalo hoặc email để đặt.")}</p>
+              <p className="mt-1.5 text-center text-xs text-slate-400">
+                {!name.trim() || !(phoneValid || (!!email.trim() && emailValid))
+                  ? t("Nhập tên và SĐT/Zalo hoặc email để đặt.")
+                  : t("Chọn phương thức thanh toán để tiếp tục.")}
+              </p>
             )}
           </div>
         )}

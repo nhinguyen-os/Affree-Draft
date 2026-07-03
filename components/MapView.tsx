@@ -147,6 +147,14 @@ function ClusterGroup({
   const map = useMap();
   const clusterGroupRef = useRef<any>(null);
 
+  // t/onMarkerClick là arrow function mới mỗi render của parent — nếu đưa thẳng vào deps
+  // thì effect rebuild TOÀN BỘ marker (~4-5k pin) mỗi lần MapView re-render → đứng UI.
+  // Giữ qua ref: marker luôn gọi bản mới nhất mà effect không cần chạy lại.
+  const tRef = useRef(t);
+  tRef.current = t;
+  const onMarkerClickRef = useRef(onMarkerClick);
+  onMarkerClickRef.current = onMarkerClick;
+
   useEffect(() => {
     clusterGroupRef.current = (L as any).markerClusterGroup({
       showCoverageOnHover: false,
@@ -172,17 +180,17 @@ function ClusterGroup({
       .filter((m) => m.store.lat != null && m.store.lng != null)
       .forEach((m) => {
         const marker = L.marker([m.store.lat as number, m.store.lng as number], {
-          icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, !!m.nearest, m.store.id === highlightId, t("RẺ NHẤT"), t("GẦN NHẤT"), m.store.loaiCskd),
+          icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, !!m.nearest, m.store.id === highlightId, tRef.current("RẺ NHẤT"), tRef.current("GẦN NHẤT"), m.store.loaiCskd),
         });
 
         marker.on("click", (ev) => {
           L.DomEvent.stopPropagation(ev);
-          onMarkerClick(m);
+          onMarkerClickRef.current(m);
         });
 
         cluster.addLayer(marker);
       });
-  }, [markers, highlightId, map, t, onMarkerClick]);
+  }, [markers, highlightId, map]);
 
   return null;
 }
@@ -337,13 +345,23 @@ export default function MapView({
 
   // Popup pin dùng position:fixed portal vào body → set 1 lần lúc click sẽ không theo map khi
   // user pan/zoom/scroll page → popup "ra khỏi" map. Đăng ký listener để recompute liên tục.
+  // Gộp qua requestAnimationFrame: scroll/move bắn hàng chục event/giây — mỗi event một
+  // setState là thừa (re-render dồn dập); rAF giới hạn tối đa 1 lần/khung hình.
   useEffect(() => {
     if (!selectedStore || !map) return;
-    const update = () => setPortalPos(computePortalPos(selectedStore.store));
+    let raf = 0;
+    const update = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setPortalPos(computePortalPos(selectedStore.store));
+      });
+    };
     map.on("move", update);
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       map.off("move", update);
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
@@ -355,15 +373,20 @@ export default function MapView({
   // Đếm số cửa hàng theo từng chain (để hiển thị "BHX (12)" trong chú thích).
   // Dùng object thay Map vì identifier `Map` trùng với react-map-gl/maplibre's Map.
   // Đang lọc theo bán kính → chỉ giữ pin nằm TRONG vòng tròn (ngoài bán kính ẩn hẳn).
-  const radiusMarkers =
-    radiusKm && userLoc
-      ? markers.filter(
-        (m) =>
-          m.store.lat != null &&
-          m.store.lng != null &&
-          haversineKm(userLoc.lat, userLoc.lng, m.store.lat, m.store.lng) <= radiusKm,
-      )
-      : markers;
+  // useMemo BẮT BUỘC: .filter() tạo array mới mỗi render → identity đổi → ClusterGroup
+  // rebuild toàn bộ pin (~4-5k) mỗi lần re-render (vd popup pin update vị trí khi scroll) → đứng UI.
+  const radiusMarkers = useMemo(
+    () =>
+      radiusKm && userLoc
+        ? markers.filter(
+          (m) =>
+            m.store.lat != null &&
+            m.store.lng != null &&
+            haversineKm(userLoc.lat, userLoc.lng, m.store.lat, m.store.lng) <= radiusKm,
+        )
+        : markers,
+    [markers, radiusKm, userLoc],
+  );
 
   const chainKeys: Chain[] = [];
   const chainCounts: Record<string, number> = {};
@@ -373,12 +396,13 @@ export default function MapView({
     if (!chainKeys.includes(m.store.chain)) chainKeys.push(m.store.chain);
     chainCounts[m.store.chain] = (chainCounts[m.store.chain] ?? 0) + 1;
   }
-  // Khi legend đóng → ẩn TẤT CẢ pin.
+  // Đóng legend CHỈ ẩn bảng chú thích, pin trên map giữ nguyên (filter đã chọn vẫn áp dụng).
   // CSKD mode: checkedCskd rỗng = hiện tất cả; có giá trị = chỉ hiện store có loaiCskd giao với
   // checkedCskd. Store CHƯA phân loại (không có loaiCskd) LUÔN hiện — tránh ẩn nhầm cửa hàng
   // offer thuộc chuỗi không có dữ liệu CSKD trên map so sánh giá.
-  const visibleMarkers = legendOpen
-    ? radiusMarkers.filter((m) => {
+  const visibleMarkers = useMemo(
+    () =>
+      radiusMarkers.filter((m) => {
         if (!hiddenChains.has(m.store.chain)) {
           if (cskdTaxonomy && checkedCskd.size > 0) {
             const lc = m.store.loaiCskd ?? [];
@@ -387,8 +411,9 @@ export default function MapView({
           return true;
         }
         return false;
-      })
-    : [];
+      }),
+    [radiusMarkers, hiddenChains, checkedCskd, cskdTaxonomy],
+  );
 
   // Load configured map url from process.env if tileUrl is not provided
   const mapLayer = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MAP_LAYER || "mvp_map" : "mvp_map";
@@ -607,7 +632,8 @@ export default function MapView({
                             })
                           }
                         >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          {/* Màu bookmark = màu pin của loại CSKD trên map (catMeta) để đối chiếu nhanh. */}
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill={catMeta(catItem.category).color} stroke={catMeta(catItem.category).color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
                           </svg>
                           <span style={{ fontWeight: 700, fontSize: 11, color: "#1e293b", flex: 1 }}>{catItem.category}</span>

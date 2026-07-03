@@ -38,6 +38,7 @@ import type { MusicOrderLine } from "@/components/MusicOrderModal";
 import { SEED_MUSIC } from "@/lib/music";
 import type { MapMarker } from "@/components/MapView";
 import { type GeoResult } from "@/lib/geocode";
+import { acquireBodyScrollLock, hasActiveScrollLock } from "@/lib/scroll-lock";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
@@ -193,6 +194,28 @@ const SERVICE_TAIL: ServiceTile[] = [
 // Số sản phẩm chuỗi THXL tối đa được ghim lên đầu danh sách (~2 hàng × lưới 4 cột).
 const PIN_THXL_TOP = 8;
 
+// Các nấc bán kính (km) — dùng chung cho chip lọc trên map và logic "tự nới bán kính"
+// của các section sản phẩm dưới map.
+const RADIUS_STEPS = [0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1];
+// Số item tối thiểu để một section được coi là "đủ phủ" trong bán kính; thiếu → tự nới.
+const MIN_DEALS_IN_RADIUS = 3;
+const MIN_GROUP_IN_RADIUS = 4;
+
+/**
+ * "Tự nới bán kính": từ nấc gốc `base` thử từng nấc to dần cho tới khi `countAt(r)`
+ * đủ `minCount` item; hết nấc vẫn thiếu → null (bỏ giới hạn, lấy toàn khu vực).
+ */
+function widenRadius(base: number, minCount: number, countAt: (r: number | null) => number): number | null {
+  for (const r of [base, ...RADIUS_STEPS.filter((s) => s > base)]) {
+    if (countAt(r) >= minCount) return r;
+  }
+  return null;
+}
+
+function fmtRadius(r: number): string {
+  return r < 1 ? `${Math.round(r * 1000)}m` : `${r}km`;
+}
+
 
 /**
  * Dựng ô dịch vụ TỪ TAB "tệp" của Google Sheet (catalog.groups). Thứ tự = thứ tự dòng.
@@ -260,15 +283,35 @@ function formatCheckedAt(raw: string): string {
 }
 
 /**
- * Suy quốc gia của 1 cửa hàng vật lý từ lat/lng (bbox xấp xỉ). Online store → undefined
- * (hiển thị ở mọi quốc gia). Trả về country code lowercase ("vn"/"us"/"ca"…) hoặc undefined.
+ * Suy quốc gia của 1 cửa hàng vật lý. Online store → undefined (hiển thị ở mọi quốc gia).
+ * Ưu tiên country code ghi TƯỜNG MINH ở cuối địa chỉ (data CSKD dạng "…, ON, L6G 1A6, CA" /
+ * "…, NY, 10805-1203, US") — bbox toạ độ chỉ là fallback vì khung US (24–50°N) phủ luôn
+ * Nam Ontario/Toronto: store Canada bị nhận nhầm "us" → sản phẩm Costco CA biến mất khỏi
+ * search khi user ở Mississauga. Trả country code lowercase ("vn"/"us"/"ca"…) hoặc undefined.
  */
-function storeCountryCode(store: { lat?: number; lng?: number; online?: boolean } | undefined): string | undefined {
+function storeCountryCode(store: { lat?: number; lng?: number; online?: boolean; address?: string } | undefined): string | undefined {
   if (!store || store.online) return undefined;
+  const addr = (store.address || "").trim();
+  // 1) Country code 2 chữ cuối địa chỉ — chỉ nhận mã đã biết (tránh nhầm mã bang/tỉnh 2 chữ như "ON").
+  //    (data CSKD / Costco: "…, NY, 10805, US" · "…, ON, L6G 1A6, CA")
+  const m = addr.match(/,\s*([A-Za-z]{2})$/);
+  if (m) {
+    const cc = m[1].toLowerCase();
+    if (cc === "us" || cc === "ca" || cc === "vn") return cc;
+  }
+  // 1b) TÊN QUỐC GIA đầy đủ cuối địa chỉ — vd Walmart: "…, Toronto, ON M6H 4A9, Canada".
+  //     Bắt buộc trước bbox toạ độ vì Toronto (43.6°N) nằm dưới vĩ tuyến 49 → lọt bbox US → gán nhầm "us".
+  const tail = addr.toLowerCase();
+  if (/,\s*canada\.?$/.test(tail)) return "ca";
+  if (/,\s*(usa|u\.?s\.?a\.?|united states( of america)?)\.?$/.test(tail)) return "us";
+  if (/,\s*(vietnam|viet ?nam|việt ?nam)\.?$/.test(tail)) return "vn";
+  // 2) Fallback bbox theo lat/lng (xấp xỉ — vùng chồng lấn US/CA 41–50°N nghiêng về US).
   const { lat, lng } = store;
   if (lat == null || lng == null) return undefined;
   // VN: ~8–24°N, 102–110°E
   if (lat >= 8 && lat <= 24 && lng >= 102 && lng <= 110) return "vn";
+  // Biên giới US–CA phía tây là vĩ tuyến 49 (lng -125 → -95): trên 49°N chắc chắn Canada.
+  if (lat >= 49 && lng >= -125 && lng < -95) return "ca";
   // US continental: ~24–50°N, -125 đến -66°W
   if (lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66) return "us";
   // Canada: ~41–84°N, -141 đến -52°W
@@ -486,6 +529,19 @@ function LocationPanel({
 // Module-level cache — tồn tại qua remount khi Next.js chuyển route (/ → /slug).
 let _catalogCache: Catalog | null = null;
 
+// Subdomain nhãn/chuỗi/tệp (đồng bộ luật với proxy.ts): `pnj.affree.vn` hoặc
+// `pnj.localhost` khi dev → slug "pnj". *.vercel.app không có sub-subdomain → bỏ qua.
+const RESERVED_SUBS = new Set(["www", "api", "admin", "app", "static", "assets", "mail"]);
+function getHostSub(): string {
+  if (typeof window === "undefined") return "";
+  const hostname = window.location.hostname.toLowerCase();
+  const parts = hostname.split(".");
+  let sub = "";
+  if (parts.length === 2 && parts[1] === "localhost") sub = parts[0];
+  else if (parts.length >= 3 && !hostname.endsWith(".vercel.app")) sub = parts[0];
+  return sub && !RESERVED_SUBS.has(sub) ? sub : "";
+}
+
 export default function Home() {
   // rawCatalog/rawStores = dữ liệu gốc; catalog/stores đã được scope theo region.
   // Khi đã định vị trong VN: chỉ giữ CSKD trong vùng quanh user (offline) + online stores → giảm tải dữ liệu.
@@ -544,6 +600,12 @@ export default function Home() {
   const [sortBy, setSortBy] = useState<SortBy>("price");
   const [radiusKm, setRadiusKm] = useState<number | null>(null);
   const [dealsRadiusKm, setDealsRadiusKm] = useState<number | null>(null);
+  // Bán kính trên MAP trang chủ là filter chủ đạo: đổi chip trên map → các section sản
+  // phẩm dưới map ("Giá hời quanh đây", các tệp) lọc theo cùng bán kính. Chip riêng của
+  // "Giá hời" vẫn chỉnh tay được sau đó (override cho tới lần đổi bán kính map kế tiếp).
+  useEffect(() => {
+    setDealsRadiusKm(radiusKm);
+  }, [radiusKm]);
   const [mobileView, setMobileView] = useState<MobileView>("list");
   // Bản đồ dưới thanh search: mặc định ẩn, tự mở khi đã có vị trí (định vị / nhập địa chỉ).
   const [mapOpen, setMapOpen] = useState(false);
@@ -832,6 +894,7 @@ export default function Home() {
         name: p?.name ?? it.name,
         image: p?.image,
         sourceLabel: chainLabel(it.chain),
+        chain: it.chain,
         storeName: best?.store.name ?? chainLabel(it.chain),
         // Giá khớp với "Tạm tính cả túi" (tuiCombo): ưu tiên giá khai báo của túi, rồi
         // priceStats (giá thấp nhất từ catalog — có cả nguồn online), cuối cùng giá offer.
@@ -1121,7 +1184,12 @@ export default function Home() {
   useEffect(() => {
     if (!catalog || urlSynced) return;
     const segs = (pathname || "/").split("/").filter(Boolean);
-    if (segs.length === 0) { setUrlSynced(true); return; }
+    if (segs.length === 0) {
+      // Trang gốc trên SUBDOMAIN (pnj.affree.vn) → subdomain đóng vai trò URL ngắn /<slug>.
+      const hostSub = getHostSub();
+      if (!hostSub) { setUrlSynced(true); return; }
+      segs.push(hostSub);
+    }
     if (segs[0] === "p" && segs[1]) {
       const p = findProductBySlug(catalog, decodeURIComponent(segs[1]));
       if (p) setSelected(p);
@@ -1249,6 +1317,10 @@ export default function Home() {
       // Trang chuỗi: chỉ có dạng ngắn /<chain-slug>.
       url = `/${slugify(activeChain)}`;
     }
+    // Đang ở SUBDOMAIN (pnj.affree.vn) và state đúng bằng slug của subdomain → giữ "/"
+    // (subdomain đã đại diện slug, không rewrite kẻo URL thành pnj.affree.vn/nhan/pnj).
+    const hostSub = getHostSub();
+    if (hostSub && pathname === "/" && (url === `/${hostSub}` || shortUrl === `/${hostSub}`)) return;
     if (pathname !== url && pathname !== shortUrl) router.replace(url, { scroll: false });
   }, [urlSynced, selected, activeTep, activeBrand, activeCat, activeChain, pathname, router]);
 
@@ -1357,7 +1429,7 @@ export default function Home() {
   useEffect(() => {
     const body = document.body;
     if (!anyModalOpen) {
-      // Safeguard: nếu body vẫn bị lock dù modal đã đóng → tháo lock
+      // Safeguard: nếu body vẫn kẹt position:fixed dù modal đã đóng → tháo lock.
       if (body.style.position === "fixed") {
         const lockedTop = parseInt(body.style.top || "0", 10);
         body.style.position = "";
@@ -1365,33 +1437,28 @@ export default function Home() {
         body.style.left = "";
         body.style.right = "";
         body.style.width = "";
-        body.style.overflow = "";
+        if (!hasActiveScrollLock()) body.style.overflow = "";
         window.scrollTo(0, -lockedTop);
       }
       return;
     }
     const scrollY = window.scrollY;
-    const prev = {
-      position: body.style.position,
-      top: body.style.top,
-      left: body.style.left,
-      right: body.style.right,
-      width: body.style.width,
-      overflow: body.style.overflow,
-    };
+    // overflow:hidden qua refcount CHUNG với các modal (lib/scroll-lock.ts). KHÔNG
+    // save/restore "prev" nữa: prev có thể là "hidden" do modal khác set trước đó →
+    // restore lại chính là bug kẹt scroll vĩnh viễn (phải reload).
+    const release = acquireBodyScrollLock();
     body.style.position = "fixed";
     body.style.top = `-${scrollY}px`;
     body.style.left = "0";
     body.style.right = "0";
     body.style.width = "100%";
-    body.style.overflow = "hidden";
     return () => {
-      body.style.position = prev.position;
-      body.style.top = prev.top;
-      body.style.left = prev.left;
-      body.style.right = prev.right;
-      body.style.width = prev.width;
-      body.style.overflow = prev.overflow;
+      body.style.position = "";
+      body.style.top = "";
+      body.style.left = "";
+      body.style.right = "";
+      body.style.width = "";
+      release();
       window.scrollTo(0, scrollY);
     };
   }, [anyModalOpen]);
@@ -1625,15 +1692,38 @@ export default function Home() {
     if (!s || s.stores < 2 || s.max <= s.min) return 0;
     return (s.max - s.min) / s.max;
   };
+  // Khoảng cách GẦN NHẤT từ user tới nơi bán còn hàng (cửa hàng vật lý có toạ độ — tức là
+  // các pin trên map) của TỪNG sản phẩm. Sản phẩm không có trong map (chỉ bán online hoặc
+  // store thiếu toạ độ) → không có km → KHÔNG bị lọc theo bán kính (giữ nguyên quy ước
+  // "online luôn giữ" như filter offers của trang sản phẩm).
+  const productMinKm = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!catalog || !userLoc) return m;
+    const storeById = new Map(getStores().map((s) => [s.id, s]));
+    for (const o of catalog.offers) {
+      if (!o.inStock) continue;
+      const st = storeById.get(o.storeId);
+      if (!st || st.online || st.lat == null || st.lng == null) continue;
+      const km = distanceKm(userLoc, { lat: st.lat, lng: st.lng });
+      const cur = m.get(o.productId);
+      if (cur == null || km < cur) m.set(o.productId, km);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, userLoc, storesReady]);
+
   // "🔥 Giá hời quanh đây": các sản phẩm có chênh lệch giá giữa các nơi cao nhất — mua đúng chỗ
   // rẻ nhất là lời nhiều nhất. now = giá rẻ nhất, was = giá cao nhất, save = chênh lệch.
   // Chỉ lấy sp có ≥2 nơi bán còn hàng và chênh ≥5% (mới đáng gọi là "giá hời").
-  const areaDeals = useMemo(() => {
-    if (!catalog) return [] as {
+  // Trả kèm effKm: bán kính HIỆU DỤNG sau khi "tự nới" (thiếu deal trong bán kính đã chọn
+  // → thử nấc to hơn cho tới khi đủ MIN_DEALS_IN_RADIUS; hết nấc → null = toàn khu vực).
+  const { rows: areaDeals, effKm: dealsEffKm } = useMemo(() => {
+    const empty = [] as {
       product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; km: number | null;
     }[];
+    if (!catalog) return { rows: empty, effKm: dealsRadiusKm };
     const storeById = new Map(getStores().map((s) => [s.id, s]));
-    const rows = [];
+    const rows: typeof empty = [];
     // #9: khi đang tìm kiếm → "Giá hời" chỉ gợi ý trong KẾT QUẢ liên quan (tham khảo Grab);
     // không tìm → quét toàn bộ catalog như cũ.
     const base = deferredQuery.trim() ? matches : catalog.products;
@@ -1690,7 +1780,6 @@ export default function Home() {
           }
         }
       }
-      if (userLoc && dealsRadiusKm != null && dealKm != null && dealKm > dealsRadiusKm) continue;
       const dealStoreName = dealStore?.name ?? (dealChain ? chainLabel(dealChain) : "");
       rows.push({
         product: p,
@@ -1704,20 +1793,29 @@ export default function Home() {
         km: dealKm,
       });
     }
+    // Lọc theo bán kính (đồng bộ với map) + TỰ NỚI khi thiếu deal. km=null luôn giữ.
+    let effKm: number | null = dealsRadiusKm;
+    let kept = rows;
+    if (userLoc && dealsRadiusKm != null) {
+      const within = (r: number | null) =>
+        r == null ? rows : rows.filter((x) => x.km == null || x.km <= r);
+      effKm = widenRadius(dealsRadiusKm, MIN_DEALS_IN_RADIUS, (r) => within(r).length);
+      kept = within(effKm);
+    }
     // Đã định vị → xếp theo điểm gộp "rẻ + gần" (giá hời cao và càng gần càng tốt);
     // chưa định vị → chỉ theo mức giá hời như cũ.
     if (userLoc) {
       const score = (r: { disc: number; km: number | null }) =>
         r.disc / (1 + (r.km ?? 8) / 2);
-      rows.sort((a, b) => score(b) - score(a));
+      kept.sort((a, b) => score(b) - score(a));
     } else {
-      rows.sort((a, b) => b.disc - a.disc);
+      kept.sort((a, b) => b.disc - a.disc);
     }
     // Phân bổ đều cho các TỆP (group): mỗi vòng nhặt 1 sản phẩm có % khuyến mãi cao nhất
     // từ mỗi tệp → lặp tới khi đủ 20 hoặc hết. Nhờ vậy mỗi tệp (Đồ ăn, Đồ uống, Nhà cửa,
     // Chăm sóc cá nhân, Trang sức…) đều có ít nhất 1 đại diện thay vì 1 tệp lấn át hết.
-    const byCategory = new Map<string, typeof rows>();
-    for (const r of rows) {
+    const byCategory = new Map<string, typeof kept>();
+    for (const r of kept) {
       const tep = categoryGroup(r.product) || "Khác";
       if (!byCategory.has(tep)) byCategory.set(tep, []);
       byCategory.get(tep)!.push(r);
@@ -1740,7 +1838,7 @@ export default function Home() {
     }
     // Sau khi đã đảm bảo phân bổ đều, sắp lại theo % giảm giá LỚN NHẤT trước.
     balanced.sort((a, b) => b.disc - a.disc);
-    return balanced;
+    return { rows: balanced, effKm };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog, priceStats, userLoc, storesReady, matches, deferredQuery, dealsRadiusKm]);
 
@@ -1985,7 +2083,7 @@ export default function Home() {
   // tệp không có trong DanhMuc (vd "Khác" tự sinh do group trống/không match) → bị ẨN
   // khỏi homepage để config là source of truth. Vẫn tìm/lọc được qua search.
   const groupSections = useMemo(() => {
-    if (!catalog) return [] as { name: string; emoji?: string; displayName?: string; products: Product[] }[];
+    if (!catalog) return [] as { name: string; emoji?: string; displayName?: string; products: Product[]; effRadiusKm?: number | null }[];
     const byGroup = new Map<string, Product[]>();
     for (const p of orderedMatches) {
       // Hỗ trợ multi-group: 1 sản phẩm có thể nằm trong nhiều tệp (vd vừa "Giỏ tạp hóa"
@@ -2029,9 +2127,24 @@ export default function Home() {
     // User mong đợi: thêm dòng mới vào sheet → thấy NGAY trên web kể cả chưa có sản phẩm.
     // Vì vậy KHÔNG lọc bỏ tệp rỗng; thay vào đó trả về `products: []` để layer render
     // hiển thị placeholder "Chưa có sản phẩm" thay vì ẩn section.
-    const ordered: { name: string; emoji?: string; displayName?: string; products: Product[] }[] = [];
+    const ordered: { name: string; emoji?: string; displayName?: string; products: Product[]; effRadiusKm?: number | null }[] = [];
     for (const g of sortedGroups) {
-      const products = byGroupCI.get(g.label.toLowerCase()) ?? [];
+      let products = byGroupCI.get(g.label.toLowerCase()) ?? [];
+      // Đồng bộ với bán kính map: mỗi tệp chỉ hiện sản phẩm có nơi bán trong bán kính
+      // (theo productMinKm — chính là các cửa hàng đang hiện trên map). Thiếu sản phẩm
+      // → TỰ NỚI dần tới khi đủ MIN_GROUP_IN_RADIUS (hết nấc → effRadiusKm=null, lấy hết).
+      // effRadiusKm=undefined = không lọc (chưa chọn bán kính / chưa định vị).
+      let effRadiusKm: number | null | undefined;
+      if (userLoc && radiusKm != null && products.length > 0) {
+        const all = products;
+        const within = (r: number | null) =>
+          r == null ? all : all.filter((p) => {
+            const km = productMinKm.get(p.id);
+            return km == null || km <= r;
+          });
+        effRadiusKm = widenRadius(radiusKm, MIN_GROUP_IN_RADIUS, (r) => within(r).length);
+        products = within(effRadiusKm);
+      }
       // Tên + emoji section lấy TỪ GOOGLE SHEET (tab DanhMuc) — giữ nguyên `name`/`emoji`.
       // RIÊNG "Đồ ăn" đổi tên theo BUỔI ĂN lấy từ sheet buổi-ăn (đã có sẵn VI+EN → chọn theo
       // lang, không qua i18n); emoji vẫn giữ của sheet. SSR/sheet lỗi → giữ tên gốc "Đồ ăn".
@@ -2040,10 +2153,10 @@ export default function Home() {
         const m = pickMealTitle(catalog.mealTitles, hourOfDay);
         if (m) displayName = lang === "en" ? m.en : m.vi;
       }
-      ordered.push({ name: g.label, emoji: g.emoji, displayName, products });
+      ordered.push({ name: g.label, emoji: g.emoji, displayName, products, effRadiusKm });
     }
     return ordered;
-  }, [catalog, orderedMatches, hourOfDay, lang]);
+  }, [catalog, orderedMatches, hourOfDay, lang, userLoc, radiusKm, productMinKm]);
 
   // Danh mục túi ghép/đôi/đa dạng — nhận diện để render TÚI thay vì sản phẩm lẻ.
   const TUI_CAT_RE = /túi ghép|túi đôi|túi.*đa dạng/i;
@@ -2054,6 +2167,9 @@ export default function Home() {
   // Giá combo: dùng giaCombo nếu sheet có; nếu trống (vd nguồn SanPham) → cộng giá thành viên từ catalog.
   const tuiCombo = (tu: import("@/lib/types").Tui) =>
     tu.giaCombo || tu.items.reduce((s, it) => s + (it.gia || priceStats.get(it.productId)?.min || 0), 0);
+  // Nguồn mua (nguồn đích) của túi: gom chain các món, bỏ trùng → "Bách Hóa Xanh + Tạp Hóa Xe Lam".
+  const tuiNguon = (tu: import("@/lib/types").Tui) =>
+    [...new Set(tu.items.map((it) => it.chain).filter(Boolean))].map((c) => chainLabel(c)).join(" + ");
 
   // Đổi tìm kiếm / danh mục / lọc nhanh → quay về trang 1.
   useEffect(() => {
@@ -3268,16 +3384,20 @@ export default function Home() {
                         </span>
                       </>
                     );
-                    // Click sponsor → mở MODAL giống "xem sản phẩm cửa hàng trên bản đồ"
-                    // (StoreProductsPage): sticky header tên brand + sản phẩm grouped theo
-                    // category, mỗi section cuộn ngang, có "Xem tất cả →" vào sub-view dọc.
-                    // Dùng synthetic store id = `__brand__<lowercase>` để parent route filter
-                    // offers theo brand thay vì storeId.
+                    // Click sponsor → mở TRANG nhãn (activeBrand → URL /nhan/<slug>) để
+                    // F5/share giữ nguyên trang thay vì quay về trang chủ. Sponsor không
+                    // khớp brand nào trong catalog (chưa có sản phẩm) → fallback MODAL cũ
+                    // (StoreProductsPage, synthetic store id `__brand__<lowercase>`).
                     return (
                       <button
                         key={sp.name}
                         type="button"
                         onClick={() => {
+                          const brand = findBrandBySlug(catalog, slugify(sp.name));
+                          if (brand) {
+                            setActiveBrand(brand);
+                            return;
+                          }
                           setStoreProducts({
                             id: `__brand__${sp.name.toLowerCase().trim()}`,
                             name: sp.name,
@@ -3347,6 +3467,14 @@ export default function Home() {
                     )}
                   </div>
                 )}
+                {/* Ghi chú tự nới bán kính: thiếu giá hời trong bán kính đã chọn → đã nới/mở toàn khu vực */}
+                {userLoc && dealsRadiusKm != null && dealsEffKm !== dealsRadiusKm && areaDeals.length > 0 && (
+                  <p className="mb-1.5 text-[11px] font-medium text-amber-700">
+                    {dealsEffKm == null
+                      ? t("Trong {r} chưa đủ giá hời — hiện toàn khu vực", { r: fmtRadius(dealsRadiusKm) })
+                      : t("Trong {r} chưa đủ giá hời — đã nới bán kính tới {r2}", { r: fmtRadius(dealsRadiusKm), r2: fmtRadius(dealsEffKm) })}
+                  </p>
+                )}
                 <div className="relative">
                   {/* Đổ bóng kính 2 mép (liquid glass) — đồng bộ với các hàng cuộn khác. */}
                   {dealArrows.left && <div className={GLASS_FADE_LEFT} />}
@@ -3365,7 +3493,8 @@ export default function Home() {
                     <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-amber-200 bg-amber-50/40 px-4 py-6 text-center">
                       <span className="text-2xl">🔎</span>
                       <p className="text-sm font-medium text-amber-800">
-                        {t("Chưa có giá hời nào trong {r}", { r: dealsRadiusKm < 1 ? `${Math.round(dealsRadiusKm * 1000)}m` : `${dealsRadiusKm}km` })}
+                        {/* Có tự nới bán kính nên rơi vào đây = không còn giá hời ở BẤT KỲ bán kính nào */}
+                        {t("Chưa có giá hời nào quanh đây")}
                       </p>
                       <button
                         type="button"
@@ -3574,7 +3703,7 @@ export default function Home() {
                   ) : isTuiActive ? (
                     <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                       {catalog!.tui!.map((tu) => (
-                        <li key={tu.chuyenTrang + tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]">
+                        <li key={tu.maTui + tu.tenTui} className="group relative flex h-full w-full flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)]">
                           <span
                             role="button"
                             tabIndex={0}
@@ -3603,7 +3732,7 @@ export default function Home() {
                             {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
                           </div>
                           <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
-                          <span className="mt-0.5 truncate text-xs text-slate-400">{tu.chuyenTrang} · {tu.items.length} món</span>
+                          <span className="mt-0.5 flex min-w-0 text-xs text-slate-400"><MarqueeText>{`${tuiNguon(tu) ? `${tuiNguon(tu)} · ` : ""}${tu.items.length} món`}</MarqueeText></span>
                           <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
                             <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
                             {formatMoney(tuiCombo(tu))}
@@ -3870,7 +3999,7 @@ export default function Home() {
 
               {/* ── Grouped sections: trang chủ, không search/filter ── */}
               {
-                !query.trim() && !quickFilter && !activeTep && !activeCat && !activeBrand && !activeChain && groupSections.map(({ name, emoji, displayName, products }) => {
+                !query.trim() && !quickFilter && !activeTep && !activeCat && !activeBrand && !activeChain && groupSections.map(({ name, emoji, displayName, products, effRadiusKm }) => {
                   const isExpanded = expandedGroups.has(name);
                   // Danh mục "Túi ghép - đôi - đa dạng" → render các TÚI combo dạng card giống sản phẩm.
                   const isTuiCat = !!catalog?.tui?.length && /túi ghép|túi đôi|túi.*đa dạng/i.test(name);
@@ -3894,7 +4023,7 @@ export default function Home() {
                         <EdgeFadeRow className="flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                           {tuis.map((tu) => (
                             <div
-                              key={tu.chuyenTrang + tu.maTui + tu.tenTui}
+                              key={tu.maTui + tu.tenTui}
                               className="group relative flex w-44 shrink-0 flex-col rounded-2xl bg-white p-3 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)] sm:w-48"
                             >
                               <span
@@ -3927,7 +4056,7 @@ export default function Home() {
                                 {tu.items.length > 4 && <span className="absolute bottom-1 right-1 rounded-md bg-slate-900/70 px-1.5 py-0.5 text-[9px] font-bold text-white">+{tu.items.length - 4}</span>}
                               </div>
                               <span className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-slate-800">{tu.tenTui}</span>
-                              <span className="mt-0.5 truncate text-xs text-slate-400">{tu.chuyenTrang} · {tu.items.length} món</span>
+                              <span className="mt-0.5 flex min-w-0 text-xs text-slate-400"><MarqueeText>{`${tuiNguon(tu) ? `${tuiNguon(tu)} · ` : ""}${tu.items.length} món`}</MarqueeText></span>
                               <span className="mt-1.5 inline-flex items-center gap-1 text-base font-bold text-rose-600">
                                 <svg className="shrink-0 text-rose-500" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.2" fill="currentColor" /></svg>
                                 {formatMoney(tuiCombo(tu))}
@@ -4006,6 +4135,16 @@ export default function Home() {
                           <h2 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
                             {emoji && <span className={`mr-1.5${emoji?.includes("⚽") ? " animate-spin inline-block" : ""}`}>{emoji}</span>}{t(displayName ?? name)}
                           </h2>
+                          {/* Ghi chú đồng bộ bán kính map: đang lọc theo bán kính / đã tự nới vì thiếu SP */}
+                          {radiusKm != null && effRadiusKm !== undefined && (
+                            <span className="text-[11px] font-normal text-slate-400">
+                              {effRadiusKm === radiusKm
+                                ? t("Nơi bán trong bán kính {r}", { r: fmtRadius(radiusKm) })
+                                : effRadiusKm == null
+                                  ? t("Trong {r} chưa đủ sản phẩm — hiện toàn khu vực", { r: fmtRadius(radiusKm) })
+                                  : t("Trong {r} chưa đủ sản phẩm — đã nới bán kính tới {r2}", { r: fmtRadius(radiusKm), r2: fmtRadius(effRadiusKm) })}
+                            </span>
+                          )}
                         </div>
                         {products.length > 0 && (
                           <button
@@ -5518,6 +5657,13 @@ export default function Home() {
                 setStoreProducts(null);
                 setBuyOffer(ranked);
               }}
+              // Nút [+] trên card (cùng ProductCard với mọi nơi khác): thêm đúng offer đang
+              // hiển thị vào giỏ, gắn cửa hàng THẬT của offer (getStore theo storeId).
+              onAddToCart={(p, o) => {
+                const real = getStore(o.storeId);
+                addToCart(p, real ? ({ ...o, store: real, product: p, distanceKm: null } as RankedOffer) : undefined);
+              }}
+              cartQtyFor={(pid) => cartItems.filter((i) => i.product.id === pid).reduce((s, i) => s + i.qty, 0)}
             />
           );
         })()}
@@ -5547,8 +5693,8 @@ export default function Home() {
                 <h3 className="mt-0.5 pr-8 text-base font-bold leading-snug text-slate-900">
                   {tuiInfo.tenTui}
                 </h3>
-                <p className="mt-1 truncate text-xs text-slate-500">
-                  {tuiInfo.chuyenTrang} · {t("{n} món", { n: tuiInfo.items.length })} · {formatMoney(tuiCombo(tuiInfo))}
+                <p className="mt-1 flex min-w-0 text-xs text-slate-500">
+                  <MarqueeText>{`${tuiNguon(tuiInfo) ? `${tuiNguon(tuiInfo)} · ` : ""}${t("{n} món", { n: tuiInfo.items.length })} · ${formatMoney(tuiCombo(tuiInfo))}`}</MarqueeText>
                 </p>
               </div>
               <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -5564,7 +5710,7 @@ export default function Home() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
-                            {p && (p.brand || p.unit) && <p className="truncate text-[11px] text-slate-400">{[p.brand, p.unit ? t(p.unit) : null].filter(Boolean).join(" · ")}</p>}
+                            {(p?.brand || p?.unit || it.chain) && <p className="truncate text-[11px] text-slate-400">{[p?.brand, p?.unit ? t(p.unit) : null, it.chain ? chainLabel(it.chain) : null].filter(Boolean).join(" · ")}</p>}
                             {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia)}</p>}
                           </div>
                         </div>

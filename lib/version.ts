@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.6";
+export const APP_VERSION = "1.3.7";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,6 +40,15 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.7",
+      date: "02.07.2026",
+      highlights: [
+        "Form 'Thông tin chung' (họ tên · SĐT/Zalo · địa chỉ) giờ là MỘT form thống nhất ở mọi nơi đặt hàng: giỏ hàng, Mua ngay, Mua cả túi và đặt nhạc — nhập ở đâu cũng được nhớ và tự điền lại ở các form còn lại",
+        "Số điện thoại được kiểm tra định dạng ngay khi gõ ở mọi form (báo lỗi rõ ràng, đúng chuẩn số Việt Nam; cửa hàng nước ngoài kiểm theo chuẩn nước đó)",
+        "Đặt cả túi: các món được gom theo NƠI BÁN THẬT của từng món (vd Bách Hóa Xanh, Tạp Hóa Xe Lam) — trợ lý đặt trực tiếp tại từng nơi bán, tiêu đề hiện đúng số nguồn của túi",
+        "Túi gợi ý hiện đúng giá combo và giá từng món kèm nơi bán; mỗi túi chỉ xuất hiện MỘT lần và không còn gắn nhãn chuyên trang — thẻ túi gọn hơn",
+      ],
+    }, {
       subVersion: "1.3.6",
       date: "01.07.2026",
       highlights: [

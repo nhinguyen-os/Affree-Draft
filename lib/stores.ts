@@ -154,8 +154,9 @@ export const STORES: Store[] = [
   { id: "coop-q1", chain: "coop", name: "Co.opmart Cống Quỳnh", address: "189C Cống Quỳnh, Quận 1", lat: 10.7665, lng: 106.6890, website: "https://cooponline.vn" },
   { id: "coop-bt", chain: "coop", name: "Co.opmart Đinh Tiên Hoàng", address: "127 Đinh Tiên Hoàng, Bình Thạnh", lat: 10.7990, lng: 106.7035, website: "https://cooponline.vn" },
   { id: "aeon-tp", chain: "aeon", name: "AEON Mall Tân Phú Celadon", address: "30 Bờ Bao Tân Thắng, Tân Phú", lat: 10.8009, lng: 106.6178, website: "https://aeoneshop.com" },
-  // Cửa hàng tại Mỹ (PHIN LAB / Astrabean) — hiện khi user ở vị trí US.
-  { id: "astrabean", chain: "astrabean", name: "Astrabean — PHIN LAB", address: "San Jose, CA, USA", lat: 37.3352, lng: -121.8811, website: "https://day-sales.com/store/astrabean/product", currency: "USD" },
+  // Cửa hàng tại Mỹ (Astra Bean) — fallback đồng bộ theo tab "stores" (Google Sheet là nguồn
+  // chuẩn, sheet thắng khi trùng id — xem /api/stores); sheet đổi thì cập nhật dòng này theo.
+  { id: "astrabean", chain: "astrabean", name: "Astra Bean", address: "9878 Bolsa Ave, Westminster, California CA 92683", lat: 33.7868893, lng: -117.896468, website: "https://day-sales.com/store/astrabean/product", currency: "USD" },
 ];
 
 /** Cửa hàng "ảo" cho nguồn online (mua qua web, không có vị trí bản đồ). */

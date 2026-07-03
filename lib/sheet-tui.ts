@@ -1,14 +1,17 @@
 import type { Tui } from "./types";
 import { SEED_TUI } from "./seed-tui";
 
-// Túi ghép/đôi/đa dạng — đọc tab "Tui" trong sheet cấu hình 1sZTv (dò theo TÊN tab, không cần gid).
-// Cột: chuyen_trang · ten_tui · ma_tui · loai · so_sp · gia_combo · da_chain · product_id · ten_sp · gia_sp · chain.
+// Túi ghép/đôi/đa dạng — đọc tab "Tui" trong sheet "Danh sách sản phẩm" 1Gr93 (gid=80477298).
+// LOGIC MỚI (2026-07-02): túi làm gốc (mỗi túi 1 lần), món lấy từ nhiều NGUỒN ĐÍCH trên Affree;
+// KHÔNG còn khái niệm chuyên trang — khi mua, trợ lý đặt tại nguồn đích (cột nguon_mua).
+// Cột: ma_tui · ten_tui · loai · so_sp · gia_combo · da_nguon ·
+//      product_id · ten_sp · gia_sp · nguon_mua.
+// (Parser vẫn đọc được header cũ có chuyen_trang, chỉ để tương thích — app không hiển thị.)
+// Dùng export?gid= thay gviz vì gviz ép kiểu cột số → product_id chữ (BHX000…) bị blank.
 // Tab rỗng/lỗi → fallback SEED_TUI (21 túi nhúng sẵn) để vẫn hiển thị được mục Túi.
 export const TUI_SHEET_CSV_URL =
   process.env.TUI_SHEET_CSV_URL ||
-  `https://docs.google.com/spreadsheets/d/1sZTv7FHGEq6V_d8wiFKd-7cVFjpURUcAeDPVI_1WiJo/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
-    "Tui",
-  )}`;
+  "https://docs.google.com/spreadsheets/d/1Gr93tqONyaV5sxuckgyxdRXrQYt6suZdF-2y2RyA6ns/export?format=csv&gid=80477298";
 
 /** Tách CSV → mảng hàng × cột (hỗ trợ field có dấu " và xuống dòng bên trong). */
 function splitCsv(csv: string): string[][] {
@@ -64,11 +67,13 @@ export function parseTuiCsv(csv: string): Tui[] {
     ma: col("ma_tui", "mã túi", "ma tui"),
     loai: col("loai", "loại"),
     gia: col("gia_combo", "giá combo", "gia combo"),
-    da: col("da_chain", "đa chain", "da chain"),
+    da: col("da_nguon", "da_chain", "đa chain", "da chain"),
     pid: col("product_id", "sku", "mã sp"),
     sp: col("ten_sp", "tên sp", "ten sp"),
     giaSp: col("gia_sp", "giá sp", "gia sp"),
-    chain: col("chain", "chuỗi", "chuoi"),
+    // Nguồn đích của món: header mới "nguon_mua"; header cũ "chain" phải dò EXACT vì
+    // col() theo substring sẽ dính nhầm "da_chain" (đứng trước trong header cũ).
+    chain: col("nguon_mua", "chuỗi", "chuoi") >= 0 ? col("nguon_mua", "chuỗi", "chuoi") : header.indexOf("chain"),
   };
   if (ci.ten < 0 || ci.pid < 0) return [];
 
@@ -80,7 +85,9 @@ export function parseTuiCsv(csv: string): Tui[] {
     if (!ten || !pid) continue;
     const ct = ci.ct >= 0 ? (r[ci.ct] || "").trim() : "";
     const ma = ci.ma >= 0 ? (r[ci.ma] || "").trim() : "";
-    const key = `${ct}|${ma}|${ten}`;
+    // Gom theo túi (mã + tên) — KHÔNG gom theo chuyên trang nữa: chuyên trang chỉ là
+    // cột tham khảo, 1 túi được nhiều chuyên trang tham khảo vẫn là 1 túi duy nhất.
+    const key = `${ma}|${ten}`;
     let t = map.get(key);
     if (!t) {
       t = {
@@ -165,24 +172,25 @@ export function parseTuiFromSanPham(csv: string): Tui[] {
   return [...map.values()];
 }
 
-/** Tải túi: ưu tiên tab "SanPham" (có cột tui) → tab "Tui" → SEED_TUI. */
+/** Tải túi: ưu tiên tab "Tui" (nguồn túi chính thức, có nguồn đích từng món) → SanPham → SEED_TUI. */
 export async function fetchTui(revalidate = 30): Promise<Tui[]> {
-  // 1) Gom từ SanPham nếu đã thêm cột "tui".
-  try {
-    const res = await fetch(SANPHAM_CSV_URL, { next: { revalidate } });
-    if (res.ok) {
-      const fromSP = parseTuiFromSanPham(await res.text());
-      if (fromSP.length) return fromSP;
-    }
-  } catch {
-    // bỏ qua, thử nguồn kế
-  }
-  // 2) Tab "Tui" riêng.
+  // 1) Tab "Tui" (1Gr93) — nguồn CHÍNH: mỗi món có nguon_mua (nguồn đích) + gia_sp,
+  //    chuyên trang chỉ là cột tham khảo. SanPham không diễn tả được nguồn đích nên chỉ là fallback.
   try {
     const res = await fetch(TUI_SHEET_CSV_URL, { next: { revalidate } });
     if (res.ok) {
       const parsed = parseTuiCsv(await res.text());
       if (parsed.length) return parsed;
+    }
+  } catch {
+    // bỏ qua, thử nguồn kế
+  }
+  // 2) Gom từ SanPham nếu đã thêm cột "tui" (cách cũ, không có nguồn đích/giá từng món).
+  try {
+    const res = await fetch(SANPHAM_CSV_URL, { next: { revalidate } });
+    if (res.ok) {
+      const fromSP = parseTuiFromSanPham(await res.text());
+      if (fromSP.length) return fromSP;
     }
   } catch {
     // rơi xuống seed

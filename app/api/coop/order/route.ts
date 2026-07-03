@@ -174,6 +174,16 @@ function allowPasswordLogin(body: Record<string, unknown>) {
   return body.allowPasswordLogin === true || readString(body.allowPasswordLogin) === "true";
 }
 
+// Tài khoản Co.op CỦA AFFREE (đặt hộ khách) — cấu hình qua env COOP_ACCOUNT_PHONE /
+// COOP_ACCOUNT_PASSWORD. Khi có, mọi đăng nhập/token cache dùng tài khoản này; SĐT khách
+// chỉ còn là liên hệ nhận hàng trong deliveryInfo, khách KHÔNG cần mật khẩu/OTP Co.op.
+function affreeCoopAccount(): { phone: string; password: string } | null {
+  const phone = normalizeCoopPhone(process.env.COOP_ACCOUNT_PHONE || "");
+  const password = (process.env.COOP_ACCOUNT_PASSWORD || "").trim();
+  if (!isValidCoopPhone(phone) || password.length < 6) return null;
+  return { phone, password };
+}
+
 function decodeCoopJwtPayload(token: string): Record<string, unknown> {
   try {
     const payload = token.split(".")[1];
@@ -403,12 +413,51 @@ export async function POST(req: NextRequest) {
       const phone = normalizeCoopPhone(readString(body.phone));
       const password = readString(body.password);
       if (!isValidCoopPhone(phone)) {
-        throw new CoopOrderError("Số điện thoại Co.op không hợp lệ.", { status: 400, code: "COOP_PHONE_INVALID" });
+        throw new CoopOrderError("Số điện thoại nhận hàng không hợp lệ.", { status: 400, code: "COOP_PHONE_INVALID" });
       }
 
       const deliveryInfo = buildDeliveryInfo(body, phone);
       const browserSessionMeta = readBrowserSessionMeta(body, deliveryInfo);
       const resolved = await resolveCartItem(body);
+
+      // Affree đặt hộ bằng tài khoản Affree — không đăng ký/OTP với SĐT khách.
+      const affree = affreeCoopAccount();
+      if (affree) {
+        const cachedAffree = await getCachedCoopToken(affree.phone);
+        if (cachedAffree) {
+          return NextResponse.json(
+            await addCartWithCoopToken({
+              token: cachedAffree,
+              terminalCode: resolved.terminalCode,
+              item: resolved.item,
+              deliveryInfo,
+              productName: resolved.productName,
+              lineTotal: resolved.lineTotal,
+              alreadyRegistered: true,
+              usedTokenCache: true,
+              browserSessionMeta,
+            }),
+          );
+        }
+        return NextResponse.json(
+          await addCartForPasswordLogin({
+            phone: affree.phone,
+            password: affree.password,
+            terminalCode: resolved.terminalCode,
+            item: resolved.item,
+            deliveryInfo,
+            productName: resolved.productName,
+            lineTotal: resolved.lineTotal,
+            browserSessionMeta,
+          }),
+        );
+      }
+      if (!password) {
+        throw new CoopOrderError(
+          "Affree chưa cấu hình tài khoản Co.op đặt hộ (COOP_ACCOUNT_PHONE / COOP_ACCOUNT_PASSWORD).",
+          { status: 503, code: "COOP_AFFREE_ACCOUNT_MISSING" },
+        );
+      }
       const cachedToken = await getCachedCoopToken(phone);
       if (cachedToken) {
         return NextResponse.json(
@@ -714,11 +763,50 @@ export async function POST(req: NextRequest) {
       const phone = normalizeCoopPhone(readString(body.phone));
       const password = readString(body.password);
       if (!isValidCoopPhone(phone)) {
-        throw new CoopOrderError("Số điện thoại Co.op không hợp lệ.", { status: 400, code: "COOP_PHONE_INVALID" });
+        throw new CoopOrderError("Số điện thoại nhận hàng không hợp lệ.", { status: 400, code: "COOP_PHONE_INVALID" });
       }
       const deliveryInfo = buildDeliveryInfo(body, phone);
       const browserSessionMeta = readBrowserSessionMeta(body, deliveryInfo);
       const resolved = await resolveCartItem(body);
+
+      // Affree đặt hộ bằng tài khoản Affree — bỏ qua mật khẩu/token của khách.
+      const affree = affreeCoopAccount();
+      if (affree) {
+        const cachedAffree = await getCachedCoopToken(affree.phone);
+        if (cachedAffree) {
+          return NextResponse.json(
+            await addCartWithCoopToken({
+              token: cachedAffree,
+              terminalCode: resolved.terminalCode,
+              item: resolved.item,
+              deliveryInfo,
+              productName: resolved.productName,
+              lineTotal: resolved.lineTotal,
+              alreadyRegistered: true,
+              usedTokenCache: true,
+              browserSessionMeta,
+            }),
+          );
+        }
+        return NextResponse.json(
+          await addCartForPasswordLogin({
+            phone: affree.phone,
+            password: affree.password,
+            terminalCode: resolved.terminalCode,
+            item: resolved.item,
+            deliveryInfo,
+            productName: resolved.productName,
+            lineTotal: resolved.lineTotal,
+            browserSessionMeta,
+          }),
+        );
+      }
+      if (!password) {
+        throw new CoopOrderError(
+          "Affree chưa cấu hình tài khoản Co.op đặt hộ (COOP_ACCOUNT_PHONE / COOP_ACCOUNT_PASSWORD).",
+          { status: 503, code: "COOP_AFFREE_ACCOUNT_MISSING" },
+        );
+      }
       const cachedToken = await getCachedCoopToken(phone);
       if (cachedToken) {
         return NextResponse.json(

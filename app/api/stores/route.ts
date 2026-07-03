@@ -27,8 +27,10 @@ export async function GET(req: Request) {
   ]);
 
   if (sheetStores?.length) {
-    const seen = new Set(result.stores.map((s) => s.id));
-    result.stores = [...result.stores, ...sheetStores.filter((s) => !seen.has(s.id))];
+    // Sheet là nguồn CHUẨN (team chỉnh trên Google Sheet, không cần sửa code): trùng id thì
+    // dòng SHEET THẮNG bản Map Server/tĩnh (vd `astrabean` từng bị entry hardcode cũ đè).
+    const sheetIds = new Set(sheetStores.map((s) => s.id));
+    result.stores = [...sheetStores, ...result.stores.filter((s) => !sheetIds.has(s.id))];
   }
 
   return NextResponse.json(result, { headers: { "Cache-Control": "public, max-age=0, s-maxage=60, stale-while-revalidate=3600" } });

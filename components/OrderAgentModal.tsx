@@ -9,7 +9,10 @@ import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { geocode } from "@/lib/geocode";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { phoneRule } from "@/lib/phone";
+import { getSavedCard, saveCard, type SavedCard as SavedCardType } from "@/lib/cards";
 import { type Lang, tr } from "@/lib/i18n";
+import { acquireBodyScrollLock } from "@/lib/scroll-lock";
+import OrderInfoSection from "./OrderInfoSection";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
 
 /**
@@ -323,7 +326,6 @@ export default function OrderAgentModal({
   const [coopWardName, setCoopWardName] = useState(initialCoopAddressParts.wardName);
   const [address, setAddress] = useState(composeCoopFullAddress(initialCoopAddressParts) || initialAddress);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [qty, setQty] = useState(defaultQty && defaultQty > 0 ? Math.floor(defaultQty) : 1);
   const [slot, setSlot] = useState(SLOTS[0]);
   // Ghi chú cho cửa hàng — đồng bộ cấu trúc với ô ghi chú từng cửa hàng của giỏ (CartModal).
@@ -332,12 +334,8 @@ export default function OrderAgentModal({
   const [coopSlotFrom, setCoopSlotFrom] = useState("");
   const [coopSlotTo, setCoopSlotTo] = useState("");
 
-  // Khoá scroll body khi modal mở
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // Khoá scroll body khi modal mở (refcount chung — lib/scroll-lock.ts)
+  useEffect(() => acquireBodyScrollLock(), []);
 
   // Cứ gõ là lưu — không cần rời khỏi ô. localStorage tức thì + đẩy lên Sheet (debounce).
   const firstRender = useRef(true);
@@ -366,11 +364,50 @@ export default function OrderAgentModal({
   // Mã OTP MÔ PHỎNG (bản demo chưa kết nối SMS thật): sinh ngẫu nhiên 6 số khi tới bước OTP,
   // hiển thị như "tin nhắn" để bạn nhập thử. KHÔNG phải mã thật từ cửa hàng.
   const [simOtp, setSimOtp] = useState("");
-  const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod>("cod");
+  // KHÔNG mặc định chọn phương thức thanh toán — user tự chọn (null = chưa chọn).
+  const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod | null>(null);
   const [cardNum, setCardNum] = useState("");
   const [cardExp, setCardExp] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   const [cardSaved, setCardSaved] = useState(true);
+  // Thẻ đã lưu từ lần mua trước (localStorage) — có thì mặc định dùng lại (như giỏ hàng).
+  const [savedCard] = useState<SavedCardType | null>(() => getSavedCard());
+  const [useNewCard, setUseNewCard] = useState(false);
+  const usingSavedCard = !!savedCard && !useNewCard;
+  // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) gửi tới SĐT → nhập đúng mới hiện (như giỏ hàng).
+  const [cardOtpCode, setCardOtpCode] = useState<string | null>(null);
+  const [cardOtpInput, setCardOtpInput] = useState("");
+  const [cardOtpError, setCardOtpError] = useState(false);
+  const [cardRevealed, setCardRevealed] = useState(false);
+  const requestRevealCard = () => {
+    if (cardRevealed) {
+      setCardRevealed(false);
+      setCardOtpCode(null);
+      setCardOtpInput("");
+      setCardOtpError(false);
+      return;
+    }
+    setCardOtpCode(String(Math.floor(100000 + Math.random() * 900000)));
+    setCardOtpInput("");
+    setCardOtpError(false);
+  };
+  const verifyCardOtp = () => {
+    if (cardOtpInput === cardOtpCode) {
+      setCardRevealed(true);
+      setCardOtpCode(null);
+      setCardOtpError(false);
+    } else {
+      setCardOtpError(true);
+    }
+  };
+  // Chọn "Thẻ" + dùng thẻ đã lưu → prefill số/hạn thẻ để bước trợ lý hiện sẵn, không bắt nhập lại.
+  useEffect(() => {
+    if (demoPayMethod === "card" && usingSavedCard && savedCard && !cardNum) {
+      setCardNum(savedCard.number);
+      setCardExp(savedCard.exp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoPayMethod, usingSavedCard]);
   const [orderCode, setOrderCode] = useState("");
   const [coopBusy, setCoopBusy] = useState(false);
   const [coopFlowId, setCoopFlowId] = useState("");
@@ -449,15 +486,8 @@ export default function OrderAgentModal({
     // BLOCK 1: Nếu chưa có serverState, hiển thị danh sách các bước dự kiến (mặc định)
     const s: Step[] = [{ kind: "auto", label: t("Mở website {chain}…", { chain }) }];
 
-    // Đăng nhập/định danh — khác nhau theo từng nguồn.
-    if (cfg.auth === "guest-phone") {
-      s.push({ kind: "auto", label: t("Điền số điện thoại {phone} (mua nhanh, không cần đăng nhập)…", { phone: phone || t("(của bạn)") }) });
-    } else if (cfg.auth === "phone-otp") {
-      s.push({ kind: "auto", label: t("Nhập số điện thoại {phone}…", { phone: phone || t("(của bạn)") }) });
-      s.push({ kind: "otp", label: t("{chain} gửi mã OTP về {phone}", { chain, phone: phone || t("điện thoại của bạn") }) });
-    } else {
-      s.push({ kind: "login", label: t("Đăng nhập tài khoản {chain}{email}", { chain, email: cfg.needEmail ? ` (${email || t("email của bạn")})` : "" }) });
-    }
+    // Affree đặt hộ bằng tài khoản Affree trên nguồn — khách KHÔNG cần đăng nhập/OTP.
+    // (SĐT khách chỉ dùng làm liên hệ nhận hàng, điền cùng bước địa chỉ giao.)
 
     s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
 
@@ -465,7 +495,7 @@ export default function OrderAgentModal({
       s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
     }
 
-    s.push({ kind: "auto", label: t("Điền địa chỉ giao: {address}…", { address: address || t("(địa chỉ của bạn)") }) });
+    s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
 
     if (cfg.needEmail) {
       s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
@@ -475,10 +505,14 @@ export default function OrderAgentModal({
       s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
     }
 
-    s.push({ kind: "payment-select", label: t("Chọn phương thức thanh toán") });
-
-    if (cfg.captcha) {
-      s.push({ kind: "captcha", label: t('{chain} yêu cầu xác minh "Tôi không phải robot"', { chain }) });
+    // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
+    // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
+    if (demoPayMethod === "qr") {
+      s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
+    } else if (demoPayMethod === "card") {
+      s.push({ kind: "payment-select", label: t("Nhập thông tin thẻ") });
+    } else {
+      s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
     }
 
     s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
@@ -496,6 +530,7 @@ export default function OrderAgentModal({
     address,
     qty,
     slot,
+    demoPayMethod,
     activeOffer.product.name,
     activeOffer.store.name,
     lang,
@@ -705,7 +740,6 @@ export default function OrderAgentModal({
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const emailError = cfg.needEmail && email.trim().length > 0 && !emailValid;
-  const passwordError = isCoopReal && password.length > 0 && password.length < 6;
   const coopDeliveryReady = !!coopDeliveryDate && !!coopSlotFrom && !!coopSlotTo;
   const coopStructuredAddressReady = Boolean(
     coopAddressParts.addressLine &&
@@ -716,12 +750,13 @@ export default function OrderAgentModal({
   const coopCanStart =
     !!name.trim() &&
     phoneValid &&
-    password.length >= 6 &&
     coopStructuredAddressReady &&
     coopAddressChecked &&
     !!coopTerminalCode &&
     !coopBelowMinimum &&
     qty > 0;
+  // Nhánh nào hiện tabs QR/Thẻ/COD (BHX + demo) → bắt buộc CHỌN phương thức mới cho đặt.
+  const payTabsShown = isBHXReal || (!isCoopReal && !isTXNNReal);
   const canStart =
     !!name.trim() &&
     phoneValid &&
@@ -729,6 +764,7 @@ export default function OrderAgentModal({
     qty >= minQty &&
     !belowMinOrder &&
     (!cfg.needEmail || emailValid) &&
+    (!payTabsShown || demoPayMethod !== null) &&
     (!isCoopReal || coopCanStart);
 
   // BHX cho khách tự chọn COD / QR / Thẻ (demoPayMethod). QR & Thẻ = thanh toán online.
@@ -742,7 +778,7 @@ export default function OrderAgentModal({
   const paymentLabel = isTXNNReal
     ? t("QR chuyển khoản")
     : isBHXReal || (!sessionId && !isCoopReal)
-      ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? t("Thẻ tín dụng/ghi nợ") : t("COD (tiền mặt khi nhận)")
+      ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? t("Thẻ tín dụng/ghi nợ") : demoPayMethod === "cod" ? t("COD (tiền mặt khi nhận)") : t("Chưa chọn")
       : usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
   const paymentConfirmBusy = paymentConfirmSubmitting || serverState?.status === "verifying_payment";
   const popupFrameTs = serverState?.popup?.updatedAt || serverState?.updatedAt;
@@ -916,7 +952,6 @@ export default function OrderAgentModal({
 
   const coopPayload = () => ({
     phone: phoneDigits,
-    password,
     name,
     address,
     addressLine: coopAddressParts.addressLine,
@@ -933,7 +968,6 @@ export default function OrderAgentModal({
     productName: activeOffer.product.name,
     productUrl: activeOffer.productUrl,
     terminalCode: coopTerminalCode,
-    allowPasswordLogin: true,
     terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
     terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
     fullAddress: address,
@@ -1026,7 +1060,7 @@ export default function OrderAgentModal({
               buyerPhone: phone,
               buyerAddress: address,
               chain: activeOffer.store.chain,
-              paymentMethod: demoPayMethod,
+              paymentMethod: demoPayMethod ?? "cod",
             },
           }),
         );
@@ -1399,7 +1433,6 @@ export default function OrderAgentModal({
             ? {
               type: "coop_profile_setup",
               phone: phoneDigits,
-              password,
               name,
               email,
               address,
@@ -1439,7 +1472,6 @@ export default function OrderAgentModal({
                 name,
                 email,
                 phone: phoneDigits,
-                password,
                 checkoutUrl: result.checkoutUrl || "https://cooponline.vn/checkout",
                 browserSession: result.browserSession,
               }
@@ -2035,19 +2067,6 @@ export default function OrderAgentModal({
                         {phoneError && <span className="mt-1 block text-xs text-rose-600">{t("Số điện thoại không hợp lệ.")}</span>}
                       </Field>
                     </div>
-                    <Field label={t("Mật khẩu Co.op")}>
-                      <input
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        type="password"
-                        autoComplete="current-password"
-                        placeholder={t("Mật khẩu tài khoản Co.op")}
-                        aria-invalid={passwordError}
-                        className="input"
-                        style={passwordError ? { borderColor: "#ef4444" } : undefined}
-                      />
-                      {passwordError && <span className="mt-1 block text-xs text-rose-600">{t("Mật khẩu Co.op cần tối thiểu 6 ký tự.")}</span>}
-                    </Field>
 
                     <div className="grid gap-2 sm:grid-cols-2">
                       <Field label={t("Tỉnh/Thành phố")}>
@@ -2201,11 +2220,11 @@ export default function OrderAgentModal({
                       }}
                       className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {coopBusy ? t("Đang kết nối Co.op…") : t("Đăng nhập Co.op và thêm vào giỏ")}
+                      {coopBusy ? t("Đang kết nối Co.op…") : t("Kết nối Co.op và thêm vào giỏ")}
                     </button>
                     {!coopCanStart && (
                       <p className="text-center text-xs text-slate-400">
-                        {t("Nhập đủ tên, số điện thoại, mật khẩu, xem cửa hàng gần nhất và đảm bảo đơn từ 200.000đ.")}
+                        {t("Nhập đủ tên, số điện thoại, xem cửa hàng gần nhất và đảm bảo đơn từ 200.000đ.")}
                       </p>
                     )}
                   </div>
@@ -2598,56 +2617,63 @@ export default function OrderAgentModal({
               isTXNNReal
                 ? "🤝 " + t("Trợ lý đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
                 : isCoopReal
-                  ? t("Co.op đang dùng luồng thật: dùng token cache hoặc đăng nhập bằng mật khẩu, rồi thêm sản phẩm vào giỏ Co.op.")
+                  ? t("Co.op đang dùng luồng thật: Affree đăng nhập bằng tài khoản Affree rồi thêm sản phẩm vào giỏ Co.op — bạn không cần tài khoản.")
                   : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
           </div>
+
+          {/* Recap khi trợ lý chạy: sản phẩm + QR của source đặt TRÊN, tiến trình nằm dưới */}
+          {phase === "running" && (
+            <div className="mb-4 flex items-stretch gap-3">
+              <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                {activeOffer.product.image ? (
+                  <img
+                    src={activeOffer.product.image}
+                    alt={activeOffer.product.name}
+                    className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain"
+                  />
+                ) : (
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xl">
+                    🛒
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-sm font-bold text-emerald-600">
+                      {formatMoney(total, storeCurrency(activeOffer.store.id))}
+                    </span>
+                    {qty > 1 && (
+                      <span className="text-xs text-slate-600">
+                        ({formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))} × {qty})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
+                <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
+                  {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* PHASE 1: form thông tin cần có */}
           {phase === "form" && (
             <div className="space-y-3">
-              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng (CartModal) ── */}
-              <section className="rounded-2xl border border-slate-200 p-3">
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {t("Thông tin chung")}
-                </h3>
-                <div className="space-y-2.5">
-                  <Field label={t("Họ tên")}>
-                    <input
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder={t("Nguyễn Văn A")}
-                      className="input"
-                    />
-                  </Field>
-
-                  <Field label={t("Số điện thoại / Zalo")}>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      inputMode="tel"
-                      placeholder={t(rule.placeholderVi)}
-                      aria-invalid={phoneError}
-                      className="input"
-                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                    />
-                    {phoneError && (
-                      <span className="mt-1 block text-xs text-rose-600">
-                        {t(rule.errorVi)}
-                      </span>
-                    )}
-                  </Field>
-
-                  <Field label={t("Địa chỉ giao hàng")}>
-                    <textarea
-                      value={address}
-                      onChange={(e) => setAddress(e.target.value)}
-                      rows={2}
-                      placeholder={t("Số nhà, đường, phường, quận…")}
-                      className="input resize-none"
-                    />
-                  </Field>
-                </div>
-              </section>
+              {/* ── Thông tin chung — MODULE CHUNG với form giỏ hàng / Mua cả túi ── */}
+              <OrderInfoSection
+                lang={lang}
+                name={name}
+                phone={phone}
+                address={address}
+                onName={setName}
+                onPhone={setPhone}
+                onAddress={setAddress}
+                currency={storeCurrency(activeOffer.store.id)}
+              />
 
               {/* ── Cửa hàng & sản phẩm — như section từng cửa hàng của giỏ ── */}
               <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
@@ -2753,7 +2779,7 @@ export default function OrderAgentModal({
               </div>
 
               {cfg.needEmail && (
-                <Field label={t("Email (đăng nhập tài khoản)")}>
+                <Field label={t("Email (nhận hoá đơn)")}>
                   <input
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -2766,26 +2792,6 @@ export default function OrderAgentModal({
                   {emailError && (
                     <span className="mt-1 block text-xs text-rose-600">
                       {t("Email không hợp lệ.")}
-                    </span>
-                  )}
-                </Field>
-              )}
-
-              {isCoopReal && (
-                <Field label={t("Mật khẩu Co.op")}>
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    type="password"
-                    autoComplete="current-password"
-                    placeholder={t("Tối thiểu 6 ký tự")}
-                    aria-invalid={passwordError}
-                    className="input"
-                    style={passwordError ? { borderColor: "#ef4444" } : undefined}
-                  />
-                  {passwordError && (
-                    <span className="mt-1 block text-xs text-rose-600">
-                      {t("Mật khẩu Co.op cần tối thiểu 6 ký tự.")}
                     </span>
                   )}
                 </Field>
@@ -2908,11 +2914,137 @@ export default function OrderAgentModal({
                       </button>
                     ))}
                   </div>
-                  <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    {demoPayMethod === "cod"
-                      ? "💵 " + t("Trợ lý sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
-                      : (demoPayMethod === "qr" ? "📱 " : "💳 ") + t("Trợ lý sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
-                  </p>
+                  {demoPayMethod === null ? (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      {t("Chọn phương thức thanh toán để tiếp tục.")}
+                    </p>
+                  ) : (
+                    <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      {demoPayMethod === "cod"
+                        ? "💵 " + t("Trợ lý sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
+                        : (demoPayMethod === "qr" ? "📱 " : "💳 ") + t("Trợ lý sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
+                    </p>
+                  )}
+
+                  {/* Chọn "Thẻ" → hiện NGAY thông tin thẻ (như giỏ hàng): thẻ đã lưu hoặc form nhập */}
+                  {demoPayMethod === "card" && usingSavedCard && savedCard && (
+                    <div className="mt-2.5 space-y-2">
+                      <div className="flex items-center gap-2 rounded-xl border border-emerald-400 bg-emerald-50/60 px-3 py-2 ring-1 ring-emerald-200">
+                        <span className="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                          {savedCard.brand ?? t("Thẻ")}
+                        </span>
+                        <span className="flex-1 truncate font-mono text-sm text-slate-800">
+                          {cardRevealed ? savedCard.number : `****${savedCard.number.replace(/\D/g, "").slice(-4)}`}
+                        </span>
+                        <span className="font-mono text-xs text-slate-500">{savedCard.exp}</span>
+                        <button
+                          type="button"
+                          onClick={requestRevealCard}
+                          aria-label={cardRevealed ? t("Ẩn số thẻ") : t("Xem số thẻ")}
+                          title={cardRevealed ? t("Ẩn số thẻ") : t("Xem số thẻ (cần OTP)")}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-white hover:text-slate-700"
+                        >
+                          {cardRevealed ? (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+                          ) : (
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" /><circle cx="12" cy="12" r="3" /></svg>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* OTP mô phỏng: khung "tin nhắn" chứa mã + ô nhập, đúng mã mới hiện số thẻ */}
+                      {cardOtpCode && !cardRevealed && (
+                        <div className="space-y-1.5 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-[11px] text-slate-500">
+                            📩 {t("(Mô phỏng) OTP đã gửi tới SĐT")} ****{phone.replace(/\D/g, "").slice(-3) || "•••"}: <b className="font-mono text-slate-700">{cardOtpCode}</b>
+                          </p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={6}
+                              value={cardOtpInput}
+                              onChange={(e) => { setCardOtpInput(e.target.value.replace(/\D/g, "")); setCardOtpError(false); }}
+                              placeholder={t("Nhập OTP 6 số")}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                            />
+                            <button
+                              type="button"
+                              onClick={verifyCardOtp}
+                              disabled={cardOtpInput.length < 6}
+                              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                            >
+                              {t("Xác nhận")}
+                            </button>
+                          </div>
+                          {cardOtpError && <p className="text-[11px] text-rose-600">{t("OTP chưa đúng — thử lại.")}</p>}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-slate-400">
+                          {"✓ " + t("Thẻ đã lưu sẽ được trợ lý dùng thanh toán tự động.")}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setUseNewCard(true)}
+                          className="shrink-0 text-[11px] font-medium text-emerald-600 underline-offset-2 hover:underline"
+                        >
+                          {t("Dùng thẻ khác")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {demoPayMethod === "card" && !usingSavedCard && (
+                    <div className="mt-2.5 space-y-2">
+                      {savedCard && (
+                        <button
+                          type="button"
+                          onClick={() => setUseNewCard(false)}
+                          className="text-[11px] font-medium text-emerald-600 underline-offset-2 hover:underline"
+                        >
+                          ← {t("Dùng thẻ đã lưu")} ({savedCard.brand ?? t("Thẻ")} ****{savedCard.number.replace(/\D/g, "").slice(-4)})
+                        </button>
+                      )}
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={19}
+                        value={cardNum}
+                        onChange={(e) => setCardNum(e.target.value.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim())}
+                        placeholder={t("Số thẻ") + " 0000 0000 0000 0000"}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      />
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          maxLength={5}
+                          value={cardExp}
+                          onChange={(e) => {
+                            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            setCardExp(v.length > 2 ? v.slice(0, 2) + "/" + v.slice(2) : v);
+                          }}
+                          placeholder="MM/YY"
+                          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        />
+                        <input
+                          type="password"
+                          maxLength={4}
+                          value={cardCvv}
+                          onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                          placeholder="CVV •••"
+                          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </div>
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                        <input type="checkbox" checked={cardSaved} onChange={(e) => setCardSaved(e.target.checked)} className="accent-emerald-600" />
+                        {t("Lưu thẻ để mua nhanh lần sau")}
+                      </label>
+                      <div className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        {t("Thông tin thẻ được mã hoá, không lưu số thẻ thật, không chia sẻ bên thứ 3.")}
+                      </div>
+                    </div>
+                  )}
                 </section>
               ) : (
                 <section className="rounded-2xl border border-slate-200 p-3">
@@ -2963,8 +3095,8 @@ export default function OrderAgentModal({
                       {coopResult?.usedTokenCache
                         ? t("Đã dùng token cache Co.op để vào giỏ")
                         : coopResult?.alreadyRegistered
-                          ? t("Tài khoản Co.op đã đăng nhập bằng mật khẩu")
-                          : t("Đã gửi yêu cầu đăng nhập Co.op")}
+                          ? t("Affree đã đăng nhập Co.op bằng tài khoản Affree")
+                          : t("Đã gửi yêu cầu kết nối Co.op")}
                     </p>
                   </div>
                 </li>
@@ -3270,30 +3402,11 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "payment-select" && (
-                          <PauseBox tone="blue" hint={t("💳 Chọn cách thanh toán phù hợp với bạn.")}>
+                          <PauseBox tone="blue" hint={demoPayMethod === "qr"
+                            ? t("📱 Bạn đã chọn QR chuyển khoản từ đầu — quét mã rồi bấm xác nhận.")
+                            : t("💳 Bạn đã chọn thanh toán thẻ từ đầu — nhập thông tin thẻ để trợ lý thanh toán.")}>
                             <div className="space-y-2">
-                              {/* 3 lựa chọn */}
-                              {(["cod", "qr", "card"] as DemoPayMethod[]).map((m) => {
-                                const labels: Record<DemoPayMethod, string> = {
-                                  cod: "💵 " + t("COD — Tiền mặt khi nhận hàng"),
-                                  qr:  "📱 " + t("QR chuyển khoản"),
-                                  card:"💳 " + t("Thanh toán bằng thẻ"),
-                                };
-                                return (
-                                  <button
-                                    key={m}
-                                    type="button"
-                                    onClick={() => setDemoPayMethod(m)}
-                                    className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition ${demoPayMethod === m ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
-                                  >
-                                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${demoPayMethod === m ? "border-emerald-500" : "border-slate-300"}`}>
-                                      {demoPayMethod === m && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
-                                    </span>
-                                    {labels[m]}
-                                  </button>
-                                );
-                              })}
-
+                              {/* Phương thức đã chọn ở form đặt hàng — không hiện lại lựa chọn ở đây */}
                               {/* QR demo */}
                               {demoPayMethod === "qr" && (
                                 <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
@@ -3357,7 +3470,7 @@ export default function OrderAgentModal({
                                 onClick={() => setStepIndex((x) => x + 1)}
                                 className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
                               >
-                                {demoPayMethod === "cod" ? t("Xác nhận COD →") : demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
+                                {demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
                               </button>
                             </div>
                           </PauseBox>
@@ -3555,7 +3668,7 @@ export default function OrderAgentModal({
                 <Row k={t("Giao tới")} v={address} />
                 {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
                 {!isCoopReal && cfg.needSlot && <Row k={t("Khung giờ")} v={t(slot)} />}
-                <Row k={t("Thanh toán")} v="COD" />
+                <Row k={t("Thanh toán")} v={paymentLabel} />
                 <Row k={t("Tổng")} v={formatMoney(total, storeCurrency(activeOffer.store.id))} strong />
                 {isCoopReal && coopResult?.terminalCode && (
                   <Row k={t("Kho Co.op")} v={coopResult.terminalCode} />
@@ -3748,6 +3861,10 @@ export default function OrderAgentModal({
                 disabled={!canStart || (isCoopReal || isBHXReal ? coopBusy : false)}
                 onClick={() => {
                   flushProfile({ name, phone, address });
+                  // Thẻ mới đủ thông tin + tick "Lưu thẻ" → nhớ lại cho lần sau (localStorage, không rời máy).
+                  if (demoPayMethod === "card" && !usingSavedCard && cardSaved && cardNum.replace(/\s/g, "").length >= 12 && /^\d{2}\/\d{2}$/.test(cardExp)) {
+                    saveCard({ number: cardNum, name: name.trim().toUpperCase(), exp: cardExp, brand: null });
+                  }
                   if (isTXNNReal) {
                     void createSession();
                   } else if (isCoopReal) {
@@ -3772,14 +3889,16 @@ export default function OrderAgentModal({
                   : coopBusy
                     ? t("Đang kết nối Co.op…")
                     : isCoopReal
-                      ? t("Đăng nhập Co.op và thêm vào giỏ →")
+                      ? t("Kết nối Co.op và thêm vào giỏ →")
                       : t("Để trợ lý đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
                   {isCoopReal
-                    ? t("Nhập đủ tên, số điện thoại, mật khẩu, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
-                    : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
+                    ? t("Nhập đủ tên, số điện thoại, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
+                    : payTabsShown && demoPayMethod === null && name.trim() && phoneValid && address.trim()
+                      ? t("Chọn phương thức thanh toán để tiếp tục.")
+                      : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
                 </p>
               )}
             </div>

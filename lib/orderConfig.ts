@@ -5,9 +5,11 @@
  */
 
 export type OrderAuth =
-  | "guest-phone" // mua nhanh chỉ cần SĐT, không đăng nhập
-  | "phone-otp" // nhập SĐT → xác minh OTP
-  | "account-login"; // đăng nhập tài khoản (email/mật khẩu) — user tự làm
+  | "guest-phone" // nguồn cho mua nhanh chỉ cần SĐT
+  | "phone-otp" // nguồn xác minh bằng SĐT + OTP
+  | "account-login"; // nguồn cần tài khoản (email/mật khẩu)
+// LƯU Ý: Affree đặt hộ bằng TÀI KHOẢN AFFREE trên nguồn — khách không đăng nhập/OTP.
+// `auth` chỉ mô tả cơ chế của nguồn (Affree tự xử lý), không sinh bước chờ khách.
 
 export interface OrderSourceConfig {
   auth: OrderAuth;
@@ -29,8 +31,8 @@ const DEFAULT_ONLINE: OrderSourceConfig = {
   needSlot: false,
   captcha: true,
   payments: ["COD", "Thẻ", "Ví điện tử"],
-  note: "Đặt qua tài khoản trên website/app của nguồn này.",
-  requirements: ["Đăng nhập tài khoản", "Địa chỉ giao"],
+  note: "Affree đặt hộ bằng tài khoản Affree trên nguồn này — bạn không cần đăng nhập.",
+  requirements: ["SĐT nhận hàng", "Địa chỉ giao"],
 };
 
 const CONFIG: Record<string, OrderSourceConfig> = {
@@ -41,7 +43,7 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     needSlot: true,
     captcha: false,
     payments: ["COD", "MoMo/ZaloPay", "Thẻ ATM/Visa/Master/JCB"],
-    requirements: ["Số điện thoại (xác minh OTP)", "Địa chỉ giao", "Khung giờ giao"],
+    requirements: ["SĐT nhận hàng", "Địa chỉ giao", "Khung giờ giao"],
   },
   concung: {
     auth: "account-login",
@@ -50,7 +52,7 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     needSlot: false,
     captcha: false,
     payments: ["COD", "Chuyển khoản", "Thẻ"],
-    requirements: ["Đăng nhập tài khoản Con Cưng (SĐT + mật khẩu)", "Địa chỉ giao"],
+    requirements: ["SĐT nhận hàng", "Địa chỉ giao"],
   },
   coop: {
     auth: "account-login",
@@ -62,7 +64,7 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     note: "Freeship đơn từ 200.000đ trong bán kính 6km.",
     minOrder: 200000,
     requirements: [
-      "Đăng nhập tài khoản Co.opmart",
+      "SĐT nhận hàng",
       "Địa chỉ giao",
       "Khung giờ giao",
     ],
@@ -74,9 +76,8 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     needSlot: true,
     captcha: true,
     payments: ["COD/POD", "Thẻ Visa/Master/JCB", "QR/Ví"],
-    note: "AEON eShop yêu cầu đăng nhập tài khoản (email).",
     requirements: [
-      "Đăng nhập tài khoản (email)",
+      "Email nhận hoá đơn",
       "Địa chỉ giao",
       "Khung giờ giao",
     ],
@@ -89,7 +90,7 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     captcha: false,
     payments: ["COD", "VNPAY", "Thẻ nội địa/Quốc tế"],
     note: "PNJ hỗ trợ giao hàng nhanh trong 3 giờ tại nhiều khu vực.",
-    requirements: ["Đăng nhập tài khoản MyPNJ", "Họ tên & Địa chỉ giao hàng", "Email nhận hóa đơn"],
+    requirements: ["Họ tên & Địa chỉ giao hàng", "Email nhận hóa đơn"],
   },
 };
 
