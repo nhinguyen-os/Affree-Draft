@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import type { Offer, Product, RankedOffer, Store } from "@/lib/types";
-import { storeCurrency } from "@/lib/stores";
+import { getStore, storeCurrency } from "@/lib/stores";
 import { distanceKm } from "@/lib/util";
 import { ChainBadge } from "@/components/ChainBadge";
 import { ProductCard } from "@/components/ProductCard";
@@ -21,10 +21,12 @@ interface Props {
   groupEmoji?: Record<string, string>;
   onClose: () => void;
   onBuy: (offer: RankedOffer) => void;
-  onAddToCart?: (product: Product) => void;
+  onAddToCart?: (product: Product, offer: Offer) => void;
   cartQtyFor?: (productId: string) => number;
 }
 
+// 1 dòng sản phẩm trong trang: offer + product + cửa hàng THẬT bán offer đó (brand mode).
+type PageItem = { offer: Offer; product: Product; realStore: Store | null; dist: number | null };
 
 export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, onClose, onBuy, onAddToCart, cartQtyFor }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
@@ -32,18 +34,42 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   const emojiFor = (name: string, idx: number) =>
     groupEmoji[name] || GROUP_TILE[name]?.emoji || DEFAULT_TILE_EMOJIS[idx % DEFAULT_TILE_EMOJIS.length];
 
-  const items = useMemo(
-    () =>
-      offers
-        .map((o) => ({ offer: o, product: productMap.get(o.productId) }))
-        .filter((x): x is { offer: Offer; product: Product } => !!x.product),
-    [offers, productMap],
-  );
+  // Brand mode (bấm sponsor logo): store là synthetic `__brand__<name>` — offers thuộc
+  // NHIỀU cửa hàng thật khác nhau (fan-out theo chuỗi), phải gom về 1 card/sản phẩm.
+  const isBrandMode = store.id.startsWith("__brand__");
+
+  const items = useMemo<PageItem[]>(() => {
+    const all: PageItem[] = offers
+      .map((o) => ({ offer: o, product: productMap.get(o.productId) }))
+      .filter((x): x is { offer: Offer; product: Product } => !!x.product)
+      .map((x) => {
+        const realStore = getStore(x.offer.storeId) ?? null;
+        const dist =
+          userLoc && realStore?.lat != null && realStore?.lng != null
+            ? distanceKm(userLoc, { lat: realStore.lat, lng: realStore.lng })
+            : null;
+        return { ...x, realStore, dist };
+      });
+    if (!isBrandMode) return all;
+    // Brand mode: cùng 1 sản phẩm có thể có N offer (mỗi cửa hàng 1 offer) → giữ offer
+    // TỐT NHẤT: còn hàng trước, rồi gần nhất (offer không rõ vị trí xếp sau), rồi rẻ nhất.
+    const best = new Map<string, PageItem>();
+    for (const it of all) {
+      const cur = best.get(it.product.id);
+      if (!cur) { best.set(it.product.id, it); continue; }
+      const better =
+        (it.offer.inStock ? 1 : 0) - (cur.offer.inStock ? 1 : 0) ||
+        (cur.dist ?? Infinity) - (it.dist ?? Infinity) ||
+        (cur.offer.price ?? Infinity) - (it.offer.price ?? Infinity);
+      if (better > 0) best.set(it.product.id, it);
+    }
+    return [...best.values()];
+  }, [offers, productMap, userLoc, isBrandMode]);
 
   // Group by product.category (granular), fallback to categoryGroup tệp nếu category trống.
   // Sắp xếp: tệp-level theo CATEGORY_GROUPS order, rồi sort alpha trong từng tệp.
   const sections = useMemo(() => {
-    const byGroup = new Map<string, { offer: Offer; product: Product }[]>();
+    const byGroup = new Map<string, PageItem[]>();
     for (const item of items) {
       const cat = (item.product.category || "").trim();
       const g = cat || categoryGroup(item.product) || "Khác";
@@ -70,6 +96,21 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
     userLoc && store.lat != null && store.lng != null
       ? distanceKm(userLoc, { lat: store.lat, lng: store.lng })
       : null;
+
+  const fmtDist = (d: number) => (d < 1 ? `${Math.round(d * 1000)}m` : `${d.toFixed(1)}km`);
+  // Dòng cửa hàng trên card — CHỈ brand mode (trang cửa hàng thì thừa, header đã ghi).
+  // Cửa hàng NGOÀI VÙNG (>100km — vd định vị VN mà store ở Cali) thì ẨN LUÔN: định vị
+  // ở đâu chỉ thấy cửa hàng vùng đó, đồng bộ với scope vùng của bản đồ/so sánh.
+  // Chưa rõ vị trí user / store không tọa độ → hiện tên cửa hàng, không kèm khoảng cách.
+  const storeLineFor = (it: PageItem) => {
+    if (!isBrandMode || !it.realStore) return undefined;
+    if (it.dist != null && it.dist >= 100) return undefined; // ngoài vùng → ẩn
+    return `🛒 ${it.realStore.name}${it.dist != null ? ` · 📍${fmtDist(it.dist)}` : ""}`;
+  };
+  // RankedOffer cho Mua ngay / giỏ: gắn cửa hàng THẬT của offer (brand mode trước đây
+  // gắn nhầm synthetic store `__brand__…` → đơn hàng không rõ cửa hàng nào).
+  const rankedFor = (it: PageItem): RankedOffer =>
+    ({ ...it.offer, store: it.realStore ?? store, product: it.product, distanceKm: it.dist ?? dist } as RankedOffer);
 
   const activeSectionData = activeSection ? sections.find((s) => s.name === activeSection) : null;
   const activeSectionIdx = activeSection ? sections.findIndex((s) => s.name === activeSection) : -1;
@@ -119,16 +160,17 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
               t={t}
             />
           <ul className="grid grid-cols-2 gap-3 px-3 pb-3 sm:grid-cols-3">
-            {activeSectionData.items.map(({ offer: o, product: p }) => (
-              <li key={p.id}>
+            {activeSectionData.items.map((it) => (
+              <li key={it.product.id}>
                 <ProductCard
-                  product={p}
-                  price={o.price}
-                  currency={storeCurrency(o.storeId)}
-                  outOfStock={!o.inStock}
-                  cartQty={cartQtyFor?.(p.id) ?? 0}
-                  onBuy={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
-                  onAddToCart={onAddToCart ? () => onAddToCart(p) : undefined}
+                  product={it.product}
+                  price={it.offer.price}
+                  currency={storeCurrency(it.offer.storeId)}
+                  outOfStock={!it.offer.inStock}
+                  cartQty={cartQtyFor?.(it.product.id) ?? 0}
+                  storeLine={storeLineFor(it)}
+                  onBuy={() => it.offer.inStock && onBuy(rankedFor(it))}
+                  onAddToCart={onAddToCart ? () => onAddToCart(it.product, it.offer) : undefined}
                   lang={lang}
                   variant="grid"
                 />
@@ -161,16 +203,17 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     </div>
                     {/* Horizontal scroll row — giống trang chủ */}
                     <div className="flex gap-3 overflow-x-auto pb-2 pt-1 touch-pan-x [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                      {secItems.slice(0, 12).map(({ offer: o, product: p }) => (
-                        <div key={p.id} className="w-36 shrink-0">
+                      {secItems.slice(0, 12).map((it) => (
+                        <div key={it.product.id} className="w-36 shrink-0">
                           <ProductCard
-                            product={p}
-                            price={o.price}
-                            currency={storeCurrency(o.storeId)}
-                            outOfStock={!o.inStock}
-                            cartQty={cartQtyFor?.(p.id) ?? 0}
-                            onBuy={() => o.inStock && onBuy({ ...o, store, product: p, distanceKm: dist } as RankedOffer)}
-                            onAddToCart={onAddToCart ? () => onAddToCart(p) : undefined}
+                            product={it.product}
+                            price={it.offer.price}
+                            currency={storeCurrency(it.offer.storeId)}
+                            outOfStock={!it.offer.inStock}
+                            cartQty={cartQtyFor?.(it.product.id) ?? 0}
+                            storeLine={storeLineFor(it)}
+                            onBuy={() => it.offer.inStock && onBuy(rankedFor(it))}
+                            onAddToCart={onAddToCart ? () => onAddToCart(it.product, it.offer) : undefined}
                             lang={lang}
                             variant="scroll"
                           />

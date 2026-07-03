@@ -83,6 +83,62 @@ async function nominatimSearch(q: string, bounded: boolean): Promise<any[]> {
   }
 }
 
+/**
+ * Photon (komoot, OSM-based) — geocoder GLOBAL chạy được từ IP server cloud (Vercel).
+ * Dùng thay Nominatim cho query nước ngoài vì Nominatim CHẶN/rate-limit IP datacenter
+ * (local IP nhà thì OK nên chỉ lỗi trên production). Trả cùng shape với nominatimSearch.
+ */
+async function photonSearch(q: string): Promise<any[]> {
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6`;
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Affree/1.0 (gia-quanh-day price comparison prototype)" },
+      next: { revalidate: 86400 },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const feats = Array.isArray(data?.features) ? data.features : [];
+    return feats
+      .map((f: any) => {
+        const p = f?.properties ?? {};
+        const c = f?.geometry?.coordinates ?? [];
+        const line1 = [p.housenumber, p.street].filter(Boolean).join(" ") || p.name || "";
+        const label = [line1, p.city && p.city !== p.name ? p.city : "", p.state, p.country]
+          .filter(Boolean)
+          .join(", ");
+        return {
+          label,
+          lat: typeof c[1] === "number" ? c[1] : parseFloat(c[1] ?? ""),
+          lng: typeof c[0] === "number" ? c[0] : parseFloat(c[0] ?? ""),
+          area: p.district || p.city || "",
+          cc: (p.countrycode ?? "").toLowerCase(),
+          region: p.state || p.city || "",
+        };
+      })
+      .filter((r: any) => r.label && Number.isFinite(r.lat) && Number.isFinite(r.lng));
+  } catch {
+    return [];
+  }
+}
+
+/** Bỏ dấu + lowercase để so khớp token không phân biệt dấu. */
+function normalizeText(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase();
+}
+
+/** Tỉ lệ token của query xuất hiện trong label (0..1) — dùng re-rank kết quả merge. */
+function matchScore(q: string, label: string): number {
+  const tokens = normalizeText(q).split(/[\s,]+/).filter((t) => t.length > 0);
+  if (!tokens.length) return 0;
+  const hay = normalizeText(label);
+  const hit = tokens.filter((t) => hay.includes(t)).length;
+  return hit / tokens.length;
+}
+
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams.get("q")?.trim();
   if (!q || q.length < 3) {
@@ -90,21 +146,39 @@ export async function GET(req: Request) {
   }
 
   try {
-    // 1) Thử API nội bộ trước
-    const inHcmInternal = await internalSearch(q);
-    if (inHcmInternal.length) {
-      return NextResponse.json(inHcmInternal);
+    // Chạy SONG SONG goollow (VN autocomplete) + Photon (global, chạy được trên Vercel).
+    // Merge để địa chỉ VN vẫn ưu tiên goollow lên đầu, còn địa chỉ nước ngoài (New York,
+    // Toronto…) vẫn ra kết quả toàn cầu. Photon THAY Nominatim làm nguồn global vì Nominatim
+    // bị chặn/rate-limit từ IP Vercel. Nếu Photon lỗi/rỗng → fallback Nominatim (unbounded).
+    const [internal, photon] = await Promise.all([
+      internalSearch(q),
+      photonSearch(q),
+    ]);
+    const global = photon.length ? photon : await nominatimSearch(q, false);
+    const merged: any[] = [];
+    const seen = new Set<string>();
+    for (const list of [internal, global]) {
+      for (const r of list) {
+        // Khử trùng theo NHÃN (chuẩn hoá) — Photon/Nominatim hay trả nhiều node OSM cùng 1
+        // địa chỉ, nhãn y hệt nhưng toạ độ lệch ở số lẻ nhỏ → dedup-theo-toạ-độ không gom được,
+        // ra 5-6 dòng trùng. Nhãn rỗng thì mới fallback về toạ độ làm tròn.
+        const label = normalizeText(r.label ?? "").replace(/\s+/g, " ").trim();
+        const key = label || `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(r);
+      }
     }
-
-    // 2) Fallback sang Nominatim (bounded)
-    const inHcmNominatim = await nominatimSearch(q, true);
-    if (inHcmNominatim.length) {
-      return NextResponse.json(inHcmNominatim);
-    }
-
-    // 3) Cuối cùng Nominatim (unbounded)
-    const globalNominatim = await nominatimSearch(q, false);
-    return NextResponse.json(globalNominatim);
+    // Re-rank theo mức khớp token với query — query nước ngoài ("1 Yonge Street
+    // Toronto") khớp gần đủ token với label Nominatim nên nổi lên trên các
+    // false-match VN chỉ khớp mỗi số nhà. Sort ổn định → cùng điểm giữ thứ tự
+    // goollow-trước (địa chỉ VN không đổi hành vi).
+    const ranked = merged
+      .map((r, i) => ({ r, i, score: matchScore(q, r.label ?? "") }))
+      .sort((a, b) => b.score - a.score || a.i - b.i)
+      .slice(0, 8)
+      .map((x) => x.r);
+    return NextResponse.json(ranked);
   } catch (err) {
     return NextResponse.json([]);
   }

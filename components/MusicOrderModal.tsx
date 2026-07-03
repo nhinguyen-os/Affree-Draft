@@ -5,11 +5,17 @@ import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
+import { acquireBodyScrollLock } from "@/lib/scroll-lock";
+import OrderInfoSection from "./OrderInfoSection";
+import PaymentSection, { usePaymentState } from "./PaymentSection";
 
 /**
  * Form đặt mua NHẠC BẢN QUYỀN (Khúc Chạm Plaza) — sản phẩm SỐ.
- * Đơn giản, KHÔNG dùng màn agentic (không OTP/đăng nhập/địa chỉ giao/khung giờ): chỉ cần
- * người nhận + SĐT/Zalo + email để nhận link nhạc. Đặt xong → mã đơn, Khúc Chạm liên hệ gửi nhạc.
+ * Đơn giản, KHÔNG dùng màn agentic (không đăng nhập/địa chỉ giao/khung giờ): người nhận +
+ * SĐT/Zalo + email để nhận link nhạc + CHỌN thanh toán. DÙNG CHUNG OrderInfoSection +
+ * PaymentSection như các form đặt hàng khác, chỉ khác THÔNG TIN RIÊNG theo loại: bỏ địa chỉ
+ * giao, thêm email nhận link, thanh toán chỉ QR/Thẻ (không COD) + flow "direct" (trả ngay).
+ * Đặt xong → mã đơn, Khúc Chạm liên hệ gửi nhạc.
  */
 export interface MusicOrderLine {
   id: string;
@@ -43,25 +49,33 @@ export default function MusicOrderModal({
   const [note, setNote] = useState("");
   const [orderCode, setOrderCode] = useState("");
 
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // Thanh toán — DÙNG CHUNG usePaymentState (như CartModal/TuiAgentModal), chỉ giới hạn QR/Thẻ.
+  const pay = usePaymentState();
+
+  // Khoá scroll nền — refcount chung (xem lib/scroll-lock.ts).
+  useEffect(() => acquireBodyScrollLock(), []);
   useEffect(() => { saveProfile({ name, phone }); }, [name, phone]);
 
-  const rule = useMemo(() => phoneRule(), []);
+  // Cùng rule VND với OrderInfoSection để canOrder khớp với lỗi hiển thị trong form.
+  const rule = useMemo(() => phoneRule("VND"), []);
   const phoneValid = rule.test(phone);
   const phoneError = phone.trim().length > 0 && !phoneValid;
   const emailValid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const emailError = email.trim().length > 0 && !emailValid;
-  // Cần email HOẶC SĐT để Khúc Chạm gửi nhạc; tên bắt buộc.
-  const canOrder = !!name.trim() && (phoneValid || (!!email.trim() && emailValid)) && !emailError;
 
   const total = items.reduce((s, l) => s + l.price * (l.qty ?? 1), 0);
 
+  const maskedCardLabel = `${pay.cardBrand ?? t("Thẻ")} ****${pay.cardLast4}`;
+  // Đã chọn thanh toán hợp lệ: QR (chỉ cần chọn) hoặc Thẻ (phải đủ thông tin thẻ).
+  const paymentReady = pay.method === "qr" || (pay.method === "card" && pay.cardReady);
+
+  // Cần email HOẶC SĐT để Khúc Chạm gửi nhạc; tên bắt buộc; đã chọn thanh toán.
+  const canOrder =
+    !!name.trim() && (phoneValid || (!!email.trim() && emailValid)) && !emailError && paymentReady;
+
   const place = () => {
     flushProfile({ name, phone });
+    pay.commitCard(); // thẻ mới hợp lệ → lưu lại cho lần sau (localStorage, không CVV)
     const code = "KC-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100);
     setOrderCode(code);
     setPhase("done");
@@ -100,29 +114,15 @@ export default function MusicOrderModal({
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
           {phase === "form" && (
             <div className="space-y-3">
-              {/* ── Thông tin chung — CÙNG CẤU TRÚC với form giỏ hàng / Mua ngay ── */}
-              <section className="rounded-2xl border border-slate-200 p-3">
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {t("Thông tin chung")}
-                </h3>
-                <div className="space-y-2.5">
-                  <Field label={t("Họ tên")}>
-                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Nguyễn Văn A")} className="input" />
-                  </Field>
-                  <Field label={t("Số điện thoại / Zalo")}>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      inputMode="tel"
-                      placeholder={t(rule.placeholderVi)}
-                      aria-invalid={phoneError}
-                      className="input"
-                      style={phoneError ? { borderColor: "#ef4444" } : undefined}
-                    />
-                    {phoneError && <span className="mt-1 block text-xs text-rose-600">{t(rule.errorVi)}</span>}
-                  </Field>
-                </div>
-              </section>
+              {/* ── Thông tin chung — MODULE CHUNG với form giỏ hàng / Mua ngay (sản phẩm số → không cần địa chỉ) ── */}
+              <OrderInfoSection
+                lang={lang}
+                name={name}
+                phone={phone}
+                onName={setName}
+                onPhone={setPhone}
+                showAddress={false}
+              />
 
               {/* ── Riêng Khúc Chạm Plaza: danh sách nhạc + email nhận link + lời nhắn ── */}
               <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
@@ -163,6 +163,18 @@ export default function MusicOrderModal({
                   {t("Sản phẩm số: Khúc Chạm Plaza liên hệ qua SĐT/Zalo hoặc email để gửi link nhạc bản quyền sau khi đặt.")}
                 </p>
               </section>
+
+              {/* ── Thanh toán — DÙNG CHUNG PaymentSection. Riêng loại "nhạc": chỉ QR/Thẻ (bỏ COD),
+                  flow "direct" (đặt trả ngay → QR hiện mã quét luôn, không qua bước trợ lý). ── */}
+              <PaymentSection
+                pay={pay}
+                lang={lang}
+                phone={phone}
+                methods={["qr", "card"]}
+                flow="direct"
+                qrInline={`AFFREE|KHUCCHAM|${total}|${(name || "").trim()}`}
+                qrAmountLabel={formatMoney(total)}
+              />
             </div>
           )}
 
@@ -180,6 +192,7 @@ export default function MusicOrderModal({
                 ))}
                 <div className="border-t border-slate-200 pt-1.5">
                   {!!email.trim() && <Row k="Email" v={email} />}
+                  <Row k={t("Thanh toán")} v={pay.method === "qr" ? t("QR chuyển khoản") : maskedCardLabel} />
                   <Row k={t("Tổng")} v={formatMoney(total)} strong />
                 </div>
               </div>
@@ -202,7 +215,11 @@ export default function MusicOrderModal({
               {t("Đặt mua")}
             </button>
             {!canOrder && (
-              <p className="mt-1.5 text-center text-xs text-slate-400">{t("Nhập tên và SĐT/Zalo hoặc email để đặt.")}</p>
+              <p className="mt-1.5 text-center text-xs text-slate-400">
+                {!name.trim() || !(phoneValid || (!!email.trim() && emailValid))
+                  ? t("Nhập tên và SĐT/Zalo hoặc email để đặt.")
+                  : t("Chọn phương thức thanh toán để tiếp tục.")}
+              </p>
             )}
           </div>
         )}

@@ -4,7 +4,10 @@
     {
       "name": "gia-quanh-day",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "/Users/hanh/Downloads/dev/gia-quanh-day",
       "port": 3210
     }

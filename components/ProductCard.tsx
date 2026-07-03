@@ -29,6 +29,9 @@ type Props = {
   discountPct?: number;
   listedPrice?: number;
   cartQty?: number;
+  /** Dòng cửa hàng bán ("🛒 Tên cửa hàng · 📍1.5km") — dùng ở brand mode, nơi mỗi card
+      có thể thuộc 1 cửa hàng khác nhau. Bỏ trống khi đứng trong trang 1 cửa hàng (thừa). */
+  storeLine?: string | null;
   onBuy?: () => void;
   onAddToCart?: () => void;
   lang?: Lang;
@@ -60,6 +63,7 @@ export function ProductCard({
   discountPct,
   listedPrice,
   cartQty = 0,
+  storeLine,
   onBuy,
   onAddToCart,
   lang = "vi",
@@ -91,6 +95,13 @@ export function ProductCard({
       {(product.brand || product.unit) && (
         <span className="mt-0.5 truncate text-xs text-slate-400">
           {product.brand}{product.unit ? ` · ${t(product.unit)}` : ""}
+        </span>
+      )}
+
+      {/* Cửa hàng bán (brand mode) */}
+      {storeLine && (
+        <span className={`mt-0.5 truncate text-slate-500 ${isScroll ? "text-[10px]" : "text-[11px]"}`}>
+          {storeLine}
         </span>
       )}
 
