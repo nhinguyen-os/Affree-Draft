@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import QRCode from "react-qr-code";
 import { getSavedCard, saveCard, type SavedCard } from "@/lib/cards";
 import { type Lang, tr } from "@/lib/i18n";
 
@@ -134,6 +135,10 @@ export default function PaymentSection({
   phone = "",
   qrHintVi = "Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.",
   className = "",
+  methods = ["qr", "card", "cod"],
+  flow = "agentic",
+  qrInline = null,
+  qrAmountLabel = "",
 }: {
   pay: PaymentState;
   lang?: Lang;
@@ -142,9 +147,32 @@ export default function PaymentSection({
   /** Ghi chú khi chọn QR (form túi/giỏ có thể diễn đạt khác nhau). */
   qrHintVi?: string;
   className?: string;
+  /** TUỲ LOẠI ĐƠN: phương thức được phép (vd nhạc = ["qr","card"], bỏ COD). */
+  methods?: PayMethod[];
+  /**
+   * "agentic" = trợ lý đặt hộ từng cửa hàng (QR/thẻ thao tác ở bước sau) — mặc định.
+   * "direct" = đặt trả ngay tại form (nhạc/sản phẩm số): QR hiện mã QUÉT NGAY, chữ không nhắc "trợ lý".
+   */
+  flow?: "agentic" | "direct";
+  /** flow="direct" + method="qr": chuỗi encode vào QR để hiện mã quét ngay. null = chỉ hiện gợi ý. */
+  qrInline?: string | null;
+  /** Nhãn số tiền hiện dưới mã QR (flow direct). */
+  qrAmountLabel?: string;
 }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
   const maskedCardLabel = `${pay.cardBrand ?? t("Thẻ")} ****${pay.cardLast4}`;
+  const direct = flow === "direct";
+  // Chữ ghi chú thẻ tuỳ flow: direct (trả ngay) không nhắc "trợ lý".
+  const cardReadyNote =
+    "✓ " +
+    (direct
+      ? t("Dùng {card} thanh toán.", { card: maskedCardLabel })
+      : t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel }));
+  const cardEmptyNote =
+    "💳 " +
+    (direct
+      ? t("Điền đủ thông tin thẻ để đặt.")
+      : t("Điền đủ để trợ lý tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng."));
 
   // Bấm 👁: đang hiện → che lại; đang che → sinh OTP 6 số (mô phỏng), nhập đúng mới hiện.
   const requestRevealCard = () => {
@@ -192,9 +220,9 @@ export default function PaymentSection({
       <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
         {t("Thanh toán")}
       </h3>
-      {/* Tabs */}
+      {/* Tabs — chỉ hiện các phương thức được phép theo LOẠI đơn (methods). */}
       <div className="mb-3 flex gap-1.5">
-        {(["qr", "card", "cod"] as PayMethod[]).map((m) => (
+        {methods.map((m) => (
           <button
             key={m}
             onClick={() => pay.setMethod(m)}
@@ -205,12 +233,24 @@ export default function PaymentSection({
         ))}
       </div>
 
-      {/* QR/COD: chỉ chọn ở đây, thao tác ở bước trợ lý. */}
-      {(pay.method === "qr" || pay.method === "cod") && (
+      {/* QR: flow "direct" (trả ngay) → hiện MÃ QR để quét luôn; flow "agentic" → chỉ gợi ý. */}
+      {pay.method === "qr" && (
+        direct && qrInline ? (
+          <div className="flex flex-col items-center gap-2 rounded-xl bg-slate-50 px-3 py-3">
+            <div className="rounded-lg bg-white p-2"><QRCode value={qrInline} size={128} /></div>
+            <p className="text-center text-[11px] text-slate-500">
+              📱 {t("Quét mã để chuyển khoản")}{qrAmountLabel ? " " : ""}<b className="text-emerald-600">{qrAmountLabel}</b>.
+            </p>
+          </div>
+        ) : (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">📱 {t(qrHintVi)}</p>
+        )
+      )}
+
+      {/* COD (chỉ khi methods có "cod"): thao tác ở bước trợ lý. */}
+      {pay.method === "cod" && (
         <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          {pay.method === "qr"
-            ? "📱 " + t(qrHintVi)
-            : "💵 " + t("Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.")}
+          {"💵 " + t("Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.")}
         </p>
       )}
 
@@ -271,9 +311,7 @@ export default function PaymentSection({
           )}
 
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] text-slate-400">
-              {"✓ " + t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel })}
-            </p>
+            <p className="text-[11px] text-slate-400">{cardReadyNote}</p>
             <button
               type="button"
               onClick={() => { pay.setUseNewCard(true); pay.setCardRevealed(false); pay.setOtpCode(null); pay.setOtpInput(""); pay.setOtpError(false); }}
@@ -298,11 +336,7 @@ export default function PaymentSection({
           )}
           {brandChipsRow}
           <CardInputs pay={pay} lang={lang} />
-          <p className="text-[11px] text-slate-400">
-            {pay.cardReady
-              ? "✓ " + t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel })
-              : "💳 " + t("Điền đủ để trợ lý tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng.")}
-          </p>
+          <p className="text-[11px] text-slate-400">{pay.cardReady ? cardReadyNote : cardEmptyNote}</p>
         </div>
       )}
     </section>

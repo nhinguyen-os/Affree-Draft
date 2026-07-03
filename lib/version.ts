@@ -16,7 +16,7 @@
  *  - Khi 1 mục "Sắp ra mắt" đã làm xong → CHUYỂN sang sub-version tương ứng,
  *    đồng thời xoá khỏi ROADMAP để giữ trang Phiên bản luôn đúng thực tế.
  */
-export const APP_VERSION = "1.3.7";
+export const APP_VERSION = "1.3.8";
 
 export interface SubReleaseEntry {
   /** Sub-version (PATCH), vd "1.3.1". */
@@ -40,12 +40,23 @@ export const VERSION_HISTORY: VersionEntry[] = [
     version: "1.3",
     date: "24.06.2026",
     children: [{
+      subVersion: "1.3.8",
+      date: "03.07.2026",
+      highlights: [
+        "Bản đồ: bấm ✕ ở phần chú thích chỉ THU GỌN chú thích — các pin cửa hàng vẫn giữ nguyên trên bản đồ, bấm nút để mở lại",
+        "Chú thích bản đồ có biểu tượng đúng MÀU pin của từng loại cửa hàng (vd Ăn uống màu cam) — nhìn chú thích biết ngay pin trên bản đồ thuộc loại nào",
+        "Đặt nhiều cửa hàng một lượt: mã QR riêng của từng cửa hàng hiện sẵn cùng lúc để quét lần lượt, trợ lý dừng chờ bạn thanh toán ở từng nơi; chọn 'Thẻ' là nhập thông tin thẻ ngay tại form — nhập MỘT lần, các cửa hàng đang chờ thẻ tự chạy tiếp",
+        "Thẻ đã lưu luôn che số (•••): bấm biểu tượng con mắt và nhập đúng mã OTP gửi tới số điện thoại mới xem được số thẻ đầy đủ",
+        "Màn hình 'Đặt hàng thành công' được chỉnh lại gọn gàng, rõ ràng hơn",
+      ],
+    }, {
       subVersion: "1.3.7",
       date: "02.07.2026",
       highlights: [
         "Form 'Thông tin chung' (họ tên · SĐT/Zalo · địa chỉ) giờ là MỘT form thống nhất ở mọi nơi đặt hàng: giỏ hàng, Mua ngay, Mua cả túi và đặt nhạc — nhập ở đâu cũng được nhớ và tự điền lại ở các form còn lại",
         "Số điện thoại được kiểm tra định dạng ngay khi gõ ở mọi form (báo lỗi rõ ràng, đúng chuẩn số Việt Nam; cửa hàng nước ngoài kiểm theo chuẩn nước đó)",
         "Đặt cả túi: các món được gom theo NƠI BÁN THẬT của từng món (vd Bách Hóa Xanh, Tạp Hóa Xe Lam) — trợ lý đặt trực tiếp tại từng nơi bán, tiêu đề hiện đúng số nguồn của túi",
+        "Form Mua cả túi đồng bộ hoàn toàn với giỏ hàng: từng nguồn có logo + tổng tiền riêng, chọn khung giờ giao (nguồn nào cần), ghi chú riêng từng nguồn, và chọn thanh toán QR / Thẻ / COD — thẻ đã lưu tự điền, QR hiện từng nguồn khi trợ lý đặt",
         "Túi gợi ý hiện đúng giá combo và giá từng món kèm nơi bán; mỗi túi chỉ xuất hiện MỘT lần và không còn gắn nhãn chuyên trang — thẻ túi gọn hơn",
       ],
     }, {

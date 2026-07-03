@@ -5,6 +5,7 @@ import QRCode from "react-qr-code";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { chainLogo } from "@/lib/stores";
+import { getOrderConfig } from "@/lib/orderConfig";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
 import { acquireBodyScrollLock } from "@/lib/scroll-lock";
@@ -32,6 +33,14 @@ export interface TuiAgentLine {
 }
 
 type Step = { label: string; pause?: "pay-qr" | "pay-card"; source?: string; amount?: number };
+
+// Khung giờ giao — cùng danh sách với form giỏ hàng (CartModal).
+const SLOTS = [
+  "Trong hôm nay (2–4 giờ)",
+  "Tối nay (18:00–21:00)",
+  "Sáng mai (8:00–11:00)",
+  "Chiều mai (14:00–17:00)",
+];
 
 export default function TuiAgentModal({
   tuiName,
@@ -66,6 +75,12 @@ export default function TuiAgentModal({
   const pay = usePaymentState();
   // Thẻ nhập/xác nhận 1 lần — các nguồn sau tự dùng lại (giống giỏ).
   const [cardConfirmed, setCardConfirmed] = useState(false);
+  // Khung giờ giao RIÊNG theo từng nguồn + email/ghi chú từng nguồn — giống giỏ.
+  const [sourceSlots, setSourceSlots] = useState<Record<string, string>>({});
+  const slotOf = (source: string) => sourceSlots[source] ?? SLOTS[0];
+  const [sourceExtras, setSourceExtras] = useState<Record<string, { email?: string; note?: string }>>({});
+  const setExtra = (source: string, field: "email" | "note", val: string) =>
+    setSourceExtras((prev) => ({ ...prev, [source]: { ...prev[source], [field]: val } }));
 
   // Gom món theo NGUỒN ĐÍCH để hiển thị + đặt theo từng nguồn.
   const groups = useMemo(() => {
@@ -77,6 +92,7 @@ export default function TuiAgentModal({
     return [...m.entries()].map(([source, items]) => ({
       source,
       chain: items[0]?.chain || "",
+      cfg: getOrderConfig((items[0]?.chain || "").toLowerCase()),
       items,
       total: items.reduce((s, it) => s + it.price * it.qty, 0),
     }));
@@ -105,6 +121,7 @@ export default function TuiAgentModal({
     const s: Step[] = [];
     for (const g of groups) {
       s.push({ label: t("Đặt {n} món trên {source}…", { n: g.items.length, source: g.source }) });
+      if (g.cfg.needSlot) s.push({ label: t('Chọn khung giờ "{slot}"…', { slot: t(slotOf(g.source)) }) });
       if (pay.method === "qr") {
         s.push({ label: t("Quét QR chuyển khoản cho {chain}…", { chain: g.source }), pause: "pay-qr", source: g.source, amount: g.total });
       } else if (pay.method === "card") {
@@ -117,7 +134,7 @@ export default function TuiAgentModal({
     s.push({ label: t("Xác nhận & gửi đơn…") });
     return s;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, pay.method, lang]);
+  }, [groups, pay.method, sourceSlots, lang]);
 
   // Auto-advance khi đang chạy — dừng ở bước pause (QR từng nguồn / thẻ chưa xác nhận);
   // xong hết thì sinh mã đơn + báo về.
@@ -226,7 +243,7 @@ export default function TuiAgentModal({
                     </div>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="mb-3 space-y-2">
                     {g.items.map((it) => (
                       <div key={it.productId} className="flex items-center gap-2 rounded-xl bg-slate-50 p-2">
                         {it.image ? (
@@ -244,6 +261,52 @@ export default function TuiAgentModal({
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Field riêng từng nguồn — ĐỒNG BỘ với khối field từng cửa hàng của giỏ */}
+                  <div className="space-y-2">
+                    {g.cfg.needSlot && (
+                      <Field label={t("Khung giờ giao")}>
+                        <select
+                          value={slotOf(g.source)}
+                          onChange={(e) => setSourceSlots((prev) => ({ ...prev, [g.source]: e.target.value }))}
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        >
+                          {SLOTS.map((s) => (
+                            <option key={s} value={s}>
+                              {t(s)}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                    {g.cfg.needEmail && (
+                      <Field label={`${t("Email tài khoản")} (${g.source})`}>
+                        <input
+                          type="email"
+                          value={sourceExtras[g.source]?.email || ""}
+                          onChange={(e) => setExtra(g.source, "email", e.target.value)}
+                          placeholder="email@example.com"
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                        />
+                      </Field>
+                    )}
+                    {g.cfg.needStorePick && (
+                      <p className="flex items-start gap-1.5 rounded-lg bg-blue-50 px-2.5 py-2 text-xs text-blue-700">
+                        <span className="shrink-0">🏪</span>
+                        {t("Bạn sẽ chọn siêu thị giao hàng khi thanh toán trên web cửa hàng")}
+                      </p>
+                    )}
+                    {/* Ghi chú riêng cho TỪNG nguồn — gửi kèm đơn của nguồn đó */}
+                    <Field label={t("Ghi chú")}>
+                      <textarea
+                        value={sourceExtras[g.source]?.note || ""}
+                        onChange={(e) => setExtra(g.source, "note", e.target.value)}
+                        rows={2}
+                        placeholder={t("Ghi chú (tuỳ chọn): màu sắc, kích cỡ, thời gian nhận…")}
+                        className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      />
+                    </Field>
                   </div>
                 </section>
               ))}
@@ -343,6 +406,7 @@ export default function TuiAgentModal({
                     {g.items.map((it) => (
                       <Row key={it.productId} k={it.name} v={`${formatMoney(it.price * it.qty)}${it.qty > 1 ? ` ×${it.qty}` : ""}`} />
                     ))}
+                    {g.cfg.needSlot && <Row k={t("Khung giờ")} v={t(slotOf(g.source))} />}
                   </div>
                 ))}
                 <div className="border-t border-slate-200 pt-2">
@@ -381,6 +445,15 @@ export default function TuiAgentModal({
       </div>
 
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-semibold text-slate-800">{label}</span>
+      {children}
+    </label>
   );
 }
 
