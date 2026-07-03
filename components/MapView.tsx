@@ -33,6 +33,37 @@ type MapMarker = {
 
 
 
+// Màu theo loại CSKD cho LEGEND — phải trùng palette catMeta của app/api/marker/route.ts
+// (pin vẽ server-side qua /api/marker; legend client chỉ cần màu, không cần icon).
+function normVi(s: string): string {
+  return s
+    .replace(/[àáâãăạảấầẩẫậắằẳẵặ]/gi, 'a')
+    .replace(/[èéêẹẻẽếềểễệ]/gi, 'e')
+    .replace(/[ìíỉĩị]/gi, 'i')
+    .replace(/[òóôõơọỏốồổỗộớờởỡợ]/gi, 'o')
+    .replace(/[ùúưụủũứừửữự]/gi, 'u')
+    .replace(/[ỳýỹỵỷ]/gi, 'y')
+    .replace(/[đ]/gi, 'd')
+    .toUpperCase();
+}
+
+function catMeta(cat: string): { color: string } {
+  const n = normVi(cat);
+  if (n.includes('AN UONG'))                               return { color: '#ea580c' };
+  if (n.includes('THOI TRANG'))                            return { color: '#7c3aed' };
+  if (n.includes('LAM DEP') || n.includes('THU GIAN'))     return { color: '#db2777' };
+  if (n.includes('CUA HANG') || n.includes('SIEU THI'))    return { color: '#2563eb' };
+  if (n.includes('VAN HOA') || n.includes('GIAI TRI'))     return { color: '#b45309' };
+  if (n.includes('THE DUC') || n.includes('THE THAO'))     return { color: '#dc2626' };
+  if (n.includes('LUU TRU'))                               return { color: '#0d9488' };
+  if (n.includes('OFFICE'))                                return { color: '#475569' };
+  if (n.includes('OTO') || n.includes('XE MAY') || n.includes('XE DAP')) return { color: '#78716c' };
+  if (n.includes('VI TINH') || n.includes('DIEN THOAI'))   return { color: '#4f46e5' };
+  if (n.includes('NGAN HANG'))                             return { color: '#15803d' };
+  if (n.includes('GIAO DUC'))                              return { color: '#0369a1' };
+  return { color: '#64748b' };
+}
+
 // SVG pin loaded from marker API
 function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight: boolean, cheapestLabel: string, nearestLabel: string, loaiCskd?: string[]) {
   const w = cheapest ? 40 : highlight ? 36 : 30;
