@@ -10,6 +10,7 @@ import {
   AttributionControl,
   Marker,
   ZoomControl,
+  Polyline,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -22,6 +23,132 @@ import type { CskdCategory } from "@/lib/sheet-cskd";
 import { chainColor, chainLabel, storeCurrency } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { type Lang, tr } from "@/lib/i18n";
+
+// ── Routing types ──────────────────────────────────────────────
+type TransportType = "car" | "bike" | "pedestrian";
+
+type RoutingFeature = {
+  type: "Feature";
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+  properties: {
+    name: string;
+    length_m: number;
+    duration: number;
+    type: string;
+    direction: string;
+  };
+};
+
+type RoutingResult = {
+  type: "FeatureCollection";
+  features: RoutingFeature[];
+  status: string;
+};
+
+// ── OSM/OSRM direction → biểu tượng mũi tên ──────────────────
+function directionArrow(direction: string): string {
+  const d = (direction || "").toUpperCase().trim();
+  if (d.includes("SLIGHT") && d.includes("LEFT"))  return "↖";
+  if (d.includes("SLIGHT") && d.includes("RIGHT")) return "↗";
+  if (d.includes("SHARP")  && d.includes("LEFT"))  return "◀";
+  if (d.includes("SHARP")  && d.includes("RIGHT")) return "▶";
+  if (d.includes("U-TURN") || d.includes("UTURN")) return "↩";
+  if (d.includes("LEFT"))     return "←";
+  if (d.includes("RIGHT"))    return "→";
+  if (d.includes("STRAIGHT") || d.includes("CONTINUE")) return "↑";
+  return "↑";
+}
+
+// ── OSM/OSRM: dịch câu chỉ đường hoàn chỉnh (type + direction) → tiếng Việt ──
+function directionLabel(stepType: string, direction: string, streetName?: string): string {
+  const t  = (stepType  || "").toLowerCase().trim().replace(/[_\s]+/g, " ");
+  const d  = (direction || "").toUpperCase().trim();
+  const sl = d.includes("SLIGHT");
+  const sh = d.includes("SHARP");
+  const isLeft  = d.includes("LEFT");
+  const isRight = d.includes("RIGHT");
+  const isUturn = d.includes("U-TURN") || d.includes("UTURN");
+
+  // Helper: tạo câu rẽ + tên đường
+  const onto = (base: string) => streetName ? `${base} vào ${streetName}` : base;
+
+  switch (t) {
+    case "depart":         return onto("Xuất phát");
+    case "arrive":         return streetName ? `Đến điểm: ${streetName}` : "Đã đến nơi";
+    case "turn":
+    case "fork": {
+      if (isUturn)  return onto("Quay đầu xe");
+      if (sh && isLeft)  return onto("Rẽ gấp trái");
+      if (sh && isRight) return onto("Rẽ gấp phải");
+      if (sl && isLeft)  return onto("Hơi rẽ trái");
+      if (sl && isRight) return onto("Hơi rẽ phải");
+      if (isLeft)        return onto("Rẽ trái");
+      if (isRight)       return onto("Rẽ phải");
+      return onto("Đi thẳng");
+    }
+    case "new name":       return onto("Đi thẳng");
+    case "continue":       return onto("Đi thẳng");
+    case "merge": {
+      if (isLeft)  return onto("Nhập làn trái");
+      if (isRight) return onto("Nhập làn phải");
+      return onto("Nhập làn");
+    }
+    case "on ramp": {
+      if (isLeft)  return onto("Lên đường dẫn, hướng trái");
+      if (isRight) return onto("Lên đường dẫn, hướng phải");
+      return onto("Lên đường dẫn");
+    }
+    case "off ramp": {
+      if (isLeft)  return onto("Xuống đường dẫn, hướng trái");
+      if (isRight) return onto("Xuống đường dẫn, hướng phải");
+      return onto("Xuống đường dẫn");
+    }
+    case "end of road": {
+      if (isLeft)  return onto("Cuối đường, rẽ trái");
+      if (isRight) return onto("Cuối đường, rẽ phải");
+      return onto("Cuối đường");
+    }
+    case "use lane": {
+      if (isLeft)  return "Chọn làn trái";
+      if (isRight) return "Chọn làn phải";
+      return "Chọn làn";
+    }
+    case "roundabout":
+    case "rotary":         return onto("Vào vòng xuyến");
+    case "roundabout turn":
+    case "rotary turn": {
+      if (isLeft)  return onto("Rẽ trái trong vòng xuyến");
+      if (isRight) return onto("Rẽ phải trong vòng xuyến");
+      return onto("Tiếp tục trong vòng xuyến");
+    }
+    case "exit roundabout":
+    case "exit rotary":    return onto("Ra khỏi vòng xuyến");
+    case "notification":   return streetName || "Đoạn đường kế tiếp";
+    default: {
+      // fallback: ghép direction tiếng Việt
+      if (isUturn)         return onto("Quay đầu xe");
+      if (sh && isLeft)    return onto("Rẽ gấp trái");
+      if (sh && isRight)   return onto("Rẽ gấp phải");
+      if (sl && isLeft)    return onto("Hơi rẽ trái");
+      if (sl && isRight)   return onto("Hơi rẽ phải");
+      if (isLeft)          return onto("Rẽ trái");
+      if (isRight)         return onto("Rẽ phải");
+      return onto(streetName || "Đi thẳng");
+    }
+  }
+}
+
+function fmtDuration(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)} giây`;
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} phút`;
+  return `${Math.floor(m / 60)}h ${m % 60}p`;
+}
+
+function fmtDistance(m: number): string {
+  if (m < 1000) return `${Math.round(m)} m`;
+  return `${(m / 1000).toFixed(1)} km`;
+}
 
 type MapMarker = {
   store: Store;
@@ -256,6 +383,107 @@ export default function MapView({
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [portalPos, setPortalPos] = useState<{ x: number; y: number; anchor: "bottom" | "top" } | null>(null);
 
+  // ── Routing state ──
+  const [routingTarget, setRoutingTarget] = useState<Store | null>(null);
+  const [transportType, setTransportType] = useState<TransportType>("car");
+  const [routingResult, setRoutingResult] = useState<RoutingResult | null>(null);
+  const [routingLoading, setRoutingLoading] = useState(false);
+  const [routingError, setRoutingError] = useState<string | null>(null);
+
+  // Tạo Google Maps fallback URL
+  const googleMapsUrl = useCallback((store: Store, transport: TransportType) => {
+    const travelMode = transport === "car" ? "driving" : transport === "bike" ? "driving" : "walking";
+    return `https://www.google.com/maps/dir/?api=1${userLoc ? `&origin=${userLoc.lat},${userLoc.lng}` : ""}&destination=${store.lat},${store.lng}&travelmode=${travelMode}`;
+  }, [userLoc]);
+
+  const fetchRouting = useCallback(async (store: Store, transport: TransportType) => {
+    if (!userLoc || store.lat == null || store.lng == null) return;
+    setRoutingLoading(true);
+    setRoutingError(null);
+    setRoutingResult(null);
+    try {
+      const params = new URLSearchParams({
+        transport,
+        x1: String(userLoc.lng),
+        y1: String(userLoc.lat),
+        x2: String(store.lng),
+        y2: String(store.lat),
+      });
+      const res = await fetch(`/api/routing?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: RoutingResult = await res.json();
+
+      // Nếu API không trả về features hợp lệ → fallback Google Maps
+      if (!Array.isArray(data?.features) || data.features.length === 0) {
+        setRoutingTarget(null);
+        window.open(googleMapsUrl(store, transport), "_blank", "noopener,noreferrer");
+        return;
+      }
+
+      setRoutingResult(data);
+    } catch (err) {
+      // Lỗi network hoặc upstream → fallback Google Maps
+      setRoutingTarget(null);
+      window.open(googleMapsUrl(store, transport), "_blank", "noopener,noreferrer");
+    } finally {
+      setRoutingLoading(false);
+    }
+  }, [userLoc, googleMapsUrl]);
+
+  // Mỗi khi chọn phương tiện → fetch lại nếu đang mở overlay
+  useEffect(() => {
+    if (routingTarget) fetchRouting(routingTarget, transportType);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transportType]);
+
+  // Polyline coordinates từ tất cả features
+  const routePolyline: [number, number][] = useMemo(() => {
+    if (!routingResult || !Array.isArray(routingResult.features)) return [];
+    const pts: [number, number][] = [];
+    for (const f of routingResult.features) {
+      for (const [lng, lat] of f.geometry.coordinates) {
+        pts.push([lat, lng]);
+      }
+    }
+    return pts;
+  }, [routingResult]);
+
+  // Fit map to route khi có kết quả
+  useEffect(() => {
+    if (!map || routePolyline.length < 2) return;
+    map.fitBounds(L.latLngBounds(routePolyline), { padding: [40, 40] });
+  }, [map, routePolyline]);
+
+  const openRouting = useCallback((store: Store) => {
+    setRoutingTarget(store);
+    setSelectedStore(null);
+    setPortalPos(null);
+    fetchRouting(store, transportType);
+  }, [fetchRouting, transportType]);
+
+  const closeRouting = useCallback(() => {
+    setRoutingTarget(null);
+    setRoutingResult(null);
+    setRoutingError(null);
+    // Bay về vị trí cũ
+    if (map) {
+      const zoom = zoomForRadius(radiusKm) ?? 13;
+      if (userLoc) map.flyTo([userLoc.lat, userLoc.lng], zoom, { duration: 0.5 });
+    }
+  }, [map, userLoc, radiusKm]);
+
+  // Labels localized
+  const TRANSPORT_LABELS: Record<TransportType, string> = {
+    car: t("Ô tô"),
+    bike: t("Xe máy"),
+    pedestrian: t("Đi bộ"),
+  };
+  const TRANSPORT_ICONS: Record<TransportType, string> = {
+    car: "🚗",
+    bike: "🛵",
+    pedestrian: "🚶",
+  };
+
   // Tính lại vị trí popup pin (portalPos) dựa trên toạ độ store hiện tại của marker đã chọn.
   // Anchor "top" = popup ở DƯỚI marker, "bottom" = popup ở TRÊN marker. Chọn hướng có chỗ
   // trống đủ chứa popup trong map; nếu cả hai đều đủ, theo heuristic 0.45.
@@ -450,7 +678,7 @@ export default function MapView({
         )}
 
         <ClusterGroup
-          markers={visibleMarkers}
+          markers={routingTarget ? [] : visibleMarkers}
           highlightId={highlightId}
           t={t}
           onMarkerClick={(m) => {
@@ -458,6 +686,25 @@ export default function MapView({
             setSelectedStore(m);
           }}
         />
+
+        {/* Destination marker khi đang chỉ đường */}
+        {routingTarget && routingTarget.lat != null && routingTarget.lng != null && (
+          <Marker
+            position={[routingTarget.lat as number, routingTarget.lng as number]}
+            icon={L.divIcon({
+              className: "",
+              html: `<div style="position:relative;width:28px;height:36px">
+                <svg viewBox="0 0 24 32" width="28" height="36" xmlns="http://www.w3.org/2000/svg">
+                  <path fill="#dc2626" stroke="#fff" stroke-width="1.2" d="M12 1C7.03 1 3 5.03 3 10c0 7 9 21 9 21s9-14 9-21c0-4.97-4.03-9-9-9z"/>
+                  <circle cx="12" cy="10" r="4" fill="#fff"/>
+                </svg>
+              </div>`,
+              iconSize: [28, 36],
+              iconAnchor: [14, 36],
+            })}
+            title={routingTarget.name}
+          />
+        )}
 
         {selectedStore && portalPos && typeof document !== "undefined" && createPortal(
           <div style={{ position: "fixed", left: portalPos.x, top: portalPos.anchor === "bottom" ? portalPos.y - 46 : portalPos.y + 20, transform: "translateX(-50%)" + (portalPos.anchor === "bottom" ? " translateY(-100%)" : ""), zIndex: 1200, pointerEvents: "auto" }}>
@@ -494,18 +741,186 @@ export default function MapView({
                     {t("Sản phẩm")}
                   </button>
                 )}
-                <a href={`https://www.google.com/maps/dir/?api=1${userLoc ? `&origin=${userLoc.lat},${userLoc.lng}` : ""}&destination=${selectedStore.store.lat},${selectedStore.store.lng}&travelmode=driving`} target="_blank" rel="noopener noreferrer" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "none", whiteSpace: "nowrap" }}>
+                <button type="button" onClick={() => openRouting(selectedStore.store)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11" /></svg>
                   {t("Chỉ đường")}
-                </a>
+                </button>
               </div>
             </div>
           </div>,
           document.body
         )}
+        {/* Route polyline */}
+        {routePolyline.length > 1 && (
+          <Polyline
+            positions={routePolyline}
+            pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.85, lineCap: "round", lineJoin: "round" }}
+          />
+        )}
       </MapContainer>
       )}
       </MapBoundary>
+
+      {/* ── Routing Overlay ── */}
+      {routingTarget && (
+        <div style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 2000,
+          display: "flex",
+          pointerEvents: "none",
+        }}>
+          {/* Left panel */}
+          <div style={{
+            width: 300,
+            minWidth: 240,
+            maxWidth: "90vw",
+            height: "100%",
+            background: "#fff",
+            boxShadow: "2px 0 16px rgba(0,0,0,0.18)",
+            display: "flex",
+            flexDirection: "column",
+            pointerEvents: "auto",
+            fontFamily: "system-ui, sans-serif",
+            fontSize: 13,
+          }}>
+            {/* Header */}
+            <div style={{ padding: "12px 14px 10px", borderBottom: "1px solid #e2e8f0", background: "#ffffff", color: "#0f172a", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={closeRouting}
+                  aria-label={t("Đóng")}
+                  style={{ background: "#f1f5f9", border: "none", borderRadius: 999, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#475569", flexShrink: 0, transition: "background 0.15s" }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#e2e8f0"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "#f1f5f9"}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 1 }}>{t("Chỉ đường đến")}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{routingTarget.name}</div>
+                </div>
+              </div>
+
+              {/* Transport selector */}
+              <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                {(["car", "bike", "pedestrian"] as TransportType[]).map((tp) => (
+                  <button
+                    key={tp}
+                    type="button"
+                    onClick={() => setTransportType(tp)}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 2,
+                      padding: "5px 4px",
+                      background: transportType === tp ? "#eff6ff" : "#f8fafc",
+                      border: transportType === tp ? "1.5px solid #3b82f6" : "1.5px solid #e2e8f0",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      color: transportType === tp ? "#1d4ed8" : "#475569",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <span>{TRANSPORT_ICONS[tp]}</span>
+                    <span style={{ fontSize: 9, fontWeight: 600, opacity: 0.85 }}>{TRANSPORT_LABELS[tp]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Summary bar */}
+            {routingResult && Array.isArray(routingResult.features) && (() => {
+              const totalDist = routingResult.features.reduce((s, f) => s + (f.properties.length_m ?? 0), 0);
+              const totalDur = routingResult.features.reduce((s, f) => s + (f.properties.duration ?? 0), 0);
+              return (
+                <div style={{ padding: "8px 14px", background: "#f0f7ff", borderBottom: "1px solid #bfdbfe", display: "flex", gap: 16, flexShrink: 0 }}>
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: "#1e40af", lineHeight: 1 }}>{fmtDuration(totalDur)}</span>
+                    <span style={{ fontSize: 10, color: "#64748b" }}>{t("Thời gian dự kiến")}</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: "#334155", lineHeight: 1 }}>{fmtDistance(totalDist)}</span>
+                    <span style={{ fontSize: 10, color: "#64748b" }}>{t("Tổng khoảng cách")}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Steps list */}
+            <div style={{ flex: 1, overflowY: "auto", overscrollBehavior: "contain" }}>
+              {routingLoading && (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 160, gap: 10, color: "#64748b" }}>
+                  <div style={{
+                    width: 32, height: 32, border: "3px solid #e2e8f0", borderTopColor: "#2563eb",
+                    borderRadius: "50%", animation: "routing-spin 0.7s linear infinite"
+                  }} />
+                  <span style={{ fontSize: 12 }}>{t("Đang tìm đường…")}</span>
+                  <style>{`@keyframes routing-spin{to{transform:rotate(360deg)}}`}</style>
+                </div>
+              )}
+              {routingError && (
+                <div style={{ margin: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, color: "#dc2626", fontSize: 12 }}>
+                  {routingError}
+                </div>
+              )}
+              {routingResult && Array.isArray(routingResult.features) && routingResult.features.map((feature, idx) => {
+                const { name, length_m, duration, type: stepType, direction } = feature.properties;
+                const isDepart = stepType === "depart";
+                const isArrive = stepType === "arrive";
+                const arrow = directionArrow(direction);
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 10,
+                      padding: "10px 14px",
+                      borderBottom: "1px solid #f1f5f9",
+                      background: isDepart || isArrive ? "#f8fafc" : "#fff",
+                    }}
+                  >
+                    {/* Direction icon */}
+                    <div style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 999,
+                      background: isArrive ? "#dcfce7" : isDepart ? "#dbeafe" : "#f1f5f9",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 16,
+                      flexShrink: 0,
+                      color: isArrive ? "#16a34a" : isDepart ? "#2563eb" : "#475569",
+                      fontWeight: 700,
+                    }}>
+                      {isArrive ? "📍" : isDepart ? "🚀" : arrow}
+                    </div>
+                    {/* Text */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 12, color: "#1e293b", marginBottom: 2 }}>
+                        {directionLabel(stepType, direction, name || undefined)}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, fontSize: 10, color: "#94a3b8" }}>
+                        {length_m > 0 && <span>{fmtDistance(length_m)}</span>}
+                        {duration > 0 && <span>· {fmtDuration(duration)}</span>}
+                      </div>
+                    </div>
+                    {/* Step number */}
+                    <div style={{ fontSize: 10, color: "#cbd5e1", flexShrink: 0, marginTop: 2 }}>{idx + 1}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {userLoc && (
         <button

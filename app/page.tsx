@@ -1480,16 +1480,40 @@ export default function Home() {
 
   const [cskdTaxonomy, setCskdTaxonomy] = useState<CskdCategory[] | undefined>(undefined);
   const [cskdStores, setCskdStores] = useState<Store[]>([]);
+  
+  // Nạp taxonomy Loại CSKD một lần khi mount
   useEffect(() => {
     fetch("/api/loai-cskd")
       .then((r) => r.json())
       .then((d) => { if (d.taxonomy?.length) setCskdTaxonomy(d.taxonomy); })
       .catch(() => {});
-    fetch("/api/cskd-stores")
+  }, []);
+
+  // Nạp danh sách cửa hàng CSKD theo vị trí và bán kính của người dùng
+  useEffect(() => {
+    let url = "/api/stores?businesstypeid=cskd";
+    const params = new URLSearchParams();
+    if (userLoc) {
+      params.append("lat", String(userLoc.lat));
+      params.append("lng", String(userLoc.lng));
+      // Bán kính tìm kiếm (m), giới hạn tối đa 2000m theo đặc tả của API Map Server
+      const radMeters = radiusKm ? Math.min(radiusKm * 1000, 2000) : 2000;
+      params.append("radius", String(radMeters));
+      params.append("limit", "1000");
+    } else {
+      // Mặc định khi chưa định vị: dùng bán kính 2000m để có dữ liệu tại toạ độ HCM mặc định
+      params.append("radius", "2000");
+      params.append("limit", "1000");
+    }
+    const queryStr = params.toString();
+    if (queryStr) {
+      url += `&${queryStr}`;
+    }
+    fetch(url)
       .then((r) => r.json())
       .then((d) => { if (d.stores?.length) setCskdStores(d.stores); })
       .catch(() => {});
-  }, []);
+  }, [userLoc, radiusKm]);
 
   // loaiCskd đại diện theo CHAIN (lấy từ cskdStores) — để gán cho cửa hàng offer trên map
   // so sánh giá, giúp chú thích hiển thị cây danh mục CSKD giống trang chủ.
