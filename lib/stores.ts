@@ -47,6 +47,13 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   premiumoutlets: { label: "Premium Outlets", color: "#6b7280", home: "https://www.premiumoutlets.com" },
   costco: { label: "Costco", color: "#e31837", home: "https://www.costco.com" },
   other: { label: "Khác", color: "#3948e6", home: "", online: true },
+  "Highlands Coffee": { label: "Highlands Coffee", color: "#656631ff", home: "", online: true },
+  "Starbucks": { label: "Starbucks", color: "#07411fff", home: "", online: true },
+  "Circle K": { label: "Circle K", color: "#c54eb1ff", home: "", online: true },
+  "GS25": { label: "GS25", color: "#0bc2cfff", home: "", online: true },
+  "7-Eleven": { label: "7-Eleven", color: "#5d9416ff", home: "", online: true },
+  "Premium Outlets": { label: "Premium Outlets", color: "#dbbe19ff", home: "", online: true },
+  "Costco": { label: "Costco", color: "#e60d0dff", home: "", online: true },
 };
 
 const DEFAULT_COLOR = "#3948e6";

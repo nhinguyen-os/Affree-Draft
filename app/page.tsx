@@ -4992,7 +4992,6 @@ export default function Home() {
                   lang={lang}
                   onStorePick={setStoreProducts}
                   cskdTaxonomy={cskdTaxonomy}
-                  scrollWheelZoom={mobileView === "map"}
                   onBuy={
                     selected
                       ? (store) => openBuyForm(selected, store)
@@ -5157,8 +5156,8 @@ export default function Home() {
               return base;
             })()}
             onClose={() => setBuyOffer(null)}
-            onPlaced={(code, chosen, note) => {
-              recordBuy(chosen, note);
+            onPlaced={(code, chosen) => {
+              recordBuy(chosen);
               setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -5174,8 +5173,8 @@ export default function Home() {
             geoAddr={userAddr}
             defaultAddress={userAddr}
             onClose={() => setTxnnLiveOpen(false)}
-            onPlaced={(code, chosen, note) => {
-              recordBuy(chosen, note);
+            onPlaced={(code, chosen) => {
+              recordBuy(chosen);
               setToast(t("TXNN đã hoàn tất · {code}", { code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -5245,7 +5244,7 @@ export default function Home() {
                   boxShadow: "0 0 0 1px rgba(255,255,255,0.5), 0 16px 48px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7)",
                 }}
               >
-                <div className="relative bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-5 pb-3 pt-5">
+                <div className={`relative bg-gradient-to-br ${isLove ? 'from-amber-400 via-orange-400 to-rose-400' : 'from-emerald-50 via-white to-sky-50' } px-5 pb-3 pt-5`}>
                   <button
                     onClick={() => setContactOpen(false)}
                     aria-label={t("Đóng")}
@@ -5253,10 +5252,10 @@ export default function Home() {
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
                   </button>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 pr-9">
+                  <p className={`text-[10px] font-bold uppercase tracking-wider ${isLove ? 'text-white/80' : 'text-emerald-600'}`} pr-9>
                     {isMusic ? t("Nhạc bản quyền · Khúc Chạm") : isLove ? t("Khúc Chạm Channel") : t("Liên hệ Affree")}
                   </p>
-                  <h3 className="mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9">
+                  <h3 className={`mt-0.5 text-base font-bold leading-snug text-slate-900 pr-9 ${isLove ? 'text-white' : ''}`}>
                     {isMusic ? t("Đề nghị cấp phép & khai thác thương mại") : isLove ? t("Gửi lời yêu thương 💚") : t("Để lại liên hệ")}
                   </h3>
                   {!isLove && (
@@ -5266,9 +5265,24 @@ export default function Home() {
                     </p>
                   )}
                   {isLove && (
-                    <p className="mt-1.5 text-[11px] font-medium leading-snug text-slate-500 pr-9">
-                      {t("Gửi lời nhắn yêu thương đến người thân — lời nhắn may mắn sẽ được Khúc Chạm phát sóng độc quyền vào sáng mai 🎁")}
-                    </p>
+                    <>
+                      <p className="mt-1.5 text-[11px] font-medium leading-snug text-white pr-9">
+                        {t("Gửi lời nhắn yêu thương đến người thân — lời nhắn may mắn sẽ được Khúc Chạm phát sóng độc quyền vào sáng mai 🎁")}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <a
+                          href="https://zalo.me/0888803998"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-bold text-blue-600 shadow transition hover:bg-blue-50"
+                        ><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.953 9.953 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2Z"/></svg>
+                          {t("Nhắn Zalo: 0888 803 998")}
+                        </a>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-3 py-1.5 text-[11px] font-semibold text-white">
+                          🎰 {t("Vòng quay may mắn")}
+                        </span>
+                      </div>
+                    </>
                   )}
                 </div>
 

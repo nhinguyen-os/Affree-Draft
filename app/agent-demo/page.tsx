@@ -295,12 +295,41 @@ export default function AgentDemoPage() {
   const sendText = () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !inputText) return;
 
-    wsRef.current.send(
-      JSON.stringify({
-        type: "type",
-        text: inputText
-      })
-    );
+    if (inputText === 'date') {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "delivery_time_selected",
+          kind: 'date',
+          selectedText: "Ngày mai (02/07)",
+          price: "",
+          deliveryDate: "02/07/2026",
+        })
+      );
+    } else if (inputText === 'time') {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "delivery_time_selected",
+          kind: 'time',
+          selectedText: "Từ 07h00 - 08h00",
+          price: "15.000đ",
+          deliveryDate: "",
+        })
+      );
+    }  else if (inputText.includes('otp')){
+      wsRef.current.send(
+        JSON.stringify({
+          type: "submit_otp",
+          otp: inputText.split('otp')[1].trim(),
+        })
+      );
+    } else {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "type",
+          text: inputText
+        })
+      );
+    }
     addLog(`Đã gửi chuỗi văn bản: "${inputText}"`, "info");
     setInputText("");
   };

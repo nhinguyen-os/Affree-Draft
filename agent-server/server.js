@@ -333,12 +333,14 @@ wss.on("connection", async (ws) => {
               const optionText = String(msg.selectedText).replace(/\s+/g, " ").trim();
               const option = page.locator("label.radio-wrapper").filter({ hasText: optionText }).first();
               await option.click({ timeout: 3000 });
+              await page.waitForTimeout(100);
 
               sendLog(`Bach Hoa Xanh: Đã click lựa chọn giao hàng: ${optionText}`, "success");
+              sendMessage("Đã hoàn tất chọn thời gian giao hàng.");
               await page.mouse.click(0, 0);
+              await page.waitForTimeout(100);
               await resumeAgenticLoopBHX("submit");
             }
-            sendLog("Bach Hoa Xanh: Đã click lựa chọn giao hàng trên trang thật.", "success");
           } catch (err) {
             sendLog(`Bach Hoa Xanh: Không click được lựa chọn giao hàng trên trang thật: ${err.message}`, "warning");
           }
@@ -500,18 +502,59 @@ wss.on("connection", async (ws) => {
             await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {
               sendLog("Trang thanh toán đã bắt đầu tải nhưng chưa báo domcontentloaded.", "warning");
             });
-            await page.waitForTimeout(800);
-            await sendScreenshotFrame();
             sendStatus("coop_payment_ready", {
               provider: "coop",
               paymentUrl: msg.paymentUrl,
               orderCode: msg.orderCode,
               paymentMethodCode: msg.paymentMethodCode,
             });
+            await page.waitForTimeout(800);
+            await sendScreenshotFrame();
             sendLog("Co.opmart: Màn hình thanh toán đã sẵn sàng, đang theo dõi kết quả giao dịch.", "success");
             startCompletionMonitor("coop_payment");
           } catch (err) {
             sendLog(`Co.opmart mở màn hình thanh toán lỗi: ${err.message}`, "error");
+            sendStatus("failed", { error: err.message });
+          } finally {
+            isAutomating = false;
+          }
+          break;
+
+        case "coop_payment_qr_snapshot":
+          if (isAutomating) {
+            sendLog("Hiện đang chạy một quy trình tự động khác.", "warning");
+            break;
+          }
+          if (!msg.paymentUrl || typeof msg.paymentUrl !== "string") {
+            sendStatus("failed", { error: "missing_payment_url" });
+            sendLog("Co.opmart: Thiếu URL thanh toán để lấy mã QR.", "error");
+            break;
+          }
+          isAutomating = true;
+          lastPaymentOrderCode = typeof msg.orderCode === "string" && msg.orderCode ? msg.orderCode : null;
+          lastGatewayPaymentResult = null;
+          paymentFailureSent = false;
+          try {
+            sendLog(`Co.opmart: Đang mở trang thanh toán ${msg.paymentMethodName || msg.paymentMethodCode || ""} để lấy mã QR...`, "info");
+            await page.goto(msg.paymentUrl, { waitUntil: "commit", timeout: 30000 });
+            await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {
+              sendLog("Trang thanh toán đã bắt đầu tải nhưng chưa báo domcontentloaded.", "warning");
+            });
+            const qrImage = await capturePaymentQrImage();
+            sendStatus("coop_payment_qr_ready", {
+              provider: "coop",
+              paymentUrl: msg.paymentUrl,
+              orderCode: msg.orderCode,
+              paymentMethodCode: msg.paymentMethodCode,
+              qrImageBase64: qrImage.base64,
+              qrContentType: qrImage.contentType,
+              qrClipFound: qrImage.clipFound,
+              qrSource: qrImage.source,
+            });
+            sendLog("Co.opmart: Đã lấy mã QR thanh toán, đang theo dõi kết quả giao dịch.", "success");
+            startCompletionMonitor("coop_payment");
+          } catch (err) {
+            sendLog(`Co.opmart lấy mã QR thanh toán lỗi: ${err.message}`, "error");
             sendStatus("failed", { error: err.message });
           } finally {
             isAutomating = false;
@@ -780,6 +823,140 @@ wss.on("connection", async (ws) => {
     });
   }
 
+  async function capturePaymentQrImage() {
+    if (!page || page.isClosed()) throw new Error("Trang thanh toán chưa sẵn sàng.");
+
+    const parseDataImage = (src) => {
+      if (typeof src !== "string") return null;
+      const match = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(src.trim());
+      if (!match) return null;
+      return {
+        base64: match[2].replace(/\s/g, ""),
+        contentType: match[1],
+        clipFound: true,
+        source: "data-url",
+      };
+    };
+
+    const findQrDataImageInFrame = (frame) => frame.evaluate(() => {
+      const preferredSelectors = [
+        "img.qrcodeimg-modal",
+        ".qr img[src^='data:image']",
+        "img[alt='QR CODE']",
+        "img[alt*='QR']",
+      ];
+      const readSrc = (img) => img?.getAttribute("src") || img?.src || "";
+      for (const selector of preferredSelectors) {
+        const src = readSrc(document.querySelector(selector));
+        if (src.startsWith("data:image/")) return src;
+      }
+      const images = Array.from(document.querySelectorAll("img"));
+      for (const img of images) {
+        const src = readSrc(img);
+        if (!src.startsWith("data:image/")) continue;
+        const label = [
+          img.getAttribute("alt"),
+          img.getAttribute("class"),
+          img.getAttribute("id"),
+          img.closest(".qr, [class*='qr'], [id*='qr']")?.getAttribute("class"),
+          img.closest(".qr, [class*='qr'], [id*='qr']")?.getAttribute("id"),
+        ].filter(Boolean).join(" ").toLowerCase();
+        if (/qr|qrcode|vnpay|momo/.test(label)) return src;
+      }
+      return "";
+    });
+    const findQrDataImage = async () => {
+      for (const frame of page.frames()) {
+        const src = await findQrDataImageInFrame(frame).catch(() => "");
+        if (src) return src;
+      }
+      return "";
+    };
+
+    await page.waitForTimeout(800).catch(() => { });
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const dataImage = parseDataImage(await findQrDataImage().catch(() => ""));
+      if (dataImage) return dataImage;
+      await page.waitForTimeout(500).catch(() => { });
+    }
+
+    const findQrClip = () => page.evaluate(() => {
+      const viewportWidth = window.innerWidth || 1024;
+      const viewportHeight = window.innerHeight || 768;
+      const nodes = Array.from(document.querySelectorAll("img, canvas, svg"));
+      let best = null;
+      for (const node of nodes) {
+        const rect = node.getBoundingClientRect();
+        const width = rect.width;
+        const height = rect.height;
+        if (width < 90 || height < 90) continue;
+        const ratio = width / height;
+        if (ratio < 0.65 || ratio > 1.55) continue;
+        const attrs = [
+          node.getAttribute("src"),
+          node.getAttribute("alt"),
+          node.getAttribute("aria-label"),
+          node.getAttribute("class"),
+          node.id,
+        ].filter(Boolean).join(" ").toLowerCase();
+        const text = (node.closest("section, div, main, body")?.textContent || "").slice(0, 700).toLowerCase();
+        let score = Math.min(width, height);
+        if (/qr|qrcode|vietqr|vnpay|momo/.test(attrs)) score += 220;
+        if (/qr|quét mã|quet ma|thanh toán|thanh toan|vnpay|momo/.test(text)) score += 160;
+        if (Math.abs(width - height) < 45) score += 80;
+        if (rect.top >= -20 && rect.left >= -20 && rect.top < viewportHeight && rect.left < viewportWidth) score += 40;
+        if (!best || score > best.score) {
+          best = { score, x: rect.left + window.scrollX, y: rect.top + window.scrollY, width, height };
+        }
+      }
+      if (best) {
+        const padding = 32;
+        return {
+          x: Math.max(0, best.x - padding),
+          y: Math.max(0, best.y - padding),
+          width: Math.min(viewportWidth, best.width + padding * 2),
+          height: Math.min(viewportHeight, best.height + padding * 2),
+          clipFound: true,
+        };
+      }
+      const side = Math.min(640, viewportWidth, viewportHeight);
+      return {
+        x: Math.max(0, (viewportWidth - side) / 2),
+        y: Math.max(0, (viewportHeight - side) / 2),
+        width: side,
+        height: side,
+        clipFound: false,
+      };
+    });
+    let rawClip = await findQrClip();
+    for (let attempt = 0; attempt < 6 && !rawClip?.clipFound; attempt += 1) {
+      await page.waitForTimeout(800).catch(() => { });
+      rawClip = await findQrClip();
+    }
+
+    await page.evaluate((clip) => {
+      window.scrollTo({ top: Math.max(0, Number(clip.y) - 80), left: 0, behavior: "instant" });
+    }, rawClip).catch(() => { });
+    await page.waitForTimeout(250).catch(() => { });
+
+    const adjustedClip = await page.evaluate((clip) => {
+      return {
+        x: Number(clip.x) || 0,
+        y: Math.max(0, (Number(clip.y) || 0) - window.scrollY),
+        width: Number(clip.width) || 640,
+        height: Number(clip.height) || 640,
+      };
+    }, rawClip).catch(() => rawClip);
+    const clip = normalizeClip(adjustedClip);
+    const buffer = await page.screenshot({ type: "jpeg", quality: 82, clip });
+    return {
+      base64: buffer.toString("base64"),
+      contentType: "image/jpeg",
+      clipFound: Boolean(rawClip?.clipFound),
+      source: "screenshot",
+    };
+  }
+
   async function sendScreenshotFrame(options = {}) {
     if (!page || ws.readyState !== WebSocket.OPEN) return;
     try {
@@ -808,7 +985,12 @@ wss.on("connection", async (ws) => {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-blink-features=AutomationControlled"
-      ]
+      ],
+      proxy: {
+        server: process.env.PROXY_SERVER,
+        username: process.env.PROXY_USERNAME,
+        password: process.env.PROXY_PASSWORD
+      },
     });
 
     context = await browser.newContext({
@@ -1234,6 +1416,7 @@ wss.on("connection", async (ws) => {
           return;
         }
       } else {
+        sendMessage("Tiến hành đặt hàng.");
         const buySelectors = [
           ".icon__cart-footer",
           'span:has-text("Đặt hàng")',
