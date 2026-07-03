@@ -42,6 +42,7 @@ import { acquireBodyScrollLock, hasActiveScrollLock } from "@/lib/scroll-lock";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
+const OrderAgentModalDev = dynamic(() => import("@/components/OrderAgentModalDev"), { ssr: false });
 const TuiAgentModal = dynamic(() => import("@/components/TuiAgentModal"), { ssr: false });
 const MusicOrderModal = dynamic(() => import("@/components/MusicOrderModal"), { ssr: false });
 const CartModal = dynamic(() => import("@/components/CartModal"), { ssr: false });
@@ -543,6 +544,11 @@ function getHostSub(): string {
 }
 
 export default function Home() {
+  const [modelDev, setModelDev] = useState(
+    process.env.NEXT_PUBLIC_MODAL_DEV === 'true' || false,
+  );
+  const ActiveOrderAgentModal = modelDev ? OrderAgentModalDev : OrderAgentModal;
+
   // rawCatalog/rawStores = dữ liệu gốc; catalog/stores đã được scope theo region.
   // Khi đã định vị trong VN: chỉ giữ CSKD trong vùng quanh user (offline) + online stores → giảm tải dữ liệu.
   const [rawCatalog, setRawCatalog] = useState<Catalog | null>(null);
@@ -5137,7 +5143,7 @@ export default function Home() {
 
       {
         buyOffer && (
-          <OrderAgentModal
+          <ActiveOrderAgentModal
             offer={buyOffer}
             lang={lang}
             alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
@@ -5167,7 +5173,7 @@ export default function Home() {
 
       {
         txnnLiveOpen && (
-          <OrderAgentModal
+          <ActiveOrderAgentModal
             offer={txnnLiveOffer}
             lang={lang}
             geoAddr={userAddr}
