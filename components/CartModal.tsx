@@ -6,8 +6,9 @@ import type { CartItem, RankedOffer } from "@/lib/types";
 import { chainLabel, chainLogo, chainMinOrder } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
-import { getSavedCard, saveCard, type SavedCard } from "@/lib/cards";
+import { getSavedCard, saveCard, fetchAccountCard, type SavedCard } from "@/lib/cards";
 import { addPurchase } from "@/lib/purchases";
+import { ensureAccount } from "@/lib/auth";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { bumpMetric } from "@/lib/metrics";
 import { type Lang, tr } from "@/lib/i18n";
@@ -103,7 +104,14 @@ export default function CartModal({
   const [cardExp, setCardExp] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   // Thẻ đã lưu từ lần mua trước (localStorage) — có thì mặc định dùng lại, khỏi nhập.
-  const [savedCard] = useState<SavedCard | null>(() => getSavedCard());
+  const [savedCard, setSavedCard] = useState<SavedCard | null>(() => getSavedCard());
+  // Chưa có thẻ local → lấy thẻ đã che từ tài khoản (sheet) khi đã đăng nhập (đồng bộ OrderAgentModal).
+  useEffect(() => {
+    if (getSavedCard()) return;
+    let alive = true;
+    void fetchAccountCard().then((c) => { if (alive && c) setSavedCard(c); });
+    return () => { alive = false; };
+  }, []);
   const [useNewCard, setUseNewCard] = useState(false);
   // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) gửi tới SĐT → nhập đúng mới hiện.
   const [otpCode, setOtpCode] = useState<string | null>(null); // null = chưa yêu cầu xem
@@ -296,6 +304,14 @@ export default function CartModal({
     if (payMethod === "card" && !usingSavedCard && newCardReady) {
       saveCard({ number: cardNumber, name: cardName, exp: cardExp, brand: detectCardBrand(cardNumber) });
     }
+    // Thanh toán thẻ → tạo tài khoản NGẦM theo SĐT + lưu thẻ ĐÃ CHE (4 số cuối + hãng + hạn).
+    if (payMethod === "card" && phone.trim()) {
+      ensureAccount(phone.trim(), name.trim(), {
+        last4: cardLast4,
+        brand: cardBrand,
+        exp: usingSavedCard ? savedCard?.exp : cardExp,
+      });
+    }
     setPhase("agent");
   }
 
@@ -310,24 +326,44 @@ export default function CartModal({
     });
   }
 
-  // Auto chạy các bước không cần bạn — từng cửa hàng tick ĐỘC LẬP, chỉ dừng ở
-  // bước pause (thanh toán QR/thẻ) của riêng nó.
+  // Auto chạy các bước không cần bạn — MỖI cửa hàng có timer RIÊNG (theo index), tick
+  // ĐỘC LẬP và SONG SONG. Trước đây 1 effect chung xoá SẠCH mọi timer mỗi lần bất kỳ
+  // cửa hàng nào nhảy bước rồi hẹn lại tất cả → cửa hàng #0 (không lệch nhịp) luôn bắn
+  // trước, reset timer các cửa hàng sau trước khi chúng kịp chạy ⇒ chỉ chạy được khi #0
+  // dừng ⇒ hoá TUẦN TỰ. Nay chỉ dời lại timer của ĐÚNG cửa hàng vừa đổi bước, timer các
+  // cửa hàng khác giữ nguyên → chạy song song thật.
+  const stepTimersRef = useRef<Map<number, { ki: number; timer: ReturnType<typeof setTimeout> }>>(new Map());
   useEffect(() => {
-    if (phase !== "agent") return;
-    const timers: ReturnType<typeof setTimeout>[] = [];
+    if (phase !== "agent") {
+      stepTimersRef.current.forEach((e) => clearTimeout(e.timer));
+      stepTimersRef.current.clear();
+      return;
+    }
     agentPlan.forEach((sp, i) => {
       const ki = agentKis[i] ?? 0;
+      const existing = stepTimersRef.current.get(i);
+      // Đã hẹn giờ đúng cho bước hiện tại của cửa hàng này rồi → ĐỂ YÊN (không reset).
+      if (existing && existing.ki === ki) return;
+      if (existing) clearTimeout(existing.timer);
+      stepTimersRef.current.delete(i);
       const cur = sp.steps[ki];
-      if (!cur || ki >= sp.steps.length - 1) return;
-      // Bước thẻ đã xác nhận (từ giỏ / cửa hàng khác) → không dừng, tự chạy qua.
-      const paused = cur.pause && !(cur.pause === "pay-card" && cardConfirmed);
-      if (paused) return;
+      if (!cur || ki >= sp.steps.length - 1) return; // xong
+      // Chỉ dừng chờ ở bước nhập thẻ CHƯA xác nhận. Bước QR: bot tự dò giao dịch &
+      // xác nhận khi nhận được tiền (khách không cần bấm) → chờ lâu hơn cho khách kịp CK.
+      const paused = cur.pause === "pay-card" && !cardConfirmed;
+      if (paused) return; // dừng chờ user nhập thẻ — xác nhận xong sẽ tự hẹn lại
       // Lệch nhịp nhẹ giữa các cửa hàng cho cảm giác nhiều trợ lý chạy song song.
-      timers.push(setTimeout(() => advanceStore(i), (cur.ok ? 550 : 850) + i * 180));
+      const delay = cur.pause === "pay-qr" ? 2800 + i * 200 : (cur.ok ? 550 : 850) + i * 180;
+      const timer = setTimeout(() => {
+        stepTimersRef.current.delete(i);
+        advanceStore(i);
+      }, delay);
+      stepTimersRef.current.set(i, { ki, timer });
     });
-    return () => timers.forEach(clearTimeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, agentKis, agentPlan, cardConfirmed]);
+  // Dọn mọi timer khi unmount.
+  useEffect(() => () => { stepTimersRef.current.forEach((e) => clearTimeout(e.timer)); }, []);
 
   // Mọi cửa hàng đã tới bước cuối → chốt đơn.
   useEffect(() => {
@@ -483,7 +519,9 @@ export default function CartModal({
                       {doneStore ? (
                         <span className="text-sm font-bold text-emerald-600">✓</span>
                       ) : waitingPay ? (
-                        <span className="text-xs font-medium text-amber-600">{t("Chờ bạn thanh toán…")}</span>
+                        <span className="text-xs font-medium text-amber-600">
+                          {curStep?.pause === "pay-qr" ? t("Đang chờ chuyển khoản…") : t("Chờ bạn thanh toán…")}
+                        </span>
                       ) : (
                         <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-500" />
                       )}
@@ -560,7 +598,7 @@ export default function CartModal({
                               <div className="flex items-center gap-2 text-xs text-slate-600">
                                 {stepDone || (isCurrent && st.ok) ? (
                                   <span className="shrink-0 text-emerald-500">✓</span>
-                                ) : isCurrent && st.pause && !(st.pause === "pay-card" && cardConfirmed) ? (
+                                ) : isCurrent && st.pause === "pay-card" && !cardConfirmed ? (
                                   <span className="shrink-0">🔒</span>
                                 ) : (
                                   <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-500" />
@@ -572,15 +610,12 @@ export default function CartModal({
                                 </span>
                               </div>
 
-                              {/* Thanh toán QR — mã đã hiện sẵn ở recap phía trên, chỉ cần xác nhận */}
+                              {/* Thanh toán QR — mã đã hiện sẵn ở recap phía trên; bot tự dò
+                                  giao dịch và xác nhận khi nhận được tiền, khách không cần bấm. */}
                               {isCurrent && st.pause === "pay-qr" && (
-                                <div className="mt-1.5 pl-5">
-                                  <button
-                                    onClick={() => advanceStore(i)}
-                                    className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                                  >
-                                    {t("Tôi đã chuyển khoản")}
-                                  </button>
+                                <div className="mt-1.5 flex items-center gap-2 pl-5 text-xs text-slate-500">
+                                  <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-emerald-500" />
+                                  <span>{t("Bot đang chờ chuyển khoản — tự xác nhận khi nhận được tiền")}</span>
                                 </div>
                               )}
 
@@ -741,6 +776,15 @@ export default function CartModal({
                           >
                             +
                           </button>
+                          {/* Thùng rác: xoá món ngay không cần bấm − nhiều lần khi số lượng lớn. */}
+                          <button
+                            onClick={() => onRemove(item.product.id, group.storeId)}
+                            aria-label={t("Xoá sản phẩm khỏi giỏ")}
+                            title={t("Xoá sản phẩm khỏi giỏ")}
+                            className="ml-1 flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -846,6 +890,34 @@ export default function CartModal({
                       )}
                     </button>
                   </div>
+
+                  {/* Mở mắt (đã qua OTP) → hiện ĐẦY ĐỦ thông tin thẻ */}
+                  {cardRevealed && (
+                    <div className="space-y-1 rounded-lg bg-white px-3 py-2 ring-1 ring-emerald-200 text-left">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] text-slate-500">{t("Số thẻ")}</span>
+                        <span className="font-mono text-sm font-semibold text-slate-800">{savedCard.number}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] text-slate-500">{t("Tên chủ thẻ")}</span>
+                        <span className="font-mono text-xs font-medium text-slate-800">{savedCard.name || "—"}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] text-slate-500">{t("Hạn thẻ")}</span>
+                        <span className="font-mono text-xs font-medium text-slate-800">{savedCard.exp}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] text-slate-500">{t("Loại thẻ")}</span>
+                        <span className="text-xs font-medium text-slate-800">{savedCard.brand ?? "—"}</span>
+                      </div>
+                      {savedCard.savedAt && (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="text-[11px] text-slate-500">{t("Đã lưu")}</span>
+                          <span className="text-xs font-medium text-slate-800">{new Date(savedCard.savedAt).toLocaleDateString("vi-VN")}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* OTP mô phỏng: khung "tin nhắn" chứa mã + ô nhập, đúng mã mới hiện số thẻ */}
                   {otpCode && !cardRevealed && (

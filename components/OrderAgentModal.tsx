@@ -9,10 +9,13 @@ import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { geocode } from "@/lib/geocode";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { phoneRule } from "@/lib/phone";
-import { getSavedCard, saveCard, type SavedCard as SavedCardType } from "@/lib/cards";
+import { getSavedCard, saveCard, fetchAccountCard, type SavedCard as SavedCardType } from "@/lib/cards";
 import { type Lang, tr } from "@/lib/i18n";
 import { acquireBodyScrollLock } from "@/lib/scroll-lock";
 import OrderInfoSection from "./OrderInfoSection";
+import { detectCardBrand, CARD_BRANDS, CARD_BRAND_STYLE } from "./PaymentSection";
+import { ChainBadge } from "./ChainBadge";
+import { MarqueeText } from "./MarqueeText";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
 
 /**
@@ -327,6 +330,9 @@ export default function OrderAgentModal({
   const [address, setAddress] = useState(composeCoopFullAddress(initialCoopAddressParts) || initialAddress);
   const [email, setEmail] = useState("");
   const [qty, setQty] = useState(defaultQty && defaultQty > 0 ? Math.floor(defaultQty) : 1);
+  // Phần SL "tự thêm" để đủ mức mua tối thiểu của chuỗi (vd Co.op 200k) — bơm 1 lần lúc mở
+  // form, y như giỏ hàng bake vào item.qty. Bấm +/- (chỉnh tay) sẽ reset về 0 → counter thuần.
+  const [autoQty, setAutoQty] = useState(0);
   const [slot, setSlot] = useState(SLOTS[0]);
   // Ghi chú cho cửa hàng — đồng bộ cấu trúc với ô ghi chú từng cửa hàng của giỏ (CartModal).
   const [note, setNote] = useState("");
@@ -371,9 +377,44 @@ export default function OrderAgentModal({
   const [cardCvv, setCardCvv] = useState("");
   const [cardSaved, setCardSaved] = useState(true);
   // Thẻ đã lưu từ lần mua trước (localStorage) — có thì mặc định dùng lại (như giỏ hàng).
-  const [savedCard] = useState<SavedCardType | null>(() => getSavedCard());
+  const [savedCard, setSavedCard] = useState<SavedCardType | null>(() => getSavedCard());
+  // Máy này chưa có thẻ ở localStorage → thử lấy thẻ đã che từ tài khoản (sheet) để hiện
+  // "thẻ đã lưu" khi đăng nhập mua lại. Có thẻ local rồi thì ưu tiên local (đủ full số).
+  useEffect(() => {
+    if (getSavedCard()) return;
+    let alive = true;
+    void fetchAccountCard().then((c) => { if (alive && c) setSavedCard(c); });
+    return () => { alive = false; };
+  }, []);
   const [useNewCard, setUseNewCard] = useState(false);
   const usingSavedCard = !!savedCard && !useNewCard;
+  // Thẻ "sẵn sàng" — thẻ đã lưu, hoặc thẻ mới điền đủ ngay ở form (số + hạn + CVV) — như giỏ hàng.
+  const newCardReady = cardNum.replace(/\s/g, "").length >= 12 && /^\d{2}\/\d{2}$/.test(cardExp) && cardCvv.length >= 3;
+  const cardReady = usingSavedCard || newCardReady;
+  const cardLast4 = (usingSavedCard && savedCard ? savedCard.number : cardNum).replace(/\D/g, "").slice(-4);
+  // Loại thẻ + số che ****: hiện ở chỗ tóm tắt "Thanh toán" (đồng bộ maskedCardLabel của giỏ/túi).
+  const cardBrand = usingSavedCard && savedCard ? savedCard.brand : detectCardBrand(cardNum);
+  const maskedCardLabel = `${cardBrand ?? t("Thẻ")} ****${cardLast4}`;
+  // Hàng chip "Chấp nhận: VISA MASTERCARD…" — đồng bộ với giỏ hàng (CartModal.brandChipsRow).
+  const brandChipsRow = (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] text-slate-400">{t("Chấp nhận")}:</span>
+      {CARD_BRANDS.map((b) => (
+        <span
+          key={b}
+          className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide transition ${
+            cardBrand === b
+              ? CARD_BRAND_STYLE[b] + " ring-1 ring-current"
+              : "border-slate-200 text-slate-400" + (cardBrand ? " opacity-40" : "")
+          }`}
+        >
+          {b}
+        </span>
+      ))}
+    </div>
+  );
+  // Snapshot lúc bấm chạy (như CartModal): thẻ đã đủ ở form → bước thẻ TỰ CHẠY, không hỏi nhập lại.
+  const [cardConfirmed, setCardConfirmed] = useState(false);
   // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) gửi tới SĐT → nhập đúng mới hiện (như giỏ hàng).
   const [cardOtpCode, setCardOtpCode] = useState<string | null>(null);
   const [cardOtpInput, setCardOtpInput] = useState("");
@@ -510,7 +551,10 @@ export default function OrderAgentModal({
     if (demoPayMethod === "qr") {
       s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
     } else if (demoPayMethod === "card") {
-      s.push({ kind: "payment-select", label: t("Nhập thông tin thẻ") });
+      // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
+      s.push(cardConfirmed
+        ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
+        : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
     } else {
       s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
     }
@@ -531,6 +575,8 @@ export default function OrderAgentModal({
     qty,
     slot,
     demoPayMethod,
+    cardConfirmed,
+    cardLast4,
     activeOffer.product.name,
     activeOffer.store.name,
     lang,
@@ -669,6 +715,23 @@ export default function OrderAgentModal({
   const minOrder = minOrderRaw > 0 ? minOrderRaw : null;
   const curCode = storeCurrency(activeOffer.store.id);
   const belowMinOrder = minOrder != null && total < minOrder;
+  // Tự bơm số lượng cho đủ mức mua tối thiểu — 1 lần khi mở form / đổi sản phẩm (như giỏ hàng
+  // lúc thêm vào giỏ). Sau đó user bấm +/- thì thôi (setAutoQty(0) ở nút), không kéo ngược.
+  const minPumpKey = `${activeOffer.store.id}:${activeOffer.product.id}`;
+  const minPumpedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (minPumpedRef.current === minPumpKey) return;
+    minPumpedRef.current = minPumpKey;
+    const price = activeOffer.price;
+    if (minOrder == null || price <= 0) return;
+    const base = price * qty;
+    if (base >= minOrder) return;
+    const add = Math.ceil((minOrder - base) / price);
+    setAutoQty(add);
+    setQty(qty + add);
+    // qty cố ý bỏ khỏi deps: chỉ bơm 1 lần/offer lúc mở (guard bằng minPumpedRef).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minPumpKey, minOrder, activeOffer.price]);
   const todayInput = formatDateInput(new Date());
   const coopDeliveryDates = (coopResult?.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
   const coopDeliverySlots =
@@ -778,7 +841,7 @@ export default function OrderAgentModal({
   const paymentLabel = isTXNNReal
     ? t("QR chuyển khoản")
     : isBHXReal || (!sessionId && !isCoopReal)
-      ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? t("Thẻ tín dụng/ghi nợ") : demoPayMethod === "cod" ? t("COD (tiền mặt khi nhận)") : t("Chưa chọn")
+      ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? (cardLast4 ? maskedCardLabel : t("Thẻ tín dụng/ghi nợ")) : demoPayMethod === "cod" ? t("COD (tiền mặt khi nhận)") : t("Chưa chọn")
       : usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
   const paymentConfirmBusy = paymentConfirmSubmitting || serverState?.status === "verifying_payment";
   const popupFrameTs = serverState?.popup?.updatedAt || serverState?.updatedAt;
@@ -1862,10 +1925,13 @@ export default function OrderAgentModal({
   // Lọc nơi mua theo "gần" hoặc "rẻ".
   const [repickSort, setRepickSort] = useState<"near" | "cheap">("near");
 
-  // Nơi bán cùng món — nếu đã geocode được địa chỉ giao thì tính lại km theo đó.
+  // Nơi bán cùng món TRONG CÙNG CHUỖI đang mua (Coop → chỉ Co.opmart) — nếu
+  // đã geocode được địa chỉ giao thì tính lại km theo đó.
   const choiceList = useMemo(() => {
     const list = alternatives.filter(
-      (o) => o.inStock || o.store.id === activeOffer.store.id
+      (o) =>
+        o.store.chain === activeOffer.store.chain &&
+        (o.inStock || o.store.id === activeOffer.store.id)
     );
     if (!deliveryLoc) return list;
     return list.map((o) => {
@@ -1876,7 +1942,7 @@ export default function OrderAgentModal({
           : null;
       return { ...o, distanceKm: km } as RankedOffer;
     });
-  }, [alternatives, activeOffer.store.id, deliveryLoc]);
+  }, [alternatives, activeOffer.store.id, activeOffer.store.chain, deliveryLoc]);
 
   // Gắn tag: nơi RẺ NHẤT và nơi GẦN NHẤT.
   const cheapestId = useMemo(() => {
@@ -2194,9 +2260,9 @@ export default function OrderAgentModal({
 
                     <Field label={t("Số lượng")}>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => setQty((q) => Math.max(1, q - 1))} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">−</button>
+                        <button onClick={() => { setAutoQty(0); setQty((q) => Math.max(1, q - 1)); }} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">−</button>
                         <span className="w-8 text-center text-sm font-semibold">{qty}</span>
-                        <button onClick={() => setQty((q) => q + 1)} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">+</button>
+                        <button onClick={() => { setAutoQty(0); setQty((q) => q + 1); }} className="h-9 w-9 rounded-lg border border-slate-300 text-lg font-medium hover:bg-slate-100">+</button>
                       </div>
                     </Field>
 
@@ -2651,12 +2717,15 @@ export default function OrderAgentModal({
                   </div>
                 </div>
               </div>
-              <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
-                <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
-                <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
-                  {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
-                </p>
-              </div>
+              {/* QR chỉ hiện khi ĐÃ CHỌN thanh toán QR (như giỏ hàng) — thẻ/COD không liên quan QR */}
+              {demoPayMethod === "qr" && (
+                <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                  <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
+                  <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
+                    {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -2677,8 +2746,8 @@ export default function OrderAgentModal({
 
               {/* ── Cửa hàng & sản phẩm — như section từng cửa hàng của giỏ ── */}
               <section className="space-y-3 rounded-2xl border border-slate-200 p-3">
-              {/* Sản phẩm đang đặt — qty control nằm bên phải */}
-              <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {/* Sản phẩm đang đặt — qty control nằm bên phải; màn hẹp thì xuống dòng, khỏi đè chữ giá */}
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                 {activeOffer.product.image ? (
                   <img
                     src={activeOffer.product.image}
@@ -2690,10 +2759,10 @@ export default function OrderAgentModal({
                     🛒
                   </div>
                 )}
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[9rem] flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
                   <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
-                  <div className="mt-1 flex items-center gap-2">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2">
                     <span className="text-base font-bold text-emerald-600">
                       {formatMoney(activeOffer.price * qty, storeCurrency(activeOffer.store.id))}
                     </span>
@@ -2705,22 +2774,33 @@ export default function OrderAgentModal({
                   </div>
                 </div>
                 {/* Qty control */}
-                <div className="flex shrink-0 flex-col items-center gap-1">
+                <div className="flex shrink-0 flex-col items-center gap-1 ml-auto">
                   <span className="text-[10px] font-medium text-slate-400">{t("Số lượng")}</span>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setQty((q) => Math.max(minQty, q - 1))}
-                      disabled={qty <= minQty}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      // Ở mức tối thiểu (thường = 1) bấm − nữa → xoá món & huỷ đơn (đóng form),
+                      // đồng bộ với giỏ hàng — không để nút − thành nút chết bấm không ăn.
+                      onClick={() => (qty <= minQty ? onClose() : (setAutoQty(0), setQty((q) => Math.max(minQty, q - 1))))}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100"
                     >
                       −
                     </button>
                     <span className="w-6 text-center text-sm font-semibold">{qty}</span>
                     <button
-                      onClick={() => setQty((q) => q + 1)}
+                      onClick={() => { setAutoQty(0); setQty((q) => q + 1); }}
                       className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-base font-medium hover:bg-slate-100"
                     >
                       +
+                    </button>
+                    {/* Thùng rác: mua ngay chỉ có 1 sản phẩm → xoá món = huỷ đơn, đóng form
+                        (khỏi bấm − từng nấc khi số lượng lớn — đồng bộ hành vi với giỏ hàng). */}
+                    <button
+                      onClick={onClose}
+                      aria-label={t("Xoá sản phẩm & huỷ đơn")}
+                      title={t("Xoá sản phẩm & huỷ đơn")}
+                      className="ml-1 flex h-7 w-7 items-center justify-center rounded-lg border border-slate-300 bg-white text-rose-500 hover:border-rose-300 hover:bg-rose-50"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
                     </button>
                   </div>
                 </div>
@@ -2733,11 +2813,15 @@ export default function OrderAgentModal({
                   {minOrder != null && (
                     <div>
                       {t("Mua tối thiểu: {amount}.", { amount: formatMoney(minOrder, curCode) })}
-                      {belowMinOrder && (
+                      {autoQty > 0 ? (
+                        <span className="ml-1 font-semibold text-emerald-700">
+                          {t("(+{n} tự thêm để đủ)", { n: autoQty })}
+                        </span>
+                      ) : belowMinOrder ? (
                         <span className="ml-1 font-semibold text-rose-600">
                           {t("(còn thiếu {amount})", { amount: formatMoney(minOrder - total, curCode) })}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -2843,7 +2927,7 @@ export default function OrderAgentModal({
                     </button>
                   </div>
 
-                  <div className="mt-2 space-y-1.5">
+                  <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
                     {storeChoices.map((o) => {
                       const active = o.store.id === activeOffer.store.id;
                       return (
@@ -2855,11 +2939,12 @@ export default function OrderAgentModal({
                             : "border-slate-200 bg-white hover:border-slate-300"
                             }`}
                         >
-                          <span className="min-w-0">
-                            <span className="flex items-center gap-1.5">
-                              <span className="truncate font-medium text-slate-800">
-                                {chainLabel(o.store.chain)} · {o.store.name}
-                              </span>
+                          <ChainBadge chain={o.store.chain} />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="flex min-w-0">
+                              <MarqueeText className="font-medium text-slate-800">
+                                {o.store.name}
+                              </MarqueeText>
                             </span>
                             <span className="mt-0.5 flex flex-wrap items-center gap-1">
                               <span className="text-xs text-slate-500">
@@ -2952,6 +3037,34 @@ export default function OrderAgentModal({
                         </button>
                       </div>
 
+                      {/* Mở mắt (đã qua OTP) → hiện ĐẦY ĐỦ thông tin thẻ */}
+                      {cardRevealed && (
+                        <div className="space-y-1 rounded-lg bg-white px-3 py-2 ring-1 ring-emerald-200 text-left">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[11px] text-slate-500">{t("Số thẻ")}</span>
+                            <span className="font-mono text-sm font-semibold text-slate-800">{savedCard.number}</span>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[11px] text-slate-500">{t("Tên chủ thẻ")}</span>
+                            <span className="font-mono text-xs font-medium text-slate-800">{savedCard.name || "—"}</span>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[11px] text-slate-500">{t("Hạn thẻ")}</span>
+                            <span className="font-mono text-xs font-medium text-slate-800">{savedCard.exp}</span>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[11px] text-slate-500">{t("Loại thẻ")}</span>
+                            <span className="text-xs font-medium text-slate-800">{savedCard.brand ?? "—"}</span>
+                          </div>
+                          {savedCard.savedAt && (
+                            <div className="flex items-baseline justify-between gap-3">
+                              <span className="text-[11px] text-slate-500">{t("Đã lưu")}</span>
+                              <span className="text-xs font-medium text-slate-800">{new Date(savedCard.savedAt).toLocaleDateString("vi-VN")}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* OTP mô phỏng: khung "tin nhắn" chứa mã + ô nhập, đúng mã mới hiện số thẻ */}
                       {cardOtpCode && !cardRevealed && (
                         <div className="space-y-1.5 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
@@ -3005,6 +3118,7 @@ export default function OrderAgentModal({
                           ← {t("Dùng thẻ đã lưu")} ({savedCard.brand ?? t("Thẻ")} ****{savedCard.number.replace(/\D/g, "").slice(-4)})
                         </button>
                       )}
+                      {brandChipsRow}
                       <input
                         type="text"
                         inputMode="numeric"
@@ -3404,23 +3518,16 @@ export default function OrderAgentModal({
                         {isCurrent && s.kind === "payment-select" && (
                           <PauseBox tone="blue" hint={demoPayMethod === "qr"
                             ? t("📱 Bạn đã chọn QR chuyển khoản từ đầu — quét mã rồi bấm xác nhận.")
-                            : t("💳 Bạn đã chọn thanh toán thẻ từ đầu — nhập thông tin thẻ để trợ lý thanh toán.")}>
+                            : t("💳 Thông tin thẻ chưa đủ — bổ sung để trợ lý thanh toán giúp bạn.")}>
                             <div className="space-y-2">
                               {/* Phương thức đã chọn ở form đặt hàng — không hiện lại lựa chọn ở đây */}
-                              {/* QR demo */}
-                              {demoPayMethod === "qr" && (
-                                <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
-                                  <p className="mb-2 text-xs font-medium text-slate-500">{t("Quét mã để chuyển khoản")}</p>
-                                  <div className="mx-auto flex h-36 w-36 items-center justify-center rounded-lg bg-white p-2 ring-1 ring-slate-200">
-                                    <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={120} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
-                                  </div>
-                                  <p className="mt-2 text-xs text-slate-400">{t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}</p>
-                                </div>
-                              )}
+                              {/* QR: KHÔNG vẽ lại ở bước này — mã đã hiện sẵn ở recap phía trên
+                                  (đồng bộ với giỏ hàng: QR chỉ 1 chỗ, bước này chỉ còn nút xác nhận). */}
 
                               {/* Card form */}
                               {demoPayMethod === "card" && (
                                 <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+                                  {brandChipsRow}
                                   <div>
                                     <label className="text-[11px] font-medium text-slate-500">{t("Số thẻ")}</label>
                                     <input
@@ -3865,6 +3972,8 @@ export default function OrderAgentModal({
                   if (demoPayMethod === "card" && !usingSavedCard && cardSaved && cardNum.replace(/\s/g, "").length >= 12 && /^\d{2}\/\d{2}$/.test(cardExp)) {
                     saveCard({ number: cardNum, name: name.trim().toUpperCase(), exp: cardExp, brand: null });
                   }
+                  // Snapshot: thẻ đã đủ ngay ở form → bước thẻ tự chạy, không hỏi nhập lại.
+                  setCardConfirmed(demoPayMethod === "card" && cardReady);
                   if (isTXNNReal) {
                     void createSession();
                   } else if (isCoopReal) {

@@ -28,13 +28,26 @@ var CATALOG_HEADERS = [
 var PURCHASE_HEADERS = [
   "id", "bought_at", "product_id", "product_name",
   "chain", "store_id", "store_name", "qty", "unit_price", "total",
-  "buyer_lat", "buyer_lng", "buyer_addr"
+  "buyer_lat", "buyer_lng", "buyer_addr", "buyer_phone", "user_id"
 ];
 var ALERT_HEADERS = [
   "id", "created_at", "phone", "product_id", "product_name", "price_at_signup"
 ];
 var BUYER_HEADERS = [
   "phone", "name", "address", "created_at", "updated_at"
+];
+
+/**
+ * TÀI KHOẢN người dùng — nằm ở spreadsheet KHÁC (do team tạo sẵn tab "Thông tin tài
+ * khoản"), nên phải openById. Tài khoản chạy script PHẢI có quyền sửa sheet này.
+ * Cột khớp theo TÊN (không theo vị trí) nên đặt lại/đổi thứ tự vẫn chạy.
+ */
+var ACCOUNTS_SHEET_ID = "1VLihAZ5pt96_g7s-Xosrcl0LCPkAh3UkdvsfnsbTUTY";
+var ACCOUNT_TAB = "Thông tin tài khoản";
+var ACCOUNT_HEADERS = [
+  "user_id", "phone", "name", "email", "address", "created_at", "updated_at", "last_login",
+  // Thẻ ĐÃ CHE (chỉ 4 số cuối + hãng + hạn) — TUYỆT ĐỐI không lưu số thẻ đầy đủ / CVV.
+  "card_last4", "card_brand", "card_exp"
 ];
 
 /**
@@ -51,6 +64,8 @@ function setup() {
   ensureSheet_("purchases", PURCHASE_HEADERS);
   ensureSheet_("alerts", ALERT_HEADERS);
   ensureSheet_("buyers", BUYER_HEADERS);
+  // Tài khoản ở sheet ngoài — cần quyền sửa; bỏ qua nếu chưa cấp quyền.
+  try { accountSheet_(); } catch (e) { Logger.log("account sheet: " + e); }
 }
 
 /** Menu tùy chỉnh trong Google Sheet để bấm cào tay. */
@@ -401,6 +416,13 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
   var action = body.action;
 
+  // Bộ đếm THỐNG KÊ trang (handleMetrics_ ở file Metrics.gs). PHẢI giữ routing này —
+  // thiếu nó thì metrics_get trả "unknown action" → web nhận totals=0 → dải "Số liệu Affree"
+  // ẩn mất Lượt truy cập / Đơn / Giỏ. (2026-07-03: bị rớt khi redeploy Code.gs cho auth.)
+  if (action === "metric_incr" || action === "metrics_get" || action === "metrics_snapshot") {
+    return handleMetrics_(action, body.event);
+  }
+
   if (action === "add_purchase") {
     return json_(addPurchase_(body.record || {}));
   }
@@ -409,6 +431,18 @@ function doPost(e) {
   }
   if (action === "save_buyer") {
     return json_(saveBuyer_(body.record || {}));
+  }
+  if (action === "ensure_account") {
+    return json_(ensureAccount_(body.record || {}));
+  }
+  if (action === "get_account") {
+    return json_(getAccount_(body.record || {}));
+  }
+  if (action === "update_account") {
+    return json_(updateAccount_(body.record || {}));
+  }
+  if (action === "get_orders") {
+    return json_(getOrders_(body.record || {}));
   }
   if (action === "set_catalog") {
     return json_(setCatalog_(body.rows || []));
@@ -546,7 +580,11 @@ function addPurchase_(rec) {
     // ngăn cách nghìn (106.6938 → "1.066.938"). Giữ nguyên giá trị gốc.
     rec.buyerLat != null && rec.buyerLat !== "" ? ("'" + String(rec.buyerLat)) : "",
     rec.buyerLng != null && rec.buyerLng !== "" ? ("'" + String(rec.buyerLng)) : "",
-    rec.buyerAddr || ""
+    rec.buyerAddr || "",
+    // SĐT người mua (khoá dự phòng "đơn của tôi") — lưu TEXT giữ số 0 đầu.
+    rec.buyerPhone ? ("'" + String(rec.buyerPhone).trim()) : "",
+    // user_id (khoá chính liên kết tài khoản) — server gắn từ phiên nếu đã đăng nhập.
+    rec.buyerUserId ? String(rec.buyerUserId).trim() : ""
   ]);
   return { ok: true };
 }
@@ -591,6 +629,161 @@ function saveBuyer_(rec) {
   }
   sh.appendRow(["'" + phone, rec.name || "", rec.address || "", now, now]);
   return { ok: true, mode: "create" };
+}
+
+// ── TÀI KHOẢN người dùng (sheet ngoài, openById) ───────────────────────────────
+/** Lấy tab "Thông tin tài khoản" ở sheet ngoài; tạo header nếu tab trống. */
+function accountSheet_() {
+  var ss = SpreadsheetApp.openById(ACCOUNTS_SHEET_ID);
+  var sh = ss.getSheetByName(ACCOUNT_TAB);
+  if (!sh) sh = ss.insertSheet(ACCOUNT_TAB);
+  var lastCol = sh.getLastColumn();
+  var header = lastCol >= 1 ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); }) : [];
+  if (!header.length || !header[0]) {
+    // Tab trống → ghi header chuẩn.
+    sh.getRange(1, 1, 1, ACCOUNT_HEADERS.length).setValues([ACCOUNT_HEADERS]);
+    sh.setFrozenRows(1);
+  } else {
+    // Tab đã có → BỔ SUNG cột còn thiếu (vd user_id, card_*) vào cuối, giữ nguyên cột cũ.
+    var lower = header.map(function (h) { return h.toLowerCase(); });
+    var missing = ACCOUNT_HEADERS.filter(function (h) { return lower.indexOf(h) === -1; });
+    if (missing.length) sh.getRange(1, header.length + 1, 1, missing.length).setValues([missing]);
+  }
+  return sh;
+}
+
+/** Map tên cột (thường hoá) → chỉ số 0-based, theo dòng header thực tế của sheet. */
+function accountColMap_(sh) {
+  var w = sh.getLastColumn();
+  var head = sh.getRange(1, 1, 1, w).getValues()[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  var col = {};
+  ACCOUNT_HEADERS.forEach(function (h) {
+    var i = head.indexOf(h);
+    col[h] = i; // -1 nếu sheet chưa có cột này (bỏ qua khi ghi)
+  });
+  col.__width = w;
+  return col;
+}
+
+/** Tìm số dòng (1-based) của SĐT trong tab account; 0 nếu chưa có. */
+function accountRowOf_(sh, col, phone) {
+  var last = sh.getLastRow();
+  if (last < 2 || col.phone < 0) return 0;
+  var vals = sh.getRange(2, col.phone + 1, last - 1, 1).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][0] || "").replace(/^'/, "").trim() === phone) return i + 2;
+  }
+  return 0;
+}
+
+/** Ghi 1 field vào đúng cột (nếu cột tồn tại). */
+function setAccountCell_(sh, col, row, key, value) {
+  if (col[key] != null && col[key] >= 0) sh.getRange(row, col[key] + 1).setValue(value);
+}
+
+/** Tạo tài khoản nếu SĐT chưa có; trả { ok, exists, created }. */
+function ensureAccount_(rec) {
+  var phone = rec.phone ? String(rec.phone).trim() : "";
+  if (!phone) return { ok: false, error: "missing phone" };
+  var sh = accountSheet_();
+  var col = accountColMap_(sh);
+  var now = new Date().toISOString();
+  var row = accountRowOf_(sh, col, phone);
+  if (row) {
+    // Đã có → bổ sung tên nếu đang trống; cập nhật thẻ đã che (nếu gửi kèm); updated_at.
+    if (rec.name && col.name >= 0 && !String(sh.getRange(row, col.name + 1).getValue()).trim()) {
+      sh.getRange(row, col.name + 1).setValue(rec.name);
+    }
+    if (rec.cardLast4) {
+      setAccountCell_(sh, col, row, "card_last4", "'" + String(rec.cardLast4));
+      setAccountCell_(sh, col, row, "card_brand", rec.cardBrand || "");
+      setAccountCell_(sh, col, row, "card_exp", "'" + String(rec.cardExp || ""));
+    }
+    // Đảm bảo có user_id ổn định (bổ sung cho dòng cũ chưa có).
+    var uid = col.user_id >= 0 ? String(sh.getRange(row, col.user_id + 1).getValue()).replace(/^'/, "").trim() : "";
+    if (!uid && col.user_id >= 0) { uid = Utilities.getUuid(); sh.getRange(row, col.user_id + 1).setValue(uid); }
+    setAccountCell_(sh, col, row, "updated_at", now);
+    return { ok: true, exists: true, created: false, userId: uid };
+  }
+  // Chưa có → thêm dòng mới theo bề rộng thực tế của sheet.
+  var newUid = Utilities.getUuid();
+  var arr = new Array(col.__width); for (var i = 0; i < arr.length; i++) arr[i] = "";
+  if (col.user_id >= 0) arr[col.user_id] = newUid;
+  if (col.phone >= 0) arr[col.phone] = "'" + phone;
+  if (col.name >= 0) arr[col.name] = rec.name || "";
+  if (col.email >= 0) arr[col.email] = rec.email || "";
+  if (col.address >= 0) arr[col.address] = rec.address || "";
+  if (col.created_at >= 0) arr[col.created_at] = now;
+  if (col.updated_at >= 0) arr[col.updated_at] = now;
+  if (rec.cardLast4 && col.card_last4 >= 0) arr[col.card_last4] = "'" + String(rec.cardLast4);
+  if (rec.cardBrand && col.card_brand >= 0) arr[col.card_brand] = rec.cardBrand;
+  if (rec.cardExp && col.card_exp >= 0) arr[col.card_exp] = "'" + String(rec.cardExp);
+  sh.appendRow(arr);
+  return { ok: true, exists: false, created: true, userId: newUid };
+}
+
+/** Đọc hồ sơ tài khoản theo SĐT → { ok, account }. */
+function getAccount_(rec) {
+  var phone = rec.phone ? String(rec.phone).trim() : "";
+  if (!phone) return { ok: false, error: "missing phone" };
+  var sh = accountSheet_();
+  var col = accountColMap_(sh);
+  var row = accountRowOf_(sh, col, phone);
+  if (!row) return { ok: true, account: null };
+  var vals = sh.getRange(row, 1, 1, col.__width).getValues()[0];
+  var pick = function (k) { return col[k] >= 0 ? String(vals[col[k]] || "").replace(/^'/, "") : ""; };
+  return { ok: true, account: {
+    userId: pick("user_id"),
+    phone: pick("phone"), name: pick("name"), email: pick("email"), address: pick("address"),
+    cardLast4: pick("card_last4"), cardBrand: pick("card_brand"), cardExp: pick("card_exp")
+  } };
+}
+
+/** Cập nhật hồ sơ (name/email/address) theo SĐT; tự tạo nếu chưa có. */
+function updateAccount_(rec) {
+  var phone = rec.phone ? String(rec.phone).trim() : "";
+  if (!phone) return { ok: false, error: "missing phone" };
+  var sh = accountSheet_();
+  var col = accountColMap_(sh);
+  var now = new Date().toISOString();
+  var row = accountRowOf_(sh, col, phone);
+  if (!row) { ensureAccount_(rec); row = accountRowOf_(sh, col, phone); }
+  if (!row) return { ok: false, error: "cannot upsert" };
+  if (rec.name != null) setAccountCell_(sh, col, row, "name", rec.name);
+  if (rec.email != null) setAccountCell_(sh, col, row, "email", rec.email);
+  if (rec.address != null) setAccountCell_(sh, col, row, "address", rec.address);
+  setAccountCell_(sh, col, row, "updated_at", now);
+  return { ok: true };
+}
+
+/**
+ * Đơn hàng của 1 tài khoản — đọc tab purchases, khớp theo user_id (chính) HOẶC buyer_phone
+ * (dự phòng cho đơn đặt lúc chưa đăng nhập). rec = { userId?, phone? }.
+ */
+function getOrders_(rec) {
+  var userId = rec.userId ? String(rec.userId).trim() : "";
+  var phone = rec.phone ? String(rec.phone).trim() : "";
+  if (!userId && !phone) return { ok: false, error: "missing userId/phone" };
+  var sh = ensureSheet_("purchases", PURCHASE_HEADERS);
+  var values = sh.getDataRange().getValues();
+  if (values.length < 2) return { ok: true, orders: [] };
+  var head = values[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  var pIdx = head.indexOf("buyer_phone");
+  var uIdx = head.indexOf("user_id");
+  var orders = [];
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    var rowUid = uIdx >= 0 ? String(r[uIdx] || "").replace(/^'/, "").trim() : "";
+    var rowPhone = pIdx >= 0 ? String(r[pIdx] || "").replace(/^'/, "").trim() : "";
+    var match = (userId && rowUid && rowUid === userId) || (phone && rowPhone && rowPhone === phone);
+    if (!match) continue;
+    var o = {};
+    for (var c = 0; c < head.length; c++) o[head[c]] = String(r[c] || "").replace(/^'/, "");
+    orders.push(o);
+  }
+  // Mới nhất trước (theo bought_at nếu có).
+  orders.sort(function (a, b) { return String(b.bought_at || "").localeCompare(String(a.bought_at || "")); });
+  return { ok: true, orders: orders };
 }
 
 /**
@@ -873,4 +1066,58 @@ function menuFillNiemYetKM_() {
   tgt.getRange(2, giaCol, tgtLast - 1, 1).setValues(giaCur);
   tgt.getRange(2, kmCol, tgtLast - 1, 1).setValues(kmCur);
   ui.alert("Xong!\n• Từ master: " + filledFromMaster + " dòng\n• Fallback (= price, KM=0): " + filledFallback + " dòng\n• Tổng: " + (tgtLast - 1) + " dòng");
+}
+
+// ============================================================================
+//  BỘ ĐẾM THỐNG KÊ TRANG (Affree) — gộp vào đây để chỉ 1 file Code.gs (bỏ file
+//  Metrics.gs riêng). Routing đã đặt ở đầu doPost: metric_incr/metrics_get/
+//  metrics_snapshot → handleMetrics_. Counter nằm ở tab "Metrics" của sheet gắn script.
+//  ĐỪNG xoá khi redeploy — thiếu là web mất Lượt truy cập/Đơn/Giỏ.
+// ============================================================================
+function handleMetrics_(action, event) {
+  var lock = LockService.getScriptLock();
+  try { lock.tryLock(5000); } catch (e) {}
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName("Metrics");
+  if (!sh) {
+    sh = ss.insertSheet("Metrics");
+    sh.getRange("A1:B1").setValues([["key", "value"]]);
+    sh.getRange("A2:A7").setValues([["visits"], ["orders"], ["carts"], ["products"], ["stores"], ["brands"]]);
+    sh.getRange("B2:B7").setValues([[0], [0], [0], [0], [0], [0]]);
+  } else {
+    // Đảm bảo 3 row mới tồn tại nếu sheet cũ chỉ có 3 dòng.
+    if (!sh.getRange(5, 1).getValue()) {
+      sh.getRange("A5:A7").setValues([["products"], ["stores"], ["brands"]]);
+      sh.getRange("B5:B7").setValues([[0], [0], [0]]);
+    }
+  }
+
+  var row = { visit: 2, order: 3, cart: 4 };
+  if (action === "metric_incr" && row[event]) {
+    var c = sh.getRange(row[event], 2);
+    c.setValue((Number(c.getValue()) || 0) + 1);
+  }
+
+  // Snapshot: cập nhật số sản phẩm / điểm bán / nhãn hiệu từ catalog.
+  if (action === "metrics_snapshot") {
+    if (event && event.products !== undefined) sh.getRange(5, 2).setValue(Number(event.products) || 0);
+    if (event && event.stores !== undefined)   sh.getRange(6, 2).setValue(Number(event.stores)   || 0);
+    if (event && event.brands !== undefined)   sh.getRange(7, 2).setValue(Number(event.brands)   || 0);
+  }
+
+  var totals = {
+    visits:   Number(sh.getRange(2, 2).getValue()) || 0,
+    orders:   Number(sh.getRange(3, 2).getValue()) || 0,
+    carts:    Number(sh.getRange(4, 2).getValue()) || 0,
+    products: Number(sh.getRange(5, 2).getValue()) || 0,
+    stores:   Number(sh.getRange(6, 2).getValue()) || 0,
+    brands:   Number(sh.getRange(7, 2).getValue()) || 0,
+  };
+
+  try { lock.releaseLock(); } catch (e) {}
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ totals: totals }))
+    .setMimeType(ContentService.MimeType.JSON);
 }

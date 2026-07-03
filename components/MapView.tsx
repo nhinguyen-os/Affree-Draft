@@ -18,7 +18,6 @@ import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 
 import type { Chain, Store } from "@/lib/types";
-import type { CskdCategory } from "@/lib/sheet-cskd";
 import { chainColor, chainLabel, storeCurrency } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { type Lang, tr } from "@/lib/i18n";
@@ -33,39 +32,8 @@ type MapMarker = {
 
 
 
-// Màu theo loại CSKD cho LEGEND — phải trùng palette catMeta của app/api/marker/route.ts
-// (pin vẽ server-side qua /api/marker; legend client chỉ cần màu, không cần icon).
-function normVi(s: string): string {
-  return s
-    .replace(/[àáâãăạảấầẩẫậắằẳẵặ]/gi, 'a')
-    .replace(/[èéêẹẻẽếềểễệ]/gi, 'e')
-    .replace(/[ìíỉĩị]/gi, 'i')
-    .replace(/[òóôõơọỏốồổỗộớờởỡợ]/gi, 'o')
-    .replace(/[ùúưụủũứừửữự]/gi, 'u')
-    .replace(/[ỳýỹỵỷ]/gi, 'y')
-    .replace(/[đ]/gi, 'd')
-    .toUpperCase();
-}
-
-function catMeta(cat: string): { color: string } {
-  const n = normVi(cat);
-  if (n.includes('AN UONG'))                               return { color: '#ea580c' };
-  if (n.includes('THOI TRANG'))                            return { color: '#7c3aed' };
-  if (n.includes('LAM DEP') || n.includes('THU GIAN'))     return { color: '#db2777' };
-  if (n.includes('CUA HANG') || n.includes('SIEU THI'))    return { color: '#2563eb' };
-  if (n.includes('VAN HOA') || n.includes('GIAI TRI'))     return { color: '#b45309' };
-  if (n.includes('THE DUC') || n.includes('THE THAO'))     return { color: '#dc2626' };
-  if (n.includes('LUU TRU'))                               return { color: '#0d9488' };
-  if (n.includes('OFFICE'))                                return { color: '#475569' };
-  if (n.includes('OTO') || n.includes('XE MAY') || n.includes('XE DAP')) return { color: '#78716c' };
-  if (n.includes('VI TINH') || n.includes('DIEN THOAI'))   return { color: '#4f46e5' };
-  if (n.includes('NGAN HANG'))                             return { color: '#15803d' };
-  if (n.includes('GIAO DUC'))                              return { color: '#0369a1' };
-  return { color: '#64748b' };
-}
-
 // SVG pin loaded from marker API
-function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight: boolean, cheapestLabel: string, nearestLabel: string, loaiCskd?: string[]) {
+function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight: boolean, cheapestLabel: string, nearestLabel: string) {
   const w = cheapest ? 40 : highlight ? 36 : 30;
   const h = Math.round(w * 1.29);
   const ring = highlight
@@ -76,10 +44,8 @@ function storeIcon(color: string, cheapest: boolean, nearest: boolean, highlight
   if (nearest) tags.push(`<div style="background:#3b82f6;color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:6px;white-space:nowrap">${nearestLabel}</div>`);
   const tagHtml = tags.length ? `<div style="position:absolute;top:${tags.length > 1 ? '-22px' : '-6px'};left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:2px">${tags.join('')}</div>` : '';
   
-  const cat = loaiCskd?.[0]?.split(' > ')[0] ?? '';
   const params = new URLSearchParams();
   if (color) params.set("color", color.replace("#", ""));
-  if (cat) params.set("cat", cat);
 
   const iconUrl = `/api/marker?${params.toString()}`;
 
@@ -170,7 +136,7 @@ function ClusterGroup({
       .filter((m) => m.store.lat != null && m.store.lng != null)
       .forEach((m) => {
         const marker = L.marker([m.store.lat as number, m.store.lng as number], {
-          icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, !!m.nearest, m.store.id === highlightId, tRef.current("RẺ NHẤT"), tRef.current("GẦN NHẤT"), m.store.loaiCskd),
+          icon: storeIcon(chainColor(m.store.chain), !!m.cheapest, !!m.nearest, m.store.id === highlightId, tRef.current("RẺ NHẤT"), tRef.current("GẦN NHẤT")),
         });
 
         marker.on("click", (ev) => {
@@ -231,7 +197,6 @@ export default function MapView({
   onStorePick,
   lang = "vi",
   tileUrl,
-  cskdTaxonomy,
 }: {
   center: [number, number];
   userLoc: { lat: number; lng: number } | null;
@@ -248,8 +213,6 @@ export default function MapView({
   onStorePick?: (store: Store) => void;
   lang?: Lang;
   tileUrl?: string;
-  /** Taxonomy Loại CSKD — nếu có, legend hiển thị dạng category tree thay vì chain list. */
-  cskdTaxonomy?: CskdCategory[];
 }) {
   const t = (vi: string) => tr(lang, vi);
   const [map, setMap] = useState<L.Map | null>(null);
@@ -278,11 +241,6 @@ export default function MapView({
   const [legendOpen, setLegendOpen] = useState(true);
   // Chain bị ẨN khỏi map (user bấm vào dòng chain trong legend để toggle).
   const [hiddenChains, setHiddenChains] = useState<Set<Chain>>(new Set());
-  // CSKD filter: set các "CATEGORY > Sub" đang được CHỌN (checked). Rỗng = tất cả hiển thị.
-  const [checkedCskd, setCheckedCskd] = useState<Set<string>>(new Set());
-  // Category nào đang expand trong CSKD legend. MẶC ĐỊNH: rỗng = thu gọn hết, không tick sẵn
-  // (checkedCskd rỗng = hiện tất cả marker). User tự bung/tick khi muốn lọc.
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
 
   const recenter = useCallback(() => {
     if (!userLoc || !map || userLoc.lat == null || userLoc.lng == null || isNaN(userLoc.lat) || isNaN(userLoc.lng)) return;
@@ -384,22 +342,9 @@ export default function MapView({
     chainCounts[m.store.chain] = (chainCounts[m.store.chain] ?? 0) + 1;
   }
   // Đóng legend CHỈ ẩn bảng chú thích, pin trên map giữ nguyên (filter đã chọn vẫn áp dụng).
-  // CSKD mode: checkedCskd rỗng = hiện tất cả; có giá trị = chỉ hiện store có loaiCskd giao với
-  // checkedCskd. Store CHƯA phân loại (không có loaiCskd) LUÔN hiện — tránh ẩn nhầm cửa hàng
-  // offer thuộc chuỗi không có dữ liệu CSKD trên map so sánh giá.
   const visibleMarkers = useMemo(
-    () =>
-      radiusMarkers.filter((m) => {
-        if (!hiddenChains.has(m.store.chain)) {
-          if (cskdTaxonomy && checkedCskd.size > 0) {
-            const lc = m.store.loaiCskd ?? [];
-            return lc.length === 0 || lc.some((l) => checkedCskd.has(l));
-          }
-          return true;
-        }
-        return false;
-      }),
-    [radiusMarkers, hiddenChains, checkedCskd, cskdTaxonomy],
+    () => radiusMarkers.filter((m) => !hiddenChains.has(m.store.chain)),
+    [radiusMarkers, hiddenChains],
   );
 
   // Load configured map url from process.env if tileUrl is not provided
@@ -582,106 +527,8 @@ export default function MapView({
                 <span style={{ fontSize: 11, color: "#64748b" }}>{t("Vị trí của bạn")}</span>
               </div>
 
-              {cskdTaxonomy ? (
-                /* ── CSKD legend: category tree với checkboxes ── */
-                <>
-                  {checkedCskd.size > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setCheckedCskd(new Set())}
-                      style={{ fontSize: 10, color: "#f97316", border: "none", background: "none", cursor: "pointer", padding: "0 0 4px", textDecoration: "underline" }}
-                    >
-                      {t("Bỏ chọn tất cả")}
-                    </button>
-                  )}
-                  {cskdTaxonomy.map((catItem) => {
-                    const isExpanded = expandedCats.has(catItem.category);
-                    const catCount = radiusMarkers.filter((m) =>
-                      (m.store.loaiCskd ?? []).some((l) => l.startsWith(catItem.category + " > ") || l === catItem.category)
-                    ).length;
-                    if (catCount === 0) return null;
-
-                    const activeSubs = catItem.subs.filter((sub) =>
-                      radiusMarkers.some((m) => (m.store.loaiCskd ?? []).includes(`${catItem.category} > ${sub}`))
-                    );
-
-                    return (
-                      <div key={catItem.category} style={{ marginBottom: 2 }}>
-                        <div
-                          style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", padding: "2px 0" }}
-                          onClick={() =>
-                            setExpandedCats((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(catItem.category)) next.delete(catItem.category);
-                              else next.add(catItem.category);
-                              return next;
-                            })
-                          }
-                        >
-                          {/* Màu bookmark = màu pin của loại CSKD trên map (catMeta) để đối chiếu nhanh. */}
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill={catMeta(catItem.category).color} stroke={catMeta(catItem.category).color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                          </svg>
-                          <span style={{ fontWeight: 700, fontSize: 11, color: "#1e293b", flex: 1 }}>{catItem.category}</span>
-                          <span style={{ fontSize: 10, color: "#94a3b8" }}>({catCount})</span>
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .2s" }}>
-                            <path d="M6 9l6 6 6-6" />
-                          </svg>
-                        </div>
-
-                        {isExpanded && (
-                          <div style={{ paddingLeft: 16 }}>
-                            {activeSubs.map((sub) => {
-                              const key = `${catItem.category} > ${sub}`;
-                              const checked = checkedCskd.has(key);
-                              const subCount = radiusMarkers.filter((m) =>
-                                (m.store.loaiCskd ?? []).includes(key)
-                              ).length;
-                              return (
-                                <label
-                                  key={sub}
-                                  style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "1px 0", color: checked ? "#f97316" : "#475569", fontSize: 11 }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setCheckedCskd((prev) => {
-                                        const next = new Set(prev);
-                                        if (next.has(key)) next.delete(key);
-                                        else next.add(key);
-                                        return next;
-                                      })
-                                    }
-                                    style={{ accentColor: "#f97316", width: 13, height: 13, flexShrink: 0 }}
-                                  />
-                                  <span style={{ flex: 1 }}>{sub}</span>
-                                  <span style={{ fontSize: 10, color: "#94a3b8" }}>({subCount})</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {/* Map sản phẩm có pin RẺ NHẤT/GẦN NHẤT → giải thích badge như chain legend
-                      (trước đây nhánh CSKD thiếu 2 dòng này). Map trang chủ không có → ẩn. */}
-                  {markers.some((m) => m.cheapest || m.nearest) && (
-                    <>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                        <span style={{ background: "#facc15", color: "#000", fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 5, whiteSpace: "nowrap", flexShrink: 0 }}>{t("RẺ NHẤT")}</span>
-                        {t("Nơi bán giá thấp nhất")}
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ background: "#3b82f6", color: "#fff", fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 5, whiteSpace: "nowrap", flexShrink: 0 }}>{t("GẦN NHẤT")}</span>
-                        {t("Cửa hàng gần bạn nhất")}
-                      </div>
-                    </>
-                  )}
-                </>
-              ) : (
-                /* ── Chain legend (mặc định) ── */
+              {/* ── Chú thích cửa hàng theo chuỗi ── */}
+              {(
                 <>
                   {chainKeys.length > 0 && (
                     <div style={{ marginTop: 2, marginBottom: 2 }}>

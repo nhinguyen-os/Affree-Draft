@@ -7,7 +7,8 @@ import { fetchTui } from "@/lib/sheet-tui";
 import { fetchDiscountMap } from "@/lib/sheet-discount";
 import { fetchSheetStores } from "@/lib/sheet-stores";
 import { fetchChainMinOrders } from "@/lib/sheet-store-rules";
-import { setDynamicStores } from "@/lib/stores";
+import { fetchSources } from "@/lib/sheet-sources";
+import { setDynamicStores, storeCurrency } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
 // KHÔNG prerender: response 10MB không cache được Next.js data cache (>2MB), nên prerender
@@ -92,14 +93,17 @@ export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
   // Mọi nguồn sheet (admin sửa) dùng chung 30s để sửa sheet → reload là thấy gần như ngay.
-  const [, sheetGroups, similarGroups, discountMap, tui, minOrders] = await Promise.all([
+  const [, sheetGroups, similarGroups, discountMap, tui, minOrders, sources] = await Promise.all([
     fetchSheetStores(30).then(setDynamicStores),
     fetchSheetGroups(30),
     fetchSimilarGroups(30),
     fetchDiscountMap(30),
     fetchTui(30),
     fetchChainMinOrders(60),
+    fetchSources(60),
   ]);
+  const sourceLogos = sources.logos;
+  const sourceNames = sources.names;
 
   /**
    * Gắn cấu hình tệp/ưu tiên từ Google Sheet vào catalog — CHỈ khi catalog chưa
@@ -144,6 +148,8 @@ export async function GET() {
     tui: tui.length ? tui : catalog.tui,
     mealTitles: catalog.mealTitles?.length ? catalog.mealTitles : sheetGroups.mealTitles,
     minOrders,
+    sourceLogos,
+    sourceNames,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi
@@ -223,6 +229,10 @@ function parseCsv(csv: string): Catalog {
     inStock: idx("in_stock"),
     productUrl: idx("product_url"),
     lastChecked: idx("last_checked"),
+    variantName1: idx("variant_name1"),
+    variantValue1: idx("variant_value1"),
+    variantName2: idx("variant_name2"),
+    variantValue2: idx("variant_value2"),
   };
 
   // Cột cấu hình ẩn/hiện sản phẩm trên web (nhiều tên header chấp nhận được).
@@ -294,13 +304,25 @@ function parseCsv(csv: string): Catalog {
       .replace(/[^\d.]/g, "");
     let priceNum = priceRaw ? Number(priceRaw) : 0;
     // Defensive: một số dòng cũ trong sheet vẫn giữ format nghìn-VND ("40.5" cho 40.500đ)
-    // → Vercel edge fetch có lúc trả bản CSV cached này. Với chain VND (mọi chain trừ
-    // astrabean/USD), nếu giá < 1000 mà là số thập phân → coi như thousand-VND, × 1000.
+    // → Vercel edge fetch có lúc trả bản CSV cached này. CHỈ ×1000 cho cửa hàng tiền VND;
+    // store ngoại tệ (USD/CAD… theo cột Currency ở tab stores) giữ nguyên số thập phân thật
+    // ("209.99" = $209.99, KHÔNG phải 209.990). astrabean/phin lab giữ loại trừ cũ cho chắc.
     const chainRaw = (ci.chain >= 0 ? (r[ci.chain] ?? "") : "").trim().toLowerCase();
-    if (priceNum > 0 && priceNum < 1000 && chainRaw !== "astrabean" && chainRaw !== "phin lab") {
+    const isVnd = storeCurrency(storeId) === "VND" && chainRaw !== "astrabean" && chainRaw !== "phin lab";
+    if (priceNum > 0 && priceNum < 1000 && isVnd) {
       priceNum = Math.round(priceNum * 1000);
     }
     const stockRaw = (r[ci.inStock] ?? "").trim().toLowerCase();
+    // Variant: giá trị trục 1/2 gắn vào offer; tên trục gắn vào product (từ dòng bất kỳ có khai).
+    const v1 = ci.variantValue1 >= 0 ? (r[ci.variantValue1] ?? "").trim() : "";
+    const v2 = ci.variantValue2 >= 0 ? (r[ci.variantValue2] ?? "").trim() : "";
+    const vName1 = ci.variantName1 >= 0 ? (r[ci.variantName1] ?? "").trim() : "";
+    const vName2 = ci.variantName2 >= 0 ? (r[ci.variantName2] ?? "").trim() : "";
+    const prod = productMap.get(productId);
+    if (prod) {
+      if (vName1 && !prod.variantName1) prod.variantName1 = vName1;
+      if (vName2 && !prod.variantName2) prod.variantName2 = vName2;
+    }
     offers.push({
       productId,
       storeId,
@@ -308,6 +330,8 @@ function parseCsv(csv: string): Catalog {
       inStock: !["0", "false", "het", "hết", "no", "out"].includes(stockRaw),
       productUrl: (r[ci.productUrl] ?? "").trim(),
       lastChecked: ((r[ci.lastChecked] ?? "").trim() || new Date().toISOString()),
+      variant1: v1 || undefined,
+      variant2: v2 || undefined,
     });
     void (ci.chain as Chain | number); // chain suy ra từ store
   }
