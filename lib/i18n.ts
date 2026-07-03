@@ -211,6 +211,18 @@ const EN_DICT: Record<string, string> = {
   "Cửa hàng (theo màu):": "Stores (by color):",
   "Nơi bán giá thấp nhất": "Lowest-price store",
 
+  // Routing overlay
+  "Chỉ đường đến": "Directions to",
+  "Ô tô": "Car",
+  "Xe máy": "Motorbike",
+  "Đi bộ": "Walking",
+  "Thời gian dự kiến": "Est. time",
+  "Tổng khoảng cách": "Total distance",
+  "Đang tìm đường…": "Finding route…",
+  "Xuất phát": "Depart",
+  "Đã đến nơi": "Arrived",
+  "Tiếp tục": "Continue",
+
   // Map toggle / footer
   "Bản đồ": "Map",
   "Thu gọn": "Collapse",

@@ -1,25 +1,19 @@
 import { STORES, SOURCE_META } from "./stores";
 import type { Store } from "./types";
 
-const CATEGORY_MAP: Record<string, string> = {
-  "Đồ ăn": "2,7,16,33,38,61,67,79,83,84,88,138,145,158,164,183,215,222,228,257",
-  "Đồ uống": "159,12,120,161,165",
-  "Chăm sóc cá nhân": "14,15,45,90,111,112,119,143,144,175,176,177,303",
-  "Nhà cửa & vệ sinh": "44,69,72,106,113,148,230,231,240,247,255,258,265,296,319,320,321",
-  "Trang sức": "18,55,95,98",
-  "Giỏ tạp hóa": "9,10,28,52,64,71,73,80,89,96,99,105,126,129,134,172,181,184,193,201,205,221,223,233,237,266,267,276,297,305,306,307,308,309,310,313"
-};
-
-const ALL_OTHER_TYPES = Object.values(CATEGORY_MAP).join(",");
-
 export async function fetchNearbyStores(options: {
   lat: string | null;
   lng: string | null;
   radius?: string;
   limit?: string;
+  /** Truyền thẳng businesstypeid (danh sách ID ngăn cách ",") vào API. Ưu tiên hơn category. */
+  businesstypeid?: string | null;
+  /** Tên category (legacy, dùng CATEGORY_MAP nội bộ). Bị bỏ qua nếu businesstypeid được truyền. */
   category?: string | null;
+  /** Lookup map: type_id (số) → label "CATEGORY > Sub" để điền loaiCskd cho store. */
+  typeIdToLabel?: Map<number, string>;
 }) {
-  const { lat, lng, radius = "1000", limit = "1000", category } = options;
+  const { lat, lng, radius = "1000", limit = "1000", businesstypeid, typeIdToLabel } = options;
 
   const baseUrl = (process.env.NEXT_GEO_API_BASE_URL || "https://api-staging.timdaythay.com/api/full").replace(/\/$/, "");
   const apiKey = process.env.NEXT_GEO_API_KEY || "";
@@ -28,12 +22,8 @@ export async function fetchNearbyStores(options: {
 
   let url = `${baseUrl}/place/aroundsearch/json?location=${encodeURIComponent(locationParam)}&radius=${radius}&limit=${limit}`;
 
-  if (category) {
-    const decodedCategory = decodeURIComponent(category);
-    const businessTypeId = CATEGORY_MAP[decodedCategory] || ALL_OTHER_TYPES;
-    url += `&businesstypeid=${encodeURIComponent(businessTypeId)}`;
-  } else {
-    url += `&businesstypeid=${encodeURIComponent(ALL_OTHER_TYPES)}`;
+  if (businesstypeid) {
+    url += `&businesstypeid=${encodeURIComponent(businesstypeid)}`;
   }
 
   const headers: Record<string, string> = {
@@ -119,6 +109,13 @@ export async function fetchNearbyStores(options: {
         const lngVal = coords[0];
         const latVal = coords[1];
 
+        // Map type_id → loaiCskd label ("CATEGORY > Sub") nếu có lookup map
+        let loaiCskd: string[] | undefined;
+        if (typeIdToLabel && place.type_id != null) {
+          const label = typeIdToLabel.get(Number(place.type_id));
+          if (label) loaiCskd = [label];
+        }
+
         mappedStores.push({
           id: placeId,
           chain,
@@ -127,6 +124,7 @@ export async function fetchNearbyStores(options: {
           lat: typeof latVal === "number" ? latVal : parseFloat(latVal ?? ""),
           lng: typeof lngVal === "number" ? lngVal : parseFloat(lngVal ?? ""),
           website,
+          ...(loaiCskd ? { loaiCskd } : {}),
         });
       }
     }
