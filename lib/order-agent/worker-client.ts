@@ -394,7 +394,8 @@ class AgentServerBridgeClient implements OrderWorkerClient {
     try {
       const timestamp = Date.now().toString();
       const separator = AGENT_SERVER_URL.includes("?") ? "&" : "?";
-      let urlWithSession = `${AGENT_SERVER_URL}${separator}sessionId=${sessionId}`;
+      const chainParam = session.provider ? `&chain=${encodeURIComponent(session.provider)}` : "";
+      let urlWithSession = `${AGENT_SERVER_URL}${separator}sessionId=${sessionId}${chainParam}`;
       if (AGENT_SERVER_SECRET_TOKEN) {
         const hmac = createHmac("sha256", AGENT_SERVER_SECRET_TOKEN);
         hmac.update(`${sessionId}:${timestamp}`);
