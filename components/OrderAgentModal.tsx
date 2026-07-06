@@ -251,7 +251,7 @@ async function fetchCoopLocations(level: "provinces" | "districts" | "wards", pa
   return data.items || [];
 }
 
-async function getAgentWsUrl(sessionId: string) {
+async function getAgentWsUrl(sessionId: string, chain?: string) {
   const baseUrl = process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080";
   const separator = baseUrl.includes("?") ? "&" : "?";
   try {
@@ -259,13 +259,13 @@ async function getAgentWsUrl(sessionId: string) {
     if (res.ok) {
       const data = await res.json();
       if (data.token) {
-        return `${baseUrl}${separator}sessionId=${sessionId}&timestamp=${data.timestamp}&token=${data.token}`;
+        return `${baseUrl}${separator}sessionId=${sessionId}${chain ? `&chain=${encodeURIComponent(chain)}` : ""}&timestamp=${data.timestamp}&token=${data.token}`;
       }
     }
   } catch (err) {
     console.error("Error fetching agent token:", err);
   }
-  return `${baseUrl}${separator}sessionId=${sessionId}`;
+  return `${baseUrl}${separator}sessionId=${sessionId}${chain ? `&chain=${encodeURIComponent(chain)}` : ""}`;
 }
 
 export default function OrderAgentModal({
@@ -1106,7 +1106,7 @@ export default function OrderAgentModal({
     setBhxOtp("");
 
     const wsSessionId = `bhx-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    const wsUrl = await getAgentWsUrl(wsSessionId);
+    const wsUrl = await getAgentWsUrl(wsSessionId, activeOffer.store.chain);
     const ws = new WebSocket(wsUrl);
     bhxBrowserWsRef.current = ws;
 
@@ -1472,7 +1472,7 @@ export default function OrderAgentModal({
     try {
       coopBrowserWsRef.current?.close();
       const wsSessionId = `coop-assist-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-      const wsUrl = await getAgentWsUrl(wsSessionId);
+      const wsUrl = await getAgentWsUrl(wsSessionId, activeOffer.store.chain);
       const ws = new WebSocket(wsUrl);
       coopBrowserWsRef.current = ws;
       let opened = false;
