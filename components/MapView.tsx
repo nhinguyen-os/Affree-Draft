@@ -383,6 +383,10 @@ export default function MapView({
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [portalPos, setPortalPos] = useState<{ x: number; y: number; anchor: "bottom" | "top" } | null>(null);
 
+  const displayCategory = selectedStore
+    ? (selectedStore.store.loaiCskd?.[0] || chainLabel(selectedStore.store.chain))
+    : "";
+
   // ── Routing state ──
   const [routingTarget, setRoutingTarget] = useState<Store | null>(null);
   const [transportType, setTransportType] = useState<TransportType>("car");
@@ -715,9 +719,18 @@ export default function MapView({
             {portalPos.anchor === "top" && (
               <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderBottom: "8px solid #fff", filter: "drop-shadow(0 -2px 2px rgba(0,0,0,0.1))" }} />
             )}
-            <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)", padding: "10px 32px 10px 10px", width: 190, fontFamily: "system-ui,sans-serif", position: "relative", fontSize: 12 }}>
+            <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)", padding: "10px 32px 10px 10px", width: 220, fontFamily: "system-ui,sans-serif", position: "relative", fontSize: 12 }}>
               <button onClick={() => { setSelectedStore(null); setPortalPos(null); }} style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 999, background: "#f1f5f9", border: "none", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", padding: 0 }}>×</button>
-              <div style={{ fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{chainLabel(selectedStore.store.chain)}</div>
+              {displayCategory.length > 22 ? (
+                <div style={{ fontSize: 12, fontWeight: 700, overflow: "hidden" }}>
+                  <div className="animate-title-marquee" style={{ display: "flex", width: "max-content", whiteSpace: "nowrap" }}>
+                    <span style={{ paddingRight: 24 }}>{displayCategory}</span>
+                    <span style={{ paddingRight: 24 }}>{displayCategory}</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayCategory}</div>
+              )}
               {/* Tên cửa hàng dài → CHẠY CHỮ (2 bản nối nhau, kéo -50% là khớp) thay vì cắt "…" */}
               {selectedStore.store.name.length > 24 ? (
                 <div style={{ fontSize: 11, color: "#444", overflow: "hidden", marginTop: 1 }}>
