@@ -924,7 +924,6 @@ const EN_DICT: Record<string, string> = {
   "Đăng nhập": "Sign in",
 
   "Nhập SĐT để tiếp tục": "Enter your phone to continue",
-  "Tiếp tục": "Continue",
   "Đang kiểm tra…": "Checking…",
   "Số này chưa có tài khoản — tạo tài khoản mới": "This number has no account — create one",
   "Số {phone} chưa có tài khoản. Nhập tên để tạo tài khoản mới.": "{phone} has no account. Enter your name to create one.",
