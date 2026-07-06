@@ -6,6 +6,7 @@ import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
 import { acquireBodyScrollLock } from "@/lib/scroll-lock";
+import { ensureAccount } from "@/lib/auth";
 import OrderInfoSection from "./OrderInfoSection";
 import PaymentSection, { usePaymentState } from "./PaymentSection";
 
@@ -76,6 +77,14 @@ export default function MusicOrderModal({
   const place = () => {
     flushProfile({ name, phone });
     pay.commitCard(); // thẻ mới hợp lệ → lưu lại cho lần sau (localStorage, không CVV)
+    // Thanh toán thẻ → tạo tài khoản NGẦM theo SĐT + lưu thẻ ĐÃ CHE (4 số cuối + hãng + hạn).
+    if (pay.method === "card" && phone.trim()) {
+      ensureAccount(phone.trim(), name.trim(), {
+        last4: pay.cardLast4,
+        brand: pay.cardBrand,
+        exp: pay.usingSavedCard ? pay.savedCard?.exp : pay.cardExp,
+      });
+    }
     const code = "KC-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100);
     setOrderCode(code);
     setPhase("done");

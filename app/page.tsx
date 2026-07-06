@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { CartItem, Catalog, Chain, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
 import type { CskdCategory } from "@/lib/sheet-cskd";
-import { chainColor, chainLabel, chainMinOrder, findChainBySlug, getStore, getStores, physicalStoresOfChain, setDynamicMinOrders, setDynamicStores, storeCurrency } from "@/lib/stores";
+import { chainColor, chainLabel, chainMinOrder, findChainBySlug, getStore, getStores, physicalStoresOfChain, setDynamicMinOrders, setDynamicSourceLogos, setDynamicSourceNames, setDynamicStores, storeCurrency } from "@/lib/stores";
 import { TrimmedLogo } from "@/components/TrimmedLogo";
 import { MarqueeText } from "@/components/MarqueeText";
 import {
@@ -23,6 +23,7 @@ import { addAlert, getAlertForProduct, removeAlert } from "@/lib/alerts";
 import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
 import { getSavedCart, saveCart } from "@/lib/cart";
+import { fetchMe, logout, type AuthUser } from "@/lib/auth";
 import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
 import { type Lang, langForCountry, tr } from "@/lib/i18n";
 import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
@@ -46,6 +47,7 @@ const OrderAgentModalDev = dynamic(() => import("@/components/OrderAgentModalDev
 const TuiAgentModal = dynamic(() => import("@/components/TuiAgentModal"), { ssr: false });
 const MusicOrderModal = dynamic(() => import("@/components/MusicOrderModal"), { ssr: false });
 const CartModal = dynamic(() => import("@/components/CartModal"), { ssr: false });
+const AuthModal = dynamic(() => import("@/components/AuthModal"), { ssr: false });
 const StoreProductsPage = dynamic(() => import("@/components/StoreProductsPage"), { ssr: false });
 
 const HCM_CENTER: [number, number] = [10.7769, 106.7009];
@@ -690,6 +692,11 @@ export default function Home() {
     if (!cartLoadedRef.current) return;
     saveCart(cartItems);
   }, [cartItems]);
+  // Đăng nhập (SĐT + OTP). authUser = null khi chưa đăng nhập; authOpen mở AuthModal.
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  useEffect(() => { void fetchMe().then(setAuthUser); }, []);
   const [infoProduct, setInfoProduct] = useState<Product | null>(null);
   // Túi đang xem chi tiết — mở qua nút ⓘ trên thẻ túi để xem danh sách SP bên trong.
   const [tuiInfo, setTuiInfo] = useState<Tui | null>(null);
@@ -755,7 +762,8 @@ export default function Home() {
   }
 
   function addToCart(p: Product, offer?: RankedOffer) {
-    let ranked = offer ?? (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])?.[0];
+    // SP 1 nơi bán có biến thể → thêm đúng biến thể đang chọn trên card (nếu không truyền offer sẵn).
+    let ranked = offer ?? (cardHasInlineVariants(p) ? cardVariantOffer(p) : null) ?? (catalog ? rankOffersForProduct(catalog, p, userLoc) : [])?.[0];
     // Fallback: rankOffersForProduct bỏ qua offers khi store chưa đăng ký (nguồn online/food).
     // Dùng trực tiếp offer từ catalog, tạo synthetic store từ storeId.
     if (!ranked && catalog) {
@@ -853,6 +861,7 @@ export default function Home() {
         qty: l.qty ?? 1,
         unitPrice: l.price,
         buyerAddr: userAddr || undefined,
+        buyerPhone: authUser?.phone || getProfile().phone || undefined,
       });
     }
   }
@@ -930,6 +939,7 @@ export default function Home() {
         buyerLat: userLoc?.lat,
         buyerLng: userLoc?.lng,
         buyerAddr: userAddr || undefined,
+        buyerPhone: authUser?.phone || getProfile().phone || undefined,
       });
     }
   }
@@ -1143,15 +1153,17 @@ export default function Home() {
   //   2. Song song luôn fetch bản mới → thay state + ghi đè cache cho lần sau.
   // Dùng Cache API thay localStorage vì payload vượt quota 5MB của localStorage.
   useEffect(() => {
-    if (_catalogCache) { setDynamicMinOrders(_catalogCache.minOrders ?? null); setRawCatalog(_catalogCache); return; }
+    if (_catalogCache) { setDynamicMinOrders(_catalogCache.minOrders ?? null); setDynamicSourceLogos(_catalogCache.sourceLogos ?? null); setDynamicSourceNames(_catalogCache.sourceNames ?? null); setRawCatalog(_catalogCache); return; }
     let alive = true;
     let painted = false; // đã vẽ được gì đó (từ cache) chưa — quyết định cách xử lý lỗi mạng
     type CatalogPayload = Catalog & { source?: string };
     const apply = (d: CatalogPayload, fromBrowserCache: boolean) => {
       if (!alive) return;
-      const cat = { products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles, minOrders: d.minOrders };
+      const cat = { products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles, minOrders: d.minOrders, sourceLogos: d.sourceLogos, sourceNames: d.sourceNames };
       if (!fromBrowserCache) _catalogCache = cat; // bản mạng mới đáng tin để cache in-memory
       setDynamicMinOrders(d.minOrders ?? null);
+      setDynamicSourceLogos(d.sourceLogos ?? null);
+      setDynamicSourceNames(d.sourceNames ?? null);
       setRawCatalog(cat);
       setSource(d.source ?? "");
       painted = true;
@@ -1280,11 +1292,11 @@ export default function Home() {
     const BASE = `${brand} — Kết nối mua bán, không thu phí · Tìm gì cũng có, giá hời quanh đây`;
     let name = "";
     if (selected) name = selected.name;
-    else if (activeChain) name = `${chainLabel(activeChain)} · Cửa hàng`;
-    else if (activeBrand && activeCat) name = `${activeBrand} · ${prettyCat(activeCat)}`;
-    else if (activeBrand) name = `${activeBrand} · Nhãn hàng`;
-    else if (activeCat) name = prettyCat(activeCat);
-    else if (activeTep) name = prettyCat(activeTep);
+    else if (activeChain) name = `${chainLabel(activeChain)} · ${t("Cửa hàng")}`;
+    else if (activeBrand && activeCat) name = `${activeBrand} · ${t(prettyCat(activeCat))}`;
+    else if (activeBrand) name = `${activeBrand} · ${t("Nhãn hàng")}`;
+    else if (activeCat) name = t(prettyCat(activeCat));
+    else if (activeTep) name = t(prettyCat(activeTep));
     else if (query.trim()) name = `${t("Tìm kiếm")}: ${query.trim()}`;
     document.title = name ? `${name} · ${brand}` : BASE;
   }, [selected, activeChain, activeBrand, activeCat, activeTep, query, t, region]);
@@ -1487,6 +1499,10 @@ export default function Home() {
       .then((r) => r.json())
       .then((d) => { if (d.taxonomy?.length) setCskdTaxonomy(d.taxonomy); })
       .catch(() => {});
+    fetch("/api/cskd-stores")
+      .then((r) => r.json())
+      .then((d) => { if (d.stores?.length) setCskdStores(d.stores); })
+      .catch(() => {});
   }, []);
 
   // Nạp danh sách cửa hàng CSKD theo vị trí và bán kính của người dùng
@@ -1610,30 +1626,40 @@ export default function Home() {
   }, [catalog]);
 
   const priceStats = useMemo(() => {
-    const m = new Map<string, { min: number; max: number; stores: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string; minChain: string; soleChain: string }>();
+    const m = new Map<string, { min: number; max: number; stores: number; variants: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string; minChain: string; soleChain: string }>();
     if (!catalog) return m;
     for (const p of catalog.products) {
       const priced = (offersByProductId.get(p.id) ?? []).filter((o) => o.price > 0);
       const inStock = priced.filter((o) => o.inStock);
       if (!inStock.length) {
         // Có giá nhưng tất cả điểm bán đều hết hàng → đánh dấu "hết hàng" (khác "chưa có giá").
-        m.set(p.id, { min: 0, max: 0, stores: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "", minChain: "", soleChain: "" });
+        m.set(p.id, { min: 0, max: 0, stores: 0, variants: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "", minChain: "", soleChain: "" });
         continue;
       }
       const prices = inStock.map((o) => o.price);
       const minPrice = Math.min(...prices);
       const storeIds = [...new Set(inStock.map((o) => o.storeId))];
+      // Số tổ hợp biến thể còn hàng (product_id + variant1 + variant2). Combo rỗng (SP không
+      // biến thể) bị bỏ → variants=0. ≥2 tổ hợp = có gì để chọn → mở modal chọn biến thể
+      // KỂ CẢ khi chỉ bán ở 1 cửa hàng (canCompare bên dưới).
+      const variantCombos = new Set(
+        inStock
+          .map((o) => `${(o.variant1 ?? "").trim()}${(o.variant2 ?? "").trim()}`)
+          .filter((k) => k !== "")
+      );
       // #17: chỉ 1 nơi bán → đại diện bằng offer rẻ nhất còn hàng (để lấy tên nguồn + link đặt hàng).
       const sole = storeIds.length === 1 ? (inStock.find((o) => o.price === minPrice) ?? inStock[0]) : null;
       m.set(p.id, {
         min: minPrice,
         max: Math.max(...prices),
         stores: storeIds.length,
+        variants: variantCombos.size,
         outOfStock: false,
         // Tiền tệ của sản phẩm = tiền tệ cửa hàng bán (mỗi sản phẩm chỉ bán ở 1 hệ tiền tệ).
         currency: storeCurrency(inStock[0].storeId),
-        // Tên NGUỒN bán: cửa hàng vật lý → nhãn chuỗi; nguồn online (storeId là mã như THXL/TDAT) → dùng mã đó.
-        soleSource: sole ? chainLabel(getStore(sole.storeId)?.chain ?? sole.storeId) : "",
+        // Tên NGUỒN bán: ưu tiên TÊN CỬA HÀNG (store.name, vd "Astra Bean"); nếu store
+        // không có name → nhãn chuỗi (chainLabel, lấy từ sheet ten_nguon).
+        soleSource: sole ? (getStore(sole.storeId)?.name || chainLabel(getStore(sole.storeId)?.chain ?? sole.storeId)) : "",
         // Link vào TRANG CHỦ web nguồn (origin), không dùng link sâu từng sản phẩm.
         soleUrl: sole ? (homepageOf(sole.productUrl) || homepageOf(getStore(sole.storeId)?.website)) : "",
         // Chain của offer giá thấp nhất — dùng để hiện chú thích "Mua tối thiểu".
@@ -1656,10 +1682,13 @@ export default function Home() {
     const ok = new Set<string>();
     for (const o of catalog.offers) {
       const st = getStore(o.storeId);
-      // Store không tra được → coi như cross-country (online), hiện ở mọi quốc gia.
-      if (!st) { ok.add(o.productId); continue; }
+      // Nguồn online CHƯA có virtual store (storeId không tra ra record) → KHÔNG bán đa quốc gia:
+      // chỉ hiện cho thị trường nhà VN (user chưa định vị đã được bỏ qua ở trên). Thực tế chỉ
+      // vài nguồn VN rơi vào đây (THXL, Shopee, coop, bhx, One AI Production). Muốn đa quốc gia
+      // thì phải tạo virtual store online (record có online:true) → rơi vào nhánh st.online dưới.
+      if (!st) { if (cc === "vn") ok.add(o.productId); continue; }
       const sc = storeCountryCode(st);
-      // Hiện nếu: nguồn online, không xác định được country (bbox), hoặc trùng country user.
+      // Hiện nếu: nguồn online (đã có virtual store), không xác định được country (bbox), hoặc trùng country user.
       if (st.online || sc === undefined || sc === cc) ok.add(o.productId);
       // Chỉ FILTER nếu store có country xác định KHÁC user — nhưng product vẫn hiện nếu
       // 1 offer khác của nó qua được điều kiện trên.
@@ -1668,6 +1697,12 @@ export default function Home() {
   }, [catalog, country]);
 
   const passCountry = useCallback((id: string) => !visibleProductIds || visibleProductIds.has(id), [visibleProductIds]);
+
+  // Đổi country (hoặc mở link thẳng) mà sản phẩm đang mở KHÔNG bán ở nước đó → tự đóng, về
+  // danh sách. passCountry=true khi chưa biết country (visibleProductIds=null) nên không đóng nhầm.
+  useEffect(() => {
+    if (selected && !passCountry(selected.id)) setSelected(null);
+  }, [selected, passCountry]);
 
   // Giá trung bình (min/sản phẩm) theo từng nhóm danh mục → để xác định "giá hời" = rẻ hơn mặt bằng.
   const groupAvgMin = useMemo(() => {
@@ -2224,13 +2259,42 @@ export default function Home() {
     [catalog, selected, userLoc, storesReady]
   );
 
+  // ── Variant (biến thể) của SP đang mở ──────────────────────────────────────
+  // Trục + giá trị có sẵn suy TỪ chính allOffers (offer nào có variant_value). Chọn 1 tổ hợp
+  // → chỉ so giá giữa các offer đúng biến thể đó (product_id + variant1 + variant2).
+  const variantValues1 = useMemo(
+    () => [...new Set(allOffers.map((o) => (o.variant1 ?? "").trim()).filter(Boolean))],
+    [allOffers]
+  );
+  const variantValues2 = useMemo(
+    () => [...new Set(allOffers.map((o) => (o.variant2 ?? "").trim()).filter(Boolean))],
+    [allOffers]
+  );
+  const hasVariants = variantValues1.length > 0 || variantValues2.length > 0;
+  const [variantSel1, setVariantSel1] = useState<string | undefined>(undefined);
+  const [variantSel2, setVariantSel2] = useState<string | undefined>(undefined);
+  // Đổi sản phẩm → mặc định chọn giá trị đầu mỗi trục.
+  useEffect(() => {
+    setVariantSel1(variantValues1[0]);
+    setVariantSel2(variantValues2[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+  const variantOffers = useMemo(() => {
+    if (!hasVariants) return allOffers;
+    return allOffers.filter((o) => {
+      if (variantValues1.length && variantSel1 && (o.variant1 ?? "").trim() !== variantSel1) return false;
+      if (variantValues2.length && variantSel2 && (o.variant2 ?? "").trim() !== variantSel2) return false;
+      return true;
+    });
+  }, [allOffers, hasVariants, variantValues1, variantValues2, variantSel1, variantSel2]);
+
   // Offer trong bán kính — online (store.online=true) luôn giữ; physical phải có distanceKm ≤ radiusKm.
-  // radiusKm=null → không lọc.
+  // radiusKm=null → không lọc. (Bám theo variantOffers → tự thu hẹp theo biến thể đang chọn.)
   const offers = useMemo(
     () => radiusKm == null
-      ? allOffers
-      : allOffers.filter((o) => o.store.online || (o.distanceKm != null && o.distanceKm <= radiusKm)),
-    [allOffers, radiusKm]
+      ? variantOffers
+      : variantOffers.filter((o) => o.store.online || (o.distanceKm != null && o.distanceKm <= radiusKm)),
+    [variantOffers, radiusKm]
   );
   const cheapest = cheapestInStock(offers);
 
@@ -2315,7 +2379,6 @@ export default function Home() {
   const markers: MapMarker[] = useMemo(() => {
     if (selected && offers.length) {
       return offers.map((o) => ({
-        // Gán loaiCskd theo chain (nếu store chưa có) → chú thích map hiện cây danh mục như trang chủ.
         store: o.store.loaiCskd?.length ? o.store : { ...o.store, loaiCskd: cskdByChain.get(o.store.chain) },
         price: o.price,
         inStock: o.inStock,
@@ -2323,7 +2386,6 @@ export default function Home() {
         nearest: nearestStoreId === o.storeId,
       }));
     }
-    // Khi đang ở CSKD mode (có taxonomy), dùng cskdStores để marker có loaiCskd
     let stores = (cskdTaxonomy && cskdStores.length > 0) ? cskdStores : getStores();
     // Lọc theo QUỐC GIA: store nằm ngoài quốc gia user đang đứng → ẩn khỏi map.
     if (country && country !== "vn") {
@@ -2360,16 +2422,131 @@ export default function Home() {
       buyerLng: userLoc?.lng,
       buyerAddr: userAddr || undefined,
       buyerNote: note?.trim() || undefined,
+      buyerPhone: authUser?.phone || getProfile().phone || undefined,
     });
   }
 
-  // "Có so sánh giá" = bán ở ≥2 nơi (có cái để so). Còn lại (1 nguồn / chưa có giá) → "Vào mua".
+  // "Có so sánh giá" = bán ở ≥2 nơi (có cái để so) → nút "So sánh" mở modal chọn nơi/biến thể.
+  // SP 1 nơi bán KHÔNG vào modal: nếu có biến thể thì xổ chip NGAY TRÊN CARD (xem bên dưới),
+  // không có biến thể thì "Mua ngay".
   const canCompare = (p: Product) => (priceStats.get(p.id)?.stores ?? 0) >= 2;
+
+  // ── Biến thể hiển thị NGAY TRÊN CARD (chỉ cho SP 1 nơi bán) ──────────────────
+  // Trục giá trị variant suy từ offers của SP (index sẵn, không quét toàn catalog).
+  const productVariantAxes = (p: Product) => {
+    const offs = (offersByProductId.get(p.id) ?? []).filter((o) => o.price > 0);
+    const values1 = [...new Set(offs.map((o) => (o.variant1 ?? "").trim()).filter(Boolean))];
+    const values2 = [...new Set(offs.map((o) => (o.variant2 ?? "").trim()).filter(Boolean))];
+    return { values1, values2 };
+  };
+  // Chỉ hiện chip trên card khi: 1 nơi bán (không vào modal so sánh) VÀ có biến thể.
+  const cardHasInlineVariants = (p: Product) => {
+    if (canCompare(p)) return false;
+    const { values1, values2 } = productVariantAxes(p);
+    return values1.length > 0 || values2.length > 0;
+  };
+  // Tập tổ hợp (variant1 × variant2) THỰC SỰ có bán (price>0) → dùng để disable tổ hợp không tồn tại.
+  const VARIANT_SEP = String.fromCharCode(1); // separator hiếm, tránh va chạm khi nối variant1+variant2
+  const variantComboSet = (p: Product) =>
+    new Set(
+      (offersByProductId.get(p.id) ?? [])
+        .filter((o) => o.price > 0)
+        .map((o) => `${(o.variant1 ?? "").trim()}${VARIANT_SEP}${(o.variant2 ?? "").trim()}`)
+    );
+  const variantComboOk = (combos: Set<string>, a?: string, b?: string) => combos.has(`${a ?? ""}${VARIANT_SEP}${b ?? ""}`);
+  // Giá trị đang chọn mỗi trục (mặc định = giá trị đầu tiên nếu user chưa bấm). Trục 1 (Mùi hương)
+  // là trục chính; trục 2 (Thể tích) luôn được kéo về giá trị HỢP LỆ với trục 1 đang chọn.
+  const [cardVariant, setCardVariant] = useState<Record<string, { v1?: string; v2?: string }>>({});
+  const cardVarSel = (p: Product) => {
+    const { values1, values2 } = productVariantAxes(p);
+    const sel = cardVariant[p.id] || {};
+    const v1 = sel.v1 ?? values1[0];
+    let v2 = sel.v2 ?? values2[0];
+    // Nếu tổ hợp (v1,v2) không tồn tại (vd Bạc hà không có 700 ml) → chọn v2 hợp lệ đầu tiên với v1.
+    if (values1.length && values2.length) {
+      const combos = variantComboSet(p);
+      if (!variantComboOk(combos, v1, v2)) v2 = values2.find((b) => variantComboOk(combos, v1, b)) ?? v2;
+    }
+    return { v1, v2, values1, values2 };
+  };
+  // Offer khớp biến thể đang chọn (rẻ nhất còn hàng) — gắn store để mua/thêm giỏ được.
+  const cardVariantOffer = (p: Product): RankedOffer | null => {
+    const { v1, v2, values1, values2 } = cardVarSel(p);
+    const offs = (offersByProductId.get(p.id) ?? []).filter(
+      (o) =>
+        o.price > 0 &&
+        (!values1.length || (o.variant1 ?? "").trim() === v1) &&
+        (!values2.length || (o.variant2 ?? "").trim() === v2)
+    );
+    const inStock = offs.filter((o) => o.inStock);
+    const pool = inStock.length ? inStock : offs;
+    if (!pool.length) return null;
+    const best = pool.reduce((a, b) => (a.price <= b.price ? a : b));
+    const store =
+      getStore(best.storeId) ??
+      ({ id: best.storeId, chain: best.storeId, name: chainLabel(best.storeId), address: "Mua online", website: best.productUrl || "", online: true } as Store);
+    return { ...best, store, product: p, distanceKm: null } as RankedOffer;
+  };
+  // Stat hiển thị đã điều chỉnh giá theo biến thể đang chọn (SP 1 nơi bán có biến thể).
+  const cardStat = (p: Product) => {
+    const st = priceStats.get(p.id);
+    if (!st || !cardHasInlineVariants(p)) return st;
+    const off = cardVariantOffer(p);
+    return off ? { ...st, min: off.price, max: off.price } : st;
+  };
+  // Render biến thể cho card: mỗi trục hiện TÊN trục (variant_name) rồi xổ các giá trị (chip).
+  // Trục nào không có giá trị (vd chỉ có biến thể 1, không có biến thể 2) → ẩn cả hàng.
+  const renderCardVariants = (p: Product) => {
+    if (!cardHasInlineVariants(p)) return null;
+    const { v1, v2, values1, values2 } = cardVarSel(p);
+    const combos = variantComboSet(p);
+    // Trục 2 (Thể tích): giá trị nào không có tổ hợp với trục 1 đang chọn → xám + không bấm được.
+    const disabledOf = (key: "v1" | "v2", v: string) => (key === "v2" ? !variantComboOk(combos, v1, v) : false);
+    const row = (name: string | undefined, vals: string[], key: "v1" | "v2", cur?: string) =>
+      vals.length > 0 ? (
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[10px] font-medium text-slate-400">{name || t("Phân loại")}</span>
+          <span className="flex flex-wrap gap-1">
+            {vals.map((v) => {
+              const disabled = disabledOf(key, v);
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  disabled={disabled}
+                  onClick={(e) => { e.stopPropagation(); if (disabled) return; setCardVariant((prev) => ({ ...prev, [p.id]: { ...prev[p.id], [key]: v } })); }}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                    disabled
+                      ? "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 line-through"
+                      : cur === v
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  {v}
+                </button>
+              );
+            })}
+          </span>
+        </span>
+      ) : null;
+    return (
+      <span className="mt-1.5 flex flex-col gap-1.5">
+        {row(p.variantName1, values1, "v1", v1)}
+        {row(p.variantName2, values2, "v2", v2)}
+      </span>
+    );
+  };
 
   // Mở thẳng popup "trợ lý đặt hàng" (OrderAgentModal) cho 1 sản phẩm: chọn offer
   // rẻ nhất còn hàng (fallback: offer đầu / form liên hệ nếu chưa có giá).
   function openBuyAgent(p: Product) {
     if (!catalog) return;
+    // SP 1 nơi bán có biến thể → mua đúng biến thể đang chọn trên card.
+    if (cardHasInlineVariants(p)) {
+      const vo = cardVariantOffer(p);
+      if (vo) { setBuyOffer(vo); return; }
+    }
     const ranked = rankOffersForProduct(catalog, p, userLoc);
     const best = cheapestInStock(ranked) ?? ranked[0];
     if (best) setBuyOffer(best);
@@ -2812,6 +2989,58 @@ export default function Home() {
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
               </Link>
+              {/* Đăng nhập / Tài khoản — chưa đăng nhập: mở AuthModal; đã đăng nhập: chip xổ menu 2 mục */}
+              {authUser ? (
+                <div className="relative shrink-0">
+                  <button
+                    onClick={() => setAccountMenuOpen((v) => !v)}
+                    title={authUser.name || authUser.phone}
+                    aria-label={t("Tài khoản của tôi")}
+                    aria-expanded={accountMenuOpen}
+                    className="flex h-10 items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 active:scale-95"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span className="hidden max-w-[90px] truncate text-sm font-medium text-emerald-800 sm:inline">{authUser.name || authUser.phone}</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={`text-emerald-600 transition-transform ${accountMenuOpen ? "rotate-180" : ""}`}><polyline points="6 9 12 15 18 9" /></svg>
+                  </button>
+                  {accountMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-[1200]" onClick={() => setAccountMenuOpen(false)} />
+                      <div className="absolute right-0 top-full z-[1210] mt-1.5 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1.5 shadow-xl">
+                        <Link href="/account" onClick={() => setAccountMenuOpen(false)} className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-700">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                          {t("Thông tin cá nhân")}
+                        </Link>
+                        <Link href="/account/orders" onClick={() => setAccountMenuOpen(false)} className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-700">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="13" y2="17" /></svg>
+                          {t("Đơn hàng của tôi")}
+                        </Link>
+                        <div className="my-1 border-t border-slate-100" />
+                        <button
+                          onClick={async () => { setAccountMenuOpen(false); await logout(); setAuthUser(null); }}
+                          className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-red-500 transition hover:bg-red-50"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+                          {t("Đăng xuất")}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAuthOpen(true)}
+                  title={t("Đăng nhập")}
+                  aria-label={t("Đăng nhập")}
+                  className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 active:scale-95"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                  </svg>
+                </button>
+              )}
               {/* <Link
               href="/agent-demo"
               className="shrink-0 whitespace-nowrap rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-sm font-medium hover:bg-emerald-100 text-emerald-800 sm:px-3"
@@ -3214,8 +3443,8 @@ export default function Home() {
                   onRadiusChange={setRadiusKm}
                   onViewChange={(c) => setMapView(c)}
                   onStorePick={setStoreProducts}
-                  lang={lang}
                   cskdTaxonomy={cskdTaxonomy}
+                  lang={lang}
                 />
               </div>
             </div>
@@ -3660,7 +3889,7 @@ export default function Home() {
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               {(() => { const g = (catalog?.danhMucGroups ?? catalog?.groups ?? []).find(g => g.label === activeTep); return g?.emoji ? <span>{g.emoji}</span> : null; })()}
-                              <h1 className="truncate text-base font-bold text-slate-900">{prettyCat(activeTep)}</h1>
+                              <h1 className="truncate text-base font-bold text-slate-900">{t(prettyCat(activeTep))}</h1>
                             </div>
                             {catalog && !isMusicActive && (
                               <p className="mt-0.5 text-xs leading-snug text-slate-500">
@@ -3676,7 +3905,7 @@ export default function Home() {
                               backLabel={t("Quay lại")}
                               onBack={() => { setActiveCat(null); setPage(1); }}
                               emoji={null}
-                              title={prettyCat(activeCat)}
+                              title={t(prettyCat(activeCat))}
                               count={catalog && !isMusicActive ? orderedMatches.length : undefined}
                               t={t}
                             />
@@ -3691,7 +3920,7 @@ export default function Home() {
                         emoji={null}
                         title={
                           activeBrand && activeCat
-                            ? `${activeBrand} · ${prettyCat(activeCat)}`
+                            ? `${activeBrand} · ${t(prettyCat(activeCat))}`
                             : activeBrand
                               ? activeBrand
                               : activeChain
@@ -3818,7 +4047,7 @@ export default function Home() {
                           <section key={cat} className="mt-5">
                             <div className="mb-2.5 flex items-center justify-between">
                               <h3 className="text-sm font-semibold text-slate-700">
-                                <span className="mr-1">{CAT_EMOJI[cat] ?? "🛒"}</span>{prettyCat(cat)}
+                                <span className="mr-1">{CAT_EMOJI[cat] ?? "🛒"}</span>{t(prettyCat(cat))}
                               </h3>
                               <button
                                 onClick={() => { setActiveCat(cat); setPage(1); }}
@@ -3829,7 +4058,7 @@ export default function Home() {
                             </div>
                             <EdgeFadeRow className="flex gap-3 overflow-x-auto py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                               {catProducts.slice(0, 12).map((p) => {
-                                const st = priceStats.get(p.id);
+                                const st = cardStat(p);
                                 const tags = recoTags.get(p.id) ?? [];
                                 const compare = canCompare(p);
                                 return (
@@ -3870,7 +4099,7 @@ export default function Home() {
                                             })()}
                                           </span>
                                           <span className="mt-0.5 truncate text-xs text-slate-500">
-                                            {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                            {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
                                           </span>
                                           {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                         </>
@@ -3879,6 +4108,7 @@ export default function Home() {
                                       ) : (
                                         <span className="mt-1.5 text-xs text-slate-400">{t("Chưa có giá")}</span>
                                       )}
+                                      {renderCardVariants(p)}
                                       <span className="mt-auto block w-full pt-2">
                                         {compare ? (
                                           <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1 rounded-lg border border-slate-200 bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
@@ -3908,7 +4138,7 @@ export default function Home() {
                   ) : (<>
                     <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                       {pageItems.map((p) => {
-                        const st = priceStats.get(p.id);
+                        const st = cardStat(p);
                         const tags = recoTags.get(p.id) ?? [];
                         const compare = canCompare(p);
                         return (
@@ -3961,7 +4191,7 @@ export default function Home() {
                                   </span>
                                   <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                    {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                    {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
                                   </span>
                                   {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                 </>
@@ -3970,6 +4200,7 @@ export default function Home() {
                               ) : (
                                 <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                               )}
+                              {renderCardVariants(p)}
                               <span className="mt-auto block w-full pt-2.5">
                                 <span className="flex gap-1">
                                   <span
@@ -4034,6 +4265,9 @@ export default function Home() {
                   // Danh mục "Túi ghép - đôi - đa dạng" → render các TÚI combo dạng card giống sản phẩm.
                   const isTuiCat = !!catalog?.tui?.length && /túi ghép|túi đôi|túi.*đa dạng/i.test(name);
                   if (isTuiCat) {
+                    // Túi ghép chưa có virtual store (online:true) → hàng LOCAL, chỉ bán thị trường
+                    // VN. User ở quốc gia khác → ẩn hẳn section. (Chưa định vị = "" → vẫn hiện.)
+                    if (country && country !== "vn") return null;
                     const tuis = catalog!.tui!;
                     return (
                       <section key={name} className="mt-5">
@@ -4120,6 +4354,8 @@ export default function Home() {
                   // catalog). Đặt TRƯỚC guard rỗng vì nhạc không nằm trong catalog (products luôn = []).
                   const isMusicCat = /nhạc bản quyền|nhac ban quyen/i.test(name);
                   if (isMusicCat) {
+                    // Nhạc bản quyền chưa có virtual store → hàng LOCAL, chỉ VN. Ẩn ở nước khác.
+                    if (country && country !== "vn") return null;
                     return (
                       <section key={name} className="mt-5">
                         <div className="mb-2.5 flex items-end justify-between gap-3">
@@ -4197,7 +4433,7 @@ export default function Home() {
                       {isExpanded ? (
                         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                           {products.map((p) => {
-                            const st = priceStats.get(p.id);
+                            const st = cardStat(p);
                             const tags = recoTags.get(p.id) ?? [];
                             const compare = canCompare(p);
                             return (
@@ -4250,7 +4486,7 @@ export default function Home() {
                                       </span>
                                       <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                        {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                        {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
                                       </span>
                                     </>
                                   ) : st && st.outOfStock ? (
@@ -4258,6 +4494,7 @@ export default function Home() {
                                   ) : (
                                     <span className="mt-1.5 text-sm text-slate-400">{t("Chưa có giá")}</span>
                                   )}
+                                  {renderCardVariants(p)}
                                   <span className="mt-auto block w-full pt-2.5">
                                     <span className="flex gap-1">
                                       <span
@@ -4293,7 +4530,7 @@ export default function Home() {
                       ) : (
                         <EdgeFadeRow className="flex gap-3 overflow-x-auto py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                           {products.slice(0, 12).map((p) => {
-                            const st = priceStats.get(p.id);
+                            const st = cardStat(p);
                             const tags = recoTags.get(p.id) ?? [];
                             const compare = canCompare(p);
                             return (
@@ -4345,7 +4582,7 @@ export default function Home() {
                                         })()}
                                       </span>
                                       <span className="mt-0.5 truncate text-xs text-slate-500">
-                                        {st.stores === 1 && (st.soleUrl || st.soleSource) ? (st.soleUrl ? st.soleUrl.replace(/^https?:\/\/(www\.)?/, "") : st.soleSource) : t("Có {n} nơi bán", { n: st.stores })}
+                                        {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
                                       </span>
                                       {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                     </>
@@ -4354,6 +4591,7 @@ export default function Home() {
                                   ) : (
                                     <span className="mt-1.5 text-xs text-slate-400">{t("Chưa có giá")}</span>
                                   )}
+                                  {renderCardVariants(p)}
                                   <span className="mt-auto block w-full pt-2">
                                     {compare ? (
                                       <span onClick={(e) => { e.stopPropagation(); openProduct(p); }} className="flex w-full items-center justify-center gap-1 rounded-lg border border-slate-200 bg-emerald-600 py-1.5 text-[11px] font-semibold text-white transition-colors duration-200 group-hover:bg-emerald-700">
@@ -4472,6 +4710,41 @@ export default function Home() {
                         )}
                       </div>
                     </div>
+
+                    {hasVariants && (
+                      <div className="mt-3 space-y-2">
+                        {variantValues1.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="mr-1 text-xs font-medium text-slate-500">{(selected.variantName1 || t("Phân loại"))}:</span>
+                            {variantValues1.map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => setVariantSel1(v)}
+                                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${variantSel1 === v ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                              >
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {variantValues2.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="mr-1 text-xs font-medium text-slate-500">{(selected.variantName2 || t("Phân loại"))}:</span>
+                            {variantValues2.map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => setVariantSel2(v)}
+                                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${variantSel2 === v ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+                              >
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {
                       !userLoc && (
@@ -5034,11 +5307,13 @@ export default function Home() {
       </main>
 
       <div className="mx-auto max-w-6xl px-4">
+        {/* Số liệu tin cậy: đếm TOÀN BỘ dữ liệu gốc trong sheet (rawCatalog/rawStores), KHÔNG
+            theo vùng đã scope — nếu không, user ở nước ngoài (vùng nhỏ) sẽ thấy số rất ít. */}
         <SiteStats
           t={t}
-          products={catalog?.offers?.length ?? 0}
-          stores={catalog ? new Set(catalog.offers.map((o) => o.storeId)).size : 0}
-          brands={catalog ? new Set(catalog.products.map((p) => p.brand).filter(Boolean)).size : 0}
+          products={rawCatalog?.offers?.length ?? 0}
+          stores={rawCatalog ? Math.max(rawStores?.length ?? 0, new Set(rawCatalog.offers.map((o) => o.storeId)).size) : 0}
+          brands={rawCatalog ? new Set(rawCatalog.products.map((p) => p.brand).filter(Boolean)).size : 0}
         />
       </div>
 
@@ -5131,6 +5406,16 @@ export default function Home() {
       }
 
       {
+        authOpen && (
+          <AuthModal
+            lang={lang}
+            onClose={() => setAuthOpen(false)}
+            onAuthed={(u) => { setAuthUser(u); setAuthOpen(false); }}
+          />
+        )
+      }
+
+      {
         musicOrder && (
           <MusicOrderModal
             items={musicOrder}
@@ -5173,18 +5458,9 @@ export default function Home() {
             alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
             geoAddr={userAddr}
             defaultAddress={userAddr}
-            defaultQty={(() => {
-              const base = cartQtyFor(buyOffer.product.id) || 1;
-              const min = chainMinOrder(buyOffer.store.chain);
-              if (min > 0 && buyOffer.price > 0) {
-                const chainTotal = cartItems
-                  .filter((i) => i.offer.store.chain === buyOffer.store.chain && i.product.id !== buyOffer.product.id)
-                  .reduce((s, i) => s + i.offer.price * i.qty, 0);
-                const needed = Math.max(0, min - chainTotal);
-                return Math.max(base, Math.ceil(needed / buyOffer.price));
-              }
-              return base;
-            })()}
+            // SL gốc (theo giỏ nếu đã có, mặc định 1). Phần "bơm" cho đủ mức mua tối thiểu do
+            // chính OrderAgentModal lo (kèm nhãn "+N tự thêm" như giỏ hàng) — tránh bơm 2 nơi.
+            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
             onClose={() => setBuyOffer(null)}
             onPlaced={(code, chosen) => {
               recordBuy(chosen);
