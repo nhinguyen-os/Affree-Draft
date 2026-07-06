@@ -43,6 +43,7 @@ import { acquireBodyScrollLock, hasActiveScrollLock } from "@/lib/scroll-lock";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
+const WalmartAgentModal = dynamic(() => import("@/components/WalmartAgentModal"), { ssr: false });
 const OrderAgentModalDev = dynamic(() => import("@/components/OrderAgentModalDev"), { ssr: false });
 const TuiAgentModal = dynamic(() => import("@/components/TuiAgentModal"), { ssr: false });
 const MusicOrderModal = dynamic(() => import("@/components/MusicOrderModal"), { ssr: false });
@@ -94,6 +95,18 @@ async function forwardGeocode(q: string): Promise<GeoResult[]> {
 type Loc = { lat: number; lng: number } | null;
 type SortBy = "price" | "distance";
 type MobileView = "list" | "map";
+
+function isWalmartOffer(offer: RankedOffer | null | undefined) {
+  if (!offer) return false;
+  const hay = [
+    offer.store.chain,
+    offer.store.id,
+    offer.store.name,
+    offer.store.website,
+    offer.productUrl,
+  ].join(" ").toLowerCase();
+  return hay.includes("walmart") || hay.includes("wal-mart");
+}
 
 const CAT_EMOJI: Record<string, string> = {
   Sữa: "🥛",
@@ -5451,7 +5464,24 @@ export default function Home() {
       }
 
       {
-        buyOffer && (
+        buyOffer && isWalmartOffer(buyOffer) && (
+          <WalmartAgentModal
+            offer={buyOffer}
+            lang={lang}
+            defaultAddress={userAddr}
+            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
+            onClose={() => setBuyOffer(null)}
+            onPlaced={(code, chosen) => {
+              recordBuy(chosen);
+              setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
+              setTimeout(() => setToast(""), 4000);
+            }}
+          />
+        )
+      }
+
+      {
+        buyOffer && !isWalmartOffer(buyOffer) && (
           <ActiveOrderAgentModal
             offer={buyOffer}
             lang={lang}

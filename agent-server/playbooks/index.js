@@ -12,6 +12,7 @@ const PLAYBOOKS = {
   cooponline: require("./cooponline"),
   tuoixanhnhanhngon: require("./tuoixanhnhanhngon"),
   bhx: require("./bachhoaxanh"),
+  walmart: require("./walmart"),
 };
 
 function resolvePlaybook(payload = {}) {

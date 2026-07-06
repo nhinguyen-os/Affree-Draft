@@ -74,6 +74,10 @@ async function nominatimSearch(q: string, bounded: boolean): Promise<any[]> {
           area: areaFromAddress(d.address),
           cc: (d.address?.country_code ?? "").toLowerCase(),
           region: regionForAddress(d.address),
+          street: [d.address?.house_number, d.address?.road].filter(Boolean).join(" "),
+          city: d.address?.city || d.address?.town || d.address?.village || "",
+          state: d.address?.["ISO3166-2-lvl4"]?.split("-").at(-1) || d.address?.state || "",
+          zipCode: d.address?.postcode || "",
         };
       })
       .filter((r: any) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
@@ -98,11 +102,13 @@ async function photonSearch(q: string): Promise<any[]> {
     if (!res.ok) return [];
     const data = await res.json();
     const feats = Array.isArray(data?.features) ? data.features : [];
+    const queryHouseNumber = q.trim().match(/^(\d+[-/]?\d*[a-zA-Z]?)\s/)?.[1] || "";
     return feats
       .map((f: any) => {
         const p = f?.properties ?? {};
         const c = f?.geometry?.coordinates ?? [];
-        const line1 = [p.housenumber, p.street].filter(Boolean).join(" ") || p.name || "";
+        let line1 = [p.housenumber, p.street].filter(Boolean).join(" ") || p.name || "";
+        if (queryHouseNumber && !p.housenumber && !/^\d/.test(line1)) line1 = `${queryHouseNumber} ${line1}`;
         const label = [line1, p.city && p.city !== p.name ? p.city : "", p.state, p.country]
           .filter(Boolean)
           .join(", ");
@@ -113,6 +119,10 @@ async function photonSearch(q: string): Promise<any[]> {
           area: p.district || p.city || "",
           cc: (p.countrycode ?? "").toLowerCase(),
           region: p.state || p.city || "",
+          street: line1,
+          city: p.city || p.locality || p.county || "",
+          state: p.statecode || p.state || "",
+          zipCode: p.postcode || "",
         };
       })
       .filter((r: any) => r.label && Number.isFinite(r.lat) && Number.isFinite(r.lng));
