@@ -43,6 +43,19 @@ const cooponlinePlaybook = require("./playbooks/cooponline");
 const { updateSkillFromSession } = require("./skill-updater");
 const { domainFromUrl } = require("./skill-store");
 
+const PROXY_CONFIG = {
+  bhx: {
+    server: process.env.PROXY_SERVER,
+    username: process.env.PROXY_USERNAME,
+    password: process.env.PROXY_PASSWORD,
+  },
+  costco: {
+    server: process.env.COSTCO_PROXY_SERVER,
+    username: process.env.COSTCO_PROXY_USERNAME,
+    password: process.env.COSTCO_PROXY_PASSWORD,
+  }
+}
+
 const HAS_LLM_API_KEY = Boolean(
   process.env.QWEN_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY
 );
@@ -55,7 +68,7 @@ const DEFAULT_GEO_LON = Number(process.env.AGENT_GEO_LON || "106.6650");
 
 console.log(`[Agent Server] Đang chạy tại cổng ${PORT}...`);
 
-wss.on("connection", async (ws) => {
+wss.on("connection", async (ws, req) => {
   console.log("[Agent Server] Client mới đã kết nối. Đang khởi tạo trình duyệt...");
 
   let browser = null;
@@ -979,19 +992,33 @@ wss.on("connection", async (ws) => {
   }
 
   try {
-    browser = await chromium.launch({
+    const requestedChain = (() => {
+      try {
+        if (!req?.url) return null;
+        const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        return url.searchParams.get("chain")?.toLowerCase() || null;
+      } catch {
+        return null;
+      }
+    })();
+
+    const options = {
       headless: process.env.HEADLESS !== "false",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-blink-features=AutomationControlled"
       ],
-      proxy: {
-        server: process.env.PROXY_SERVER,
-        username: process.env.PROXY_USERNAME,
-        password: process.env.PROXY_PASSWORD
-      },
-    });
+    }
+    
+    const proxyConfig = PROXY_CONFIG[requestedChain] && PROXY_CONFIG[requestedChain].server ? PROXY_CONFIG[requestedChain] : null;
+    
+    if (proxyConfig) {
+      options.proxy = proxyConfig;
+      sendLog(`Sử dụng proxy cho chain ${requestedChain}: ${proxyConfig.server}`, "info");
+    }
+
+    browser = await chromium.launch(options);
 
     context = await browser.newContext({
       viewport: { width: 1024, height: 768 },
