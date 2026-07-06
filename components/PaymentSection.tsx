@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "react-qr-code";
-import { getSavedCard, saveCard, type SavedCard } from "@/lib/cards";
+import { getSavedCard, saveCard, fetchAccountCard, type SavedCard } from "@/lib/cards";
 import { type Lang, tr } from "@/lib/i18n";
 
 /**
@@ -45,7 +45,14 @@ export function usePaymentState() {
   const [cardExp, setCardExp] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   // Thẻ đã lưu từ lần mua trước (localStorage) — có thì mặc định dùng lại, khỏi nhập.
-  const [savedCard] = useState<SavedCard | null>(() => getSavedCard());
+  const [savedCard, setSavedCard] = useState<SavedCard | null>(() => getSavedCard());
+  // Chưa có thẻ local → lấy thẻ đã che từ tài khoản (sheet) khi đã đăng nhập (đồng bộ CartModal/OrderAgentModal).
+  useEffect(() => {
+    if (getSavedCard()) return;
+    let alive = true;
+    void fetchAccountCard().then((c) => { if (alive && c) setSavedCard(c); });
+    return () => { alive = false; };
+  }, []);
   const [useNewCard, setUseNewCard] = useState(false);
   // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) → nhập đúng mới hiện.
   const [otpCode, setOtpCode] = useState<string | null>(null);

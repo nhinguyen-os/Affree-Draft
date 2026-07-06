@@ -9,6 +9,7 @@ import { getOrderConfig } from "@/lib/orderConfig";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
 import { acquireBodyScrollLock } from "@/lib/scroll-lock";
+import { ensureAccount } from "@/lib/auth";
 import OrderInfoSection from "./OrderInfoSection";
 import PaymentSection, { CardInputs, usePaymentState } from "./PaymentSection";
 
@@ -148,9 +149,12 @@ export default function TuiAgentModal({
       return;
     }
     const cur = steps[runIdx];
-    const paused = cur.pause && !(cur.pause === "pay-card" && cardConfirmed);
+    // Chỉ dừng chờ ở bước nhập thẻ CHƯA xác nhận. Bước QR: bot tự dò giao dịch &
+    // xác nhận khi nhận được tiền (khách không cần bấm) → chờ lâu hơn cho khách kịp CK.
+    const paused = cur.pause === "pay-card" && !cardConfirmed;
     if (paused) return;
-    const id = setTimeout(() => setRunIdx((i) => i + 1), 750);
+    const delay = cur.pause === "pay-qr" ? 2800 : 750;
+    const id = setTimeout(() => setRunIdx((i) => i + 1), delay);
     return () => clearTimeout(id);
   }, [phase, runIdx, steps, cardConfirmed, onPlaced]);
 
@@ -163,6 +167,14 @@ export default function TuiAgentModal({
     setCardConfirmed(pay.method === "card" && pay.cardReady);
     // Thẻ MỚI hợp lệ → lưu lại (localStorage, không CVV) cho lần mua sau chọn nhanh.
     pay.commitCard();
+    // Thanh toán thẻ → tạo tài khoản NGẦM theo SĐT + lưu thẻ ĐÃ CHE (4 số cuối + hãng + hạn).
+    if (pay.method === "card" && phone.trim()) {
+      ensureAccount(phone.trim(), name.trim(), {
+        last4: pay.cardLast4,
+        brand: pay.cardBrand,
+        exp: pay.usingSavedCard ? pay.savedCard?.exp : pay.cardExp,
+      });
+    }
     setRunIdx(0);
     setPhase("running");
   };
@@ -338,7 +350,7 @@ export default function TuiAgentModal({
                 return (
                   <div key={i} className={`rounded-lg px-2.5 py-2 text-sm ${active ? "bg-white" : ""}`}>
                     <div className="flex items-center gap-2.5">
-                      {done ? <CheckIcon /> : pausedHere ? <span className="shrink-0">🔒</span> : active ? <Spinner /> : <PauseDot />}
+                      {done ? <CheckIcon /> : pausedHere && st.pause === "pay-card" ? <span className="shrink-0">🔒</span> : active ? <Spinner /> : <PauseDot />}
                       <span className={done ? "text-slate-500" : active ? "font-medium text-slate-800" : "text-slate-400"}>{label}</span>
                     </div>
 
@@ -358,12 +370,11 @@ export default function TuiAgentModal({
                             <p className="mt-1 text-sm font-bold text-rose-600">{formatMoney(st.amount || 0)}</p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => setRunIdx((i2) => i2 + 1)}
-                          className="mt-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                        >
-                          {t("Tôi đã chuyển khoản")}
-                        </button>
+                        {/* Bot tự dò giao dịch và xác nhận khi nhận được tiền — khách không cần bấm. */}
+                        <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                          <Spinner />
+                          <span>{t("Bot đang chờ chuyển khoản — tự xác nhận khi nhận được tiền")}</span>
+                        </div>
                       </div>
                     )}
 

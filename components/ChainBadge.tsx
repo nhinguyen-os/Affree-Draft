@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Chain } from "@/lib/types";
-import { chainColor, chainLabel } from "@/lib/stores";
+import { chainColor, chainLabel, chainLogo } from "@/lib/stores";
 
 const SHORT: Record<string, string> = {
   bhx: "BHX",
@@ -24,11 +24,18 @@ function shortLabel(chain: Chain): string {
   return SHORT[chain] ?? chainLabel(chain).slice(0, 4).toUpperCase();
 }
 
-/** Logo thật của chuỗi trên nền trắng; nếu thiếu file logo thì hiện badge chữ màu. */
+/**
+ * Logo thật của chuỗi; URL lấy từ sheet "Logo nguồn" (qua chainLogo).
+ * Thiếu logo hoặc ảnh lỗi → hiện badge chữ màu. KHÔNG bọc nền trắng/viền tròn ngoài:
+ * nhiều logo (vd BHX) tự nó đã tròn, thêm border tròn nữa thành "vòng lồng vòng".
+ * Vẫn overflow-hidden rounded-full để clip logo không tròn về khung tròn; object-contain
+ * để logo chữ nhật hiện TRỌN, không bị phóng to cắt mép.
+ */
 export function ChainBadge({ chain }: { chain: Chain }) {
   const [failed, setFailed] = useState(false);
+  const logo = chainLogo(chain);
 
-  if (failed) {
+  if (failed || !logo) {
     return (
       <span
         title={chainLabel(chain)}
@@ -43,13 +50,13 @@ export function ChainBadge({ chain }: { chain: Chain }) {
   return (
     <span
       title={chainLabel(chain)}
-      className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full bg-white shadow-sm ring-1 ring-black/10"
+      className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={`/logos/${chain}.png`}
+        src={logo}
         alt={chainLabel(chain)}
-        className="h-full w-full object-cover"
+        className="h-full w-full object-contain"
         loading="lazy"
         onError={() => setFailed(true)}
       />

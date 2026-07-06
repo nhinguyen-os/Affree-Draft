@@ -117,7 +117,7 @@ export function SiteStats({ t, products, stores, brands }: Props) {
     activity.push({ emoji: "🛒", value: totals.carts, label: t("Lượt thêm giỏ"), accent: "text-pink-600" });
   const scale: StatItem[] = [
     { emoji: "📦", value: products, label: t("Mặt hàng trên kệ"), accent: "text-slate-800" },
-    { emoji: "🏪", value: stores, label: t("Điểm bán quanh bạn"), accent: "text-slate-800" },
+    { emoji: "🏪", value: stores, label: t("Điểm bán"), accent: "text-slate-800" },
     { emoji: "🏷️", value: brands, label: t("Nhãn hiệu"), accent: "text-slate-800" },
   ];
 

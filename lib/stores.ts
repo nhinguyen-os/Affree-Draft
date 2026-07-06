@@ -61,6 +61,27 @@ const DEFAULT_COLOR = "#3948e6";
 // Override giá tối thiểu nạp từ sheet (tab "Giá tối thiểu"). Ưu tiên hơn SOURCE_META tĩnh.
 let dynamicMinOrders: Record<string, number> | null = null;
 
+// Override logo + tên hiển thị nạp từ sheet (tab "Logo nguồn", gid=1744262265).
+// NGUỒN CHÍNH: sửa ở sheet là app đổi theo. Ưu tiên hơn SOURCE_META tĩnh.
+let dynamicSourceLogos: Record<string, string> | null = null;
+let dynamicSourceNames: Record<string, string> | null = null;
+
+/** Nạp map logo theo chain từ sheet (key SLUG-hoá). null/rỗng → dùng logo tĩnh. */
+export function setDynamicSourceLogos(map: Record<string, string> | null): void {
+  if (!map || Object.keys(map).length === 0) { dynamicSourceLogos = null; return; }
+  dynamicSourceLogos = Object.fromEntries(
+    Object.entries(map).map(([k, v]) => [chainSlugify(k), v]),
+  );
+}
+
+/** Nạp map tên hiển thị theo chain từ sheet (key SLUG-hoá). null/rỗng → dùng label tĩnh. */
+export function setDynamicSourceNames(map: Record<string, string> | null): void {
+  if (!map || Object.keys(map).length === 0) { dynamicSourceNames = null; return; }
+  dynamicSourceNames = Object.fromEntries(
+    Object.entries(map).map(([k, v]) => [chainSlugify(k), v]),
+  );
+}
+
 /** Nạp bảng giá tối thiểu theo chain từ sheet (key thường-hoá). null/rỗng → dùng SOURCE_META. */
 export function setDynamicMinOrders(map: Record<string, number> | null): void {
   if (!map || Object.keys(map).length === 0) { dynamicMinOrders = null; return; }
@@ -76,8 +97,16 @@ export function chainMinOrder(chain: Chain): number {
   return (SOURCE_META[chain] ?? SOURCE_META[key])?.minOrder ?? 0;
 }
 
-/** Tên hiển thị của nguồn, có fallback cho nguồn lạ. Tra cứu không phân biệt hoa/thường (vd THXL, TDAT). */
+/**
+ * Tên hiển thị của nguồn — ưu tiên map từ sheet (setDynamicSourceNames), rồi `label`
+ * trong SOURCE_META, cuối cùng fallback về chuỗi chain thô. Tra cứu không phân biệt
+ * hoa/thường/dấu cách (vd THXL, TDAT, "Astra Bean").
+ */
 export function chainLabel(chain: Chain): string {
+  if (dynamicSourceNames) {
+    const sn = dynamicSourceNames[chainSlugify(chain)];
+    if (sn) return sn;
+  }
   return (SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()])?.label ?? chain;
 }
 
@@ -107,12 +136,18 @@ export function chainColor(chain: Chain): string {
 }
 
 /**
- * Logo thật của chuỗi — ưu tiên `logo` khai báo sẵn; nếu không có thì lấy favicon
- * từ domain `home` (dịch vụ favicon Google, luôn trả ảnh thật, không 404).
- * Trả undefined khi không có domain → caller hiện chữ viết tắt thay thế.
+ * Logo thật của chuỗi — ưu tiên map từ sheet (setDynamicSourceLogos), rồi `logo`
+ * khai báo sẵn trong SOURCE_META; nếu không có thì lấy favicon từ domain `home`
+ * (dịch vụ favicon Google, luôn trả ảnh thật, không 404).
+ * Trả undefined khi không có gì → caller hiện chữ viết tắt thay thế.
  */
 export function chainLogo(chain: Chain): string | undefined {
-  const meta = SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()];
+  const key = (chain ?? "").toLowerCase();
+  if (dynamicSourceLogos) {
+    const sl = dynamicSourceLogos[chainSlugify(chain)];
+    if (sl) return sl;
+  }
+  const meta = SOURCE_META[chain] ?? SOURCE_META[key];
   if (meta?.logo) return meta.logo;
   if (meta?.home) {
     try {

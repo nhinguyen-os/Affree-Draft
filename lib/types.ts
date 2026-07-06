@@ -44,6 +44,9 @@ export interface Product {
   listedPrice?: number;
   /** % khuyến mãi từ giá niêm yết (cột %_KHUYEN_MAI). Đơn vị: 0..1 (vd 0.22 = 22%). */
   discountPct?: number;
+  /** Tên trục variant (từ cột variant_name1/2). Vd "Size", "Màu". Trống = SP không variant. */
+  variantName1?: string;
+  variantName2?: string;
 }
 
 /** Một "offer" = một sản phẩm được bán tại một cửa hàng với giá + tồn kho. */
@@ -54,6 +57,9 @@ export interface Offer {
   inStock: boolean;
   productUrl: string;
   lastChecked: string; // ISO
+  /** Giá trị variant của offer (cột variant_value1/2). Vd "M", "Đỏ". Trống = không variant. */
+  variant1?: string;
+  variant2?: string;
 }
 
 /**
@@ -150,6 +156,10 @@ export interface Catalog {
   mealTitles?: MealTitle[];
   /** Giá mua tối thiểu theo chain (tab "Giá tối thiểu"). key thường-hoá → VND. */
   minOrders?: Record<string, number>;
+  /** Logo theo chain (tab "Logo nguồn" gid=1744262265). key thường-hoá → URL/data URI. */
+  sourceLogos?: Record<string, string>;
+  /** Tên hiển thị theo chain (tab "Logo nguồn" cột ten_nguon). key thường-hoá → tên. */
+  sourceNames?: Record<string, string>;
 }
 
 /**
@@ -177,7 +187,8 @@ export interface PurchaseRecord {
   buyerLng?: number;
   buyerAddr?: string; // địa chỉ reverse-geocode của người mua
   buyerName?: string; // họ tên người đặt mua (form "Vào mua")
-  buyerPhone?: string; // SĐT/Zalo người đặt mua
+  buyerPhone?: string; // SĐT/Zalo người đặt mua (khoá dự phòng liên kết tài khoản)
+  buyerUserId?: string; // user_id tài khoản (khoá chính) — server gắn từ phiên nếu đã đăng nhập
   buyerNote?: string; // ghi chú đơn đặt mua
 }
 
