@@ -11,6 +11,26 @@ const { domainFromUrl, loadSkillInstruction, appendToSkillInstruction } = requir
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const QWEN_API_KEY = process.env.QWEN_API_KEY;
+const QWEN_MODEL = process.env.QWEN_MODEL || "qwen3.5-flash";
+const QWEN_MODELS = (process.env.QWEN_MODELS || QWEN_MODEL)
+  .split(",")
+  .map((model) => model.trim())
+  .filter(Boolean)
+  .filter((model, index, models) => models.indexOf(model) === index);
+const QWEN_API_URL = process.env.QWEN_API_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+
+let qwenModelCursor = 0;
+
+function isRetryableQwenModelError(status, responseText) {
+  if (status === 401) return false;
+  if ([402, 403, 408, 409, 429, 500, 502, 503, 504].includes(Number(status))) return true;
+  return /quota|credit|balance|limit|rate|throttle|insufficient|unpurchased|accessdenied|model.*denied|temporar/i.test(String(responseText || ""));
+}
+
+function buildQwenModelAttemptOrder() {
+  const models = QWEN_MODELS.length > 0 ? QWEN_MODELS : [QWEN_MODEL];
+  return models.map((_, offset) => models[(qwenModelCursor + offset) % models.length]);
+}
 
 // ─── LLM Callers (raw text, không parse JSON) ────────────────────────────────
 
@@ -48,23 +68,36 @@ async function callClaudeRaw(prompt) {
 }
 
 async function callQwenRaw(prompt) {
-  const QWEN_MODEL = process.env.QWEN_MODEL || "qwen3.5-flash";
-  const QWEN_API_URL = process.env.QWEN_API_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
-  const response = await fetch(QWEN_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${QWEN_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: QWEN_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 500,
-    }),
-  });
-  if (!response.ok) throw new Error(`Qwen raw error ${response.status}`);
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || null;
+  const models = buildQwenModelAttemptOrder();
+  let lastError = null;
+
+  for (const model of models) {
+    const response = await fetch(QWEN_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${QWEN_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 500,
+      }),
+    });
+    const text = await response.text();
+
+    if (response.ok) {
+      const nextCursor = QWEN_MODELS.indexOf(model);
+      if (nextCursor >= 0) qwenModelCursor = nextCursor;
+      const data = JSON.parse(text);
+      return data.choices?.[0]?.message?.content || null;
+    }
+
+    lastError = new Error(`Qwen raw error ${response.status} (${model}): ${text}`);
+    if (!isRetryableQwenModelError(response.status, text)) throw lastError;
+  }
+
+  throw lastError || new Error("Qwen raw error: chưa cấu hình model nào");
 }
 
 async function callLLMRaw(prompt) {

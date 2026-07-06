@@ -130,6 +130,9 @@ cp .env.example .env
 | `GEMINI_MODEL`    | Model Gemini sử dụng               | `gemini-3.5-flash`     |
 | `ANTHROPIC_API_KEY` | API key Anthropic Claude         | —                      |
 | `QWEN_API_KEY`    | API key Alibaba Qwen               | —                      |
+| `QWEN_MODEL`      | Model Qwen mặc định                | `qwen3.5-flash`        |
+| `QWEN_MODELS`     | Danh sách model Qwen tự xoay khi hết quota/credit | `QWEN_MODEL` |
+| `QWEN_API_URL`    | Endpoint OpenAI-compatible của Qwen | DashScope mặc định     |
 
 ---
 

@@ -34,6 +34,7 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   dalathasfarm: { label: "Dalat Hasfarm", color: "#2e7d32", home: "https://dalathasfarm.com", online: true },
   ichiban: { label: "Ichiban Market", color: "#d32f2f", home: "https://ichibanmarket.com.vn", online: true },
   lotte: { label: "LOTTE Mart", color: "#ed1c24", home: "https://www.lottemart.vn", online: true },
+  walmart: { label: "Walmart", color: "#0071dc", home: "https://www.walmart.com", online: true, currency: "USD" },
   krmart: { label: "Korea Mart", color: "#003478", home: "https://xinchaokoreamart.com", online: true },
   astrabean: { label: "Astrabean", color: "#6f4e37", home: "https://day-sales.com/store/astrabean/product", currency: "USD" },
   tuoixanhnhanhngon: { label: "Tươi Xanh Nhanh Ngon", color: "#0f766e", home: "https://tuoixanhnhanhngon.timdaythay.com", online: true },
@@ -175,6 +176,7 @@ const SEARCH_URL: Record<string, (q: string) => string> = {
   coop: (q) => `https://cooponline.vn/?s=${encodeURIComponent(q)}`,
   aeon: (q) => `https://aeoneshop.com/?s=${encodeURIComponent(q)}`,
   pnj: (q) => `https://www.pnj.com.vn/catalogsearch/result/?q=${encodeURIComponent(q)}`,
+  walmart: (q) => `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
 };
 
 export function chainSearchUrl(chain: Chain, query: string): string {
