@@ -131,3 +131,7 @@ export async function submitBHXFinalConfirm(ctx: BhxOrderRuntime) {
 
   ws.send(JSON.stringify({ type: "confirm_final_action" }));
 }
+
+export async function submitPayment(ctx: BhxOrderRuntime) {
+  ctx.setStepIndex(8);
+}

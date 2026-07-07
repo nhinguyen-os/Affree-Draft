@@ -17,7 +17,7 @@ import { detectCardBrand, CARD_BRANDS, CARD_BRAND_STYLE } from "./PaymentSection
 import { ChainBadge } from "./ChainBadge";
 import { MarqueeText } from "./MarqueeText";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
-import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
+import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, submitPayment, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
@@ -310,7 +310,7 @@ export default function OrderAgentModal({
   const DEMO_MODE = true;
   const isCoopReal = process.env.NEXT_PUBLIC_COOP_REAL === "true" && activeOffer.store.chain === "coop";
   const isTXNNReal = !DEMO_MODE && activeOffer.store.chain === "tuoixanhnhanhngon";
-  const isBHXReal = !DEMO_MODE && activeOffer.store.chain === "bhx";
+  const isBHXReal = process.env.NEXT_PUBLIC_BHX_REAL && activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
@@ -3362,7 +3362,12 @@ export default function OrderAgentModal({
 
                               <button
                                 type="button"
-                                onClick={() => setStepIndex((x) => x + 1)}
+                                onClick={() => {
+                                  setStepIndex((x) => x + 1);
+                                  if (isBHXReal) {
+                                    void submitPayment(bhxRuntime)
+                                  }
+                                }}
                                 className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
                               >
                                 {demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
