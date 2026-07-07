@@ -363,11 +363,11 @@ async function searchAndAddToCart(page, payload, sendLog, sendMessage) {
     } catch { }
   }
 
-  sendMessage(`Đã thêm sản phẩm ${payload.productName} với số lượng ${payload.qty} vào giỏ hàng.`);
+  sendMessage(`Đã thêm sản phẩm ${payload.productName} với số lượng ${payload.qty} vào giỏ hàng.`, 'add_to_cart_success');
 
   await page.waitForTimeout(1000);
 
-  await page.goto('https://www.bachhoaxanh.com/gio-hang', { waitUntil: "load", timeout: 30000 });
+  await page.goto('https://www.bachhoaxanh.com/gio-hang', { waitUntil: "load", timeout: 40000 });
 
   sendMessage("Đi tới trang giỏ hàng.");
 }
@@ -549,7 +549,7 @@ async function handleAddressPopup(page, payload, sendLog, sendMessage) {
   }
   await page.waitForTimeout(1000);
 
-  sendMessage("Đã hoàn tất chọn địa chỉ giao hàng.");
+  sendMessage("Đã hoàn tất chọn địa chỉ giao hàng.", 'address_complete');
 }
 
 async function checkout(page, payload, sendLog, sendStatus, sendMessage) {
@@ -593,39 +593,92 @@ async function checkout(page, payload, sendLog, sendStatus, sendMessage) {
 
   await page.waitForTimeout(1000);
 
-  sendMessage("Chọn khung giờ nhận hàng.");
+  
+  const slot = payload?.slot || "";
 
-  const popupSelectors = [
-    'div:has-text("Tuỳ chọn khung giờ nhận hàng")',
-    'div:has-text("Giao ngay")',
-    'p:has-text("Giao hàng tiết kiệm (trong 24h)")',
-    'input[type="radio"][name="time"]',
-  ];
+  if (slot) {
+    sendMessage("Chọn khung giờ nhận hàng.");
 
-  for (const sel of popupSelectors) {
-    try {
-      const popup = page.locator(sel).first();
+    const popupSelectors = [
+      'div:has-text("Tuỳ chọn khung giờ nhận hàng")',
+      'div:has-text("Giao ngay")',
+      'p:has-text("Giao hàng tiết kiệm (trong 24h)")',
+      'input[type="radio"][name="time"]',
+    ];
 
-      if (await waitForVisible(popup, 1500)) {
-        sendLog(
-          "Bach Hoa Xanh: Phát hiện popup chọn thời gian nhận hàng.",
-          "info"
-        );
+    for (const sel of popupSelectors) {
+      try {
+        const popup = page.locator(sel).first();
 
-        const div = page.locator('div.w-full.bg-white.rounded-lg').first();
+        if (await waitForVisible(popup, 1500)) {
+          sendLog(
+            "Bach Hoa Xanh: Phát hiện popup chọn thời gian nhận hàng.",
+            "info"
+          );
 
-        await div.waitFor({
-          state: 'visible',
-          timeout: 10000
-        });
+          if (slot === 'today') {
+            const option = page.locator('label.radio-wrapper:has-text("Từ ")').first();
+            await option.click({ timeout: 3000 });
+          } else {
+            const now = new Date();
+            const timeSelectors = [];
+            const currentHour = now.getHours();
+            let startHour = currentHour + 1;
+            let endHour = 21;
 
-        const html = await div.evaluate(el => el.outerHTML);
-        sendMessage(html, "popup_delivery_time");
+            if (slot === 'tonight') {
+              startHour = Math.max(18, currentHour);
+              endHour = 21;
+            } else if (slot === 'tomorrow_morning') {
+              startHour = 8;
+              endHour = 11;
+              now.setDate(now.getDate() + 1);
+              const formattedDate = new Intl.DateTimeFormat('en-GB').format(now);
+              const dateOption = page.locator(`[data-delivery-date="${formattedDate}"]`).first();
+              await dateOption.click({ timeout: 3000 });
+              await page.waitForTimeout(2000);
+            } else if (slot === 'tomorrow_afternoon') {
+              startHour = 14;
+              endHour = 17;
+              now.setDate(now.getDate() + 1);
+              const formattedDate = new Intl.DateTimeFormat('en-GB').format(now);
+              const dateOption = page.locator(`[data-delivery-date="${formattedDate}"]`).first();
+              await dateOption.click({ timeout: 3000 });
+              await page.waitForTimeout(2000);
+            }
 
-        break;
-      }
-    } catch {}
+            for (let hour = startHour; hour < endHour; hour += 1) {
+              let currentHourStr = hour.toString().padStart(2, '0');
+              let nextHourStr = (hour + 1).toString().padStart(2, '0');
+
+              timeSelectors.push(`Từ ${currentHourStr}h00 - ${nextHourStr}h00`);
+            }
+
+            for (const sel of timeSelectors) {
+              try {
+                const option = page.locator(`label.radio-wrapper:has-text("${sel}")`).first();
+                if (await waitForVisible(option, 1000)) {
+                  await option.click({ timeout: 3000 });
+                  sendLog(`Bach Hoa Xanh: Đã chọn khung giờ nhận hàng: ${sel}`, "success");
+                  break;
+                }
+              } catch { }
+            }
+          }
+
+          await page.waitForTimeout(100);
+
+          sendLog(`Bach Hoa Xanh: Đã click lựa chọn giao hàng: ${slot}`, "success");
+          await page.mouse.click(0, 0);
+          await page.waitForTimeout(100);
+
+          break;
+        }
+      } catch { }
+    }
   }
+
+  sendMessage("Đã hoàn tất chọn thời gian giao hàng.", 'select_slot_complete');
 }
 
 /**
@@ -642,8 +695,7 @@ async function run(page, payload, sendLog, sendStatus, sendMessage = null, sendS
         await page.keyboard.press("Enter");
         await page.waitForTimeout(200);
         sendLog(`Bach Hoa Xanh: Đã nhập otp: "${payload.otp}".`, "success");
-        sendMessage(`Đã nhập OTP ${payload.otp}.`)
-        sendMessage('Đăng nhập thành công.')
+        sendMessage('Đăng nhập thành công.', 'login_success');
         await page.waitForTimeout(2000);
         if (sendScreenshotFrame) await sendScreenshotFrame();
       }
