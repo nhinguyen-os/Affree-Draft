@@ -3603,6 +3603,16 @@ export default function Home() {
                 {/* Đổ bóng kính 2 mép (liquid glass): hiện cả 2 bên khi hàng còn cuộn được. */}
                 {brandArrows.left && <div className={GLASS_FADE_LEFT} />}
                 {brandArrows.right && <div className={GLASS_FADE_RIGHT} />}
+                {brandArrows.left && (
+                    <button
+                      type="button"
+                      aria-label={t("Cuộn về trước")}
+                      onClick={() => brandScrollRef.current?.scrollBy({ left: -(brandScrollRef.current?.clientWidth ?? 260), behavior: "smooth" })}
+                      className="absolute left-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
+                    >
+                      ‹
+                    </button>
+                  )}
                 <div
                   ref={brandScrollRef}
                   onScroll={updateBrandArrows}
@@ -3675,11 +3685,6 @@ export default function Home() {
                         key={sp.name}
                         type="button"
                         onClick={() => {
-                          const brand = findBrandBySlug(catalog, slugify(sp.name));
-                          if (brand) {
-                            setActiveBrand(brand);
-                            return;
-                          }
                           setStoreProducts({
                             id: `__brand__${sp.name.toLowerCase().trim()}`,
                             name: sp.name,
@@ -3694,6 +3699,16 @@ export default function Home() {
                     );
                   })}
                 </div >
+                {brandArrows.right && (
+                    <button
+                      type="button"
+                      aria-label={t("Cuộn tiếp")}
+                      onClick={() => brandScrollRef.current?.scrollBy({ left: brandScrollRef.current?.clientWidth ?? 260, behavior: "smooth" })}
+                      className="absolute right-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
+                    >
+                      ›
+                    </button>
+                  )}
               </div >
             </div >
           ) : null}
