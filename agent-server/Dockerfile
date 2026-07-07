@@ -14,9 +14,11 @@ RUN npx playwright install chromium --with-deps
 # Cài đặt thêm xvfb và xauth (để giả lập display server)
 RUN apt-get update && apt-get install -y xvfb xauth && rm -rf /var/lib/apt/lists/*
 
-# Sao chép toàn bộ mã nguồn
-COPY server.js agent-llm.js ./
+# Sao chép toàn bộ module JavaScript runtime. server.js/agent-llm.js require nhiều
+# module cùng thư mục; chỉ copy hai file entrypoint sẽ làm container crash lúc boot.
+COPY *.js ./
 COPY playbooks ./playbooks
+COPY skills ./skills
 
 # Mở cổng kết nối WebSocket
 EXPOSE 8080
