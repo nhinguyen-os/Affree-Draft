@@ -54,12 +54,6 @@ const CONFIG: Record<string, OrderSourceConfig> = {
     captcha: false,
     payments: ["COD", "MoMo/ZaloPay", "Thẻ ATM/Visa/Master/JCB"],
     requirements: ["SĐT nhận hàng", "Địa chỉ giao", "Khung giờ giao"],
-    needShipping: true,
-    shippingOptions: [
-      { id: "fast", label: "Nhanh", fee: 16500, eta: "2–4 ngày" },
-      { id: "express", label: "Hoả tốc", fee: 40000, eta: "Trong ngày" },
-      { id: "saving", label: "Tiết kiệm", fee: 0, eta: "3–5 ngày" },
-    ],
   },
   concung: {
     auth: "account-login",
