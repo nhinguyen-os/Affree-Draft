@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCoopAccount } from "../../../../agent-server/account-sheet";
 import { getCoopProduct } from "@/integrations/coop/backend/client";
 import {
   COOP_MIN_ORDER_TOTAL,
@@ -38,7 +39,7 @@ type PendingFlow = {
   phone: string;
   password: string;
   terminalCode: string;
-  item: CoopCartItem;
+  items: CoopCartItem[];
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
   lineTotal: number;
@@ -58,6 +59,7 @@ type CartSession = {
   cartToken: string;
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
+  items: CoopCartItem[];
   lineTotal: number;
   browserSession?: CoopBrowserSession;
   prepared?: boolean;
@@ -108,6 +110,7 @@ function saveCartSession(input: {
   cartToken: string;
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
+  items: CoopCartItem[];
   lineTotal: number;
   browserSession?: CoopBrowserSession;
 }) {
@@ -120,6 +123,7 @@ function saveCartSession(input: {
     cartToken: input.cartToken,
     deliveryInfo: input.deliveryInfo,
     productName: input.productName,
+    items: input.items,
     lineTotal: input.lineTotal,
     browserSession: input.browserSession,
   });
@@ -174,14 +178,23 @@ function allowPasswordLogin(body: Record<string, unknown>) {
   return body.allowPasswordLogin === true || readString(body.allowPasswordLogin) === "true";
 }
 
-// Tài khoản Co.op CỦA AFFREE (đặt hộ khách) — cấu hình qua env COOP_ACCOUNT_PHONE /
-// COOP_ACCOUNT_PASSWORD. Khi có, mọi đăng nhập/token cache dùng tài khoản này; SĐT khách
-// chỉ còn là liên hệ nhận hàng trong deliveryInfo, khách KHÔNG cần mật khẩu/OTP Co.op.
-function affreeCoopAccount(): { phone: string; password: string } | null {
-  const phone = normalizeCoopPhone(process.env.COOP_ACCOUNT_PHONE || "");
-  const password = (process.env.COOP_ACCOUNT_PASSWORD || "").trim();
-  if (!isValidCoopPhone(phone) || password.length < 6) return null;
-  return { phone, password };
+// Tài khoản Co.op CỦA AFFREE được quản lý trong Google Sheet. Env chỉ chứa URL
+// ACCOUNT_ORDER_COOP_URL; SĐT khách chỉ là thông tin người nhận hàng.
+async function affreeCoopAccount(): Promise<{ phone: string; password: string }> {
+  try {
+    const account = await getCoopAccount();
+    const phone = normalizeCoopPhone(account.phone);
+    const password = String(account.password || "").trim();
+    if (!isValidCoopPhone(phone) || password.length < 6) {
+      throw new Error("Tài khoản đang active trong sheet không hợp lệ.");
+    }
+    return { phone, password };
+  } catch (error) {
+    throw new CoopOrderError(
+      error instanceof Error ? error.message : "Không đọc được tài khoản Co.op từ sheet.",
+      { status: 503, code: "COOP_AFFREE_ACCOUNT_SHEET_ERROR" },
+    );
+  }
 }
 
 function decodeCoopJwtPayload(token: string): Record<string, unknown> {
@@ -260,7 +273,7 @@ function buildDeliveryInfo(body: Record<string, unknown>, phone: string): CoopDe
   };
 }
 
-async function resolveCartItem(body: Record<string, unknown>) {
+async function resolveCartItem(body: Record<string, unknown>, options?: { skipMinOrderCheck?: boolean }) {
   const terminalCode = normalizeTerminalCode(body.terminalCode);
   const sku = extractCoopSku(body.sku, body.productUrl, body.sellerSku);
   if (!sku) {
@@ -297,7 +310,7 @@ async function resolveCartItem(body: Record<string, unknown>) {
   }
   const price = product?.price && product.price > 0 ? product.price : clientPrice;
   const lineTotal = Number.isFinite(price) ? price * quantity : 0;
-  if (lineTotal < COOP_MIN_ORDER_TOTAL) {
+  if (!options?.skipMinOrderCheck && lineTotal < COOP_MIN_ORDER_TOTAL) {
     throw new CoopOrderError("Co.op yêu cầu đơn tối thiểu 200.000đ để thanh toán.", {
       status: 400,
       code: "COOP_MIN_ORDER",
@@ -318,11 +331,85 @@ async function resolveCartItem(body: Record<string, unknown>) {
   };
 }
 
+async function resolveCartItems(body: Record<string, unknown>) {
+  const rawItems = Array.isArray(body.items) ? body.items : [];
+  if (!rawItems.length) {
+    const resolved = await resolveCartItem(body);
+    return {
+      ...resolved,
+      items: [resolved.item],
+      productName: resolved.productName,
+    };
+  }
+
+  const resolvedItems = await Promise.all(
+    rawItems.map(async (raw, index) => {
+      if (!raw || typeof raw !== "object") {
+        throw new CoopOrderError(`Sản phẩm Co.op thứ ${index + 1} không hợp lệ.`, {
+          status: 400,
+          code: "COOP_ITEM_INVALID",
+          detail: raw,
+        });
+      }
+      const itemBody = {
+        ...body,
+        ...(raw as Record<string, unknown>),
+        terminalCode: readString((raw as Record<string, unknown>).terminalCode) || readString(body.terminalCode),
+      };
+      return resolveCartItem(itemBody, { skipMinOrderCheck: true });
+    }),
+  );
+
+  const terminalCode = resolvedItems[0]?.terminalCode;
+  const mismatched = resolvedItems.find((item) => item.terminalCode !== terminalCode);
+  if (!terminalCode || mismatched) {
+    throw new CoopOrderError("Một đơn Co.op chỉ hỗ trợ các sản phẩm cùng một cửa hàng/terminal.", {
+      status: 400,
+      code: "COOP_MULTI_TERMINAL_NOT_SUPPORTED",
+      detail: { terminalCodes: resolvedItems.map((item) => item.terminalCode) },
+    });
+  }
+
+  const items = resolvedItems.map((item) => item.item);
+  const lineTotal = resolvedItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  if (lineTotal < COOP_MIN_ORDER_TOTAL) {
+    throw new CoopOrderError("Co.op yêu cầu đơn tối thiểu 200.000đ để thanh toán.", {
+      status: 400,
+      code: "COOP_MIN_ORDER",
+      detail: { minOrderTotal: COOP_MIN_ORDER_TOTAL, currentTotal: lineTotal, items },
+    });
+  }
+
+  const productName =
+    resolvedItems.length === 1
+      ? resolvedItems[0].productName
+      : `${resolvedItems[0].productName} + ${resolvedItems.length - 1} sản phẩm`;
+
+  return {
+    terminalCode,
+    item: items[0],
+    items,
+    productName,
+    lineTotal,
+    product: resolvedItems[0].product,
+    products: resolvedItems.map((item) => item.product),
+  };
+}
+
+function logCoopOrderItems(action: string, resolved: Awaited<ReturnType<typeof resolveCartItems>>) {
+  console.info("[coop/order]", action, {
+    itemCount: resolved.items.length,
+    skus: resolved.items.map((item) => item.sku),
+    terminalCode: resolved.terminalCode,
+    lineTotal: resolved.lineTotal,
+  });
+}
+
 async function addCartForPasswordLogin(input: {
   phone: string;
   password: string;
   terminalCode: string;
-  item: CoopCartItem;
+  items: CoopCartItem[];
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
   lineTotal: number;
@@ -333,7 +420,7 @@ async function addCartForPasswordLogin(input: {
   return addCartWithCoopToken({
     token,
     terminalCode: input.terminalCode,
-    item: input.item,
+    items: input.items,
     deliveryInfo: input.deliveryInfo,
     productName: input.productName,
     lineTotal: input.lineTotal,
@@ -345,7 +432,7 @@ async function addCartForPasswordLogin(input: {
 async function addCartWithCoopToken(input: {
   token: CoopTokenResponse;
   terminalCode: string;
-  item: CoopCartItem;
+  items: CoopCartItem[];
   deliveryInfo: CoopDeliveryInfo;
   productName: string;
   lineTotal: number;
@@ -356,7 +443,7 @@ async function addCartWithCoopToken(input: {
   const cartResult = await addItemToCoopAccountCart({
     accessToken: input.token.access_token,
     terminalCode: input.terminalCode,
-    item: input.item,
+    items: input.items,
     deliveryInfo: input.deliveryInfo,
   });
   const browserSession = buildBrowserSession({
@@ -371,6 +458,7 @@ async function addCartWithCoopToken(input: {
     cartToken: cartResult.cartToken,
     deliveryInfo: cartResult.deliveryInfo ?? input.deliveryInfo,
     productName: input.productName,
+    items: input.items,
     lineTotal: input.lineTotal,
     browserSession,
   });
@@ -418,10 +506,11 @@ export async function POST(req: NextRequest) {
 
       const deliveryInfo = buildDeliveryInfo(body, phone);
       const browserSessionMeta = readBrowserSessionMeta(body, deliveryInfo);
-      const resolved = await resolveCartItem(body);
+      const resolved = await resolveCartItems(body);
+      logCoopOrderItems("register", resolved);
 
       // Affree đặt hộ bằng tài khoản Affree — không đăng ký/OTP với SĐT khách.
-      const affree = affreeCoopAccount();
+      const affree = await affreeCoopAccount();
       if (affree) {
         const cachedAffree = await getCachedCoopToken(affree.phone);
         if (cachedAffree) {
@@ -429,7 +518,7 @@ export async function POST(req: NextRequest) {
             await addCartWithCoopToken({
               token: cachedAffree,
               terminalCode: resolved.terminalCode,
-              item: resolved.item,
+              items: resolved.items,
               deliveryInfo,
               productName: resolved.productName,
               lineTotal: resolved.lineTotal,
@@ -444,7 +533,7 @@ export async function POST(req: NextRequest) {
             phone: affree.phone,
             password: affree.password,
             terminalCode: resolved.terminalCode,
-            item: resolved.item,
+            items: resolved.items,
             deliveryInfo,
             productName: resolved.productName,
             lineTotal: resolved.lineTotal,
@@ -464,7 +553,7 @@ export async function POST(req: NextRequest) {
           await addCartWithCoopToken({
             token: cachedToken,
             terminalCode: resolved.terminalCode,
-            item: resolved.item,
+            items: resolved.items,
             deliveryInfo,
             productName: resolved.productName,
             lineTotal: resolved.lineTotal,
@@ -494,7 +583,7 @@ export async function POST(req: NextRequest) {
             phone,
             password,
             terminalCode: resolved.terminalCode,
-            item: resolved.item,
+            items: resolved.items,
             deliveryInfo,
             productName: resolved.productName,
             lineTotal: resolved.lineTotal,
@@ -517,7 +606,7 @@ export async function POST(req: NextRequest) {
         phone,
         password,
         terminalCode: resolved.terminalCode,
-        item: resolved.item,
+        items: resolved.items,
         deliveryInfo,
         productName: resolved.productName,
         lineTotal: resolved.lineTotal,
@@ -532,7 +621,8 @@ export async function POST(req: NextRequest) {
         lineTotal: resolved.lineTotal,
         minOrderTotal: COOP_MIN_ORDER_TOTAL,
         terminalCode: resolved.terminalCode,
-        product: resolved.product,
+        product: resolved.products?.[0] ?? resolved.product,
+        products: resolved.products ?? [resolved.product],
       });
     }
 
@@ -571,7 +661,7 @@ export async function POST(req: NextRequest) {
       const cartResult = await addItemToCoopAccountCart({
         accessToken: token.access_token,
         terminalCode: pending.terminalCode,
-        item: pending.item,
+        items: pending.items,
         deliveryInfo: pending.deliveryInfo,
       });
       const browserSession = buildBrowserSession({
@@ -585,6 +675,7 @@ export async function POST(req: NextRequest) {
         cartToken: cartResult.cartToken,
         deliveryInfo: cartResult.deliveryInfo ?? pending.deliveryInfo,
         productName: pending.productName,
+        items: pending.items,
         lineTotal: pending.lineTotal,
         browserSession,
       });
@@ -767,10 +858,11 @@ export async function POST(req: NextRequest) {
       }
       const deliveryInfo = buildDeliveryInfo(body, phone);
       const browserSessionMeta = readBrowserSessionMeta(body, deliveryInfo);
-      const resolved = await resolveCartItem(body);
+      const resolved = await resolveCartItems(body);
+      logCoopOrderItems("login", resolved);
 
       // Affree đặt hộ bằng tài khoản Affree — bỏ qua mật khẩu/token của khách.
-      const affree = affreeCoopAccount();
+      const affree = await affreeCoopAccount();
       if (affree) {
         const cachedAffree = await getCachedCoopToken(affree.phone);
         if (cachedAffree) {
@@ -778,7 +870,7 @@ export async function POST(req: NextRequest) {
             await addCartWithCoopToken({
               token: cachedAffree,
               terminalCode: resolved.terminalCode,
-              item: resolved.item,
+              items: resolved.items,
               deliveryInfo,
               productName: resolved.productName,
               lineTotal: resolved.lineTotal,
@@ -793,7 +885,7 @@ export async function POST(req: NextRequest) {
             phone: affree.phone,
             password: affree.password,
             terminalCode: resolved.terminalCode,
-            item: resolved.item,
+            items: resolved.items,
             deliveryInfo,
             productName: resolved.productName,
             lineTotal: resolved.lineTotal,
@@ -813,7 +905,7 @@ export async function POST(req: NextRequest) {
           await addCartWithCoopToken({
             token: cachedToken,
             terminalCode: resolved.terminalCode,
-            item: resolved.item,
+            items: resolved.items,
             deliveryInfo,
             productName: resolved.productName,
             lineTotal: resolved.lineTotal,
@@ -840,7 +932,7 @@ export async function POST(req: NextRequest) {
           phone,
           password,
           terminalCode: resolved.terminalCode,
-          item: resolved.item,
+          items: resolved.items,
           deliveryInfo,
           productName: resolved.productName,
           lineTotal: resolved.lineTotal,

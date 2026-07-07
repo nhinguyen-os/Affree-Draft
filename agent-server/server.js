@@ -567,6 +567,16 @@ wss.on("connection", async (ws, req) => {
           break;
         }
 
+        case "coop_payment_scanned": {
+          sendLog("Co.opmart: Người dùng đã quét QR, kiểm tra trạng thái giao dịch ngay.", "info");
+          const completed = await emitCompletionIfDetected("coop_payment");
+          if (!completed) {
+            sendStatus("coop_payment_verifying", { provider: "coop" });
+            startCompletionMonitor("coop_payment");
+          }
+          break;
+        }
+
         case "popup_switch_view": {
           if (isAutomating) break;
           const nextView = msg.view === "confirm" || msg.view === "full" ? msg.view : "qr";

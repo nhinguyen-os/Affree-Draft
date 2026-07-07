@@ -1081,18 +1081,38 @@ export async function addCoopCartItem(input: {
   item: CoopCartItem;
   clearExisting?: boolean;
 }) {
+  return addCoopCartItems({
+    accessToken: input.accessToken,
+    terminalCode: input.terminalCode,
+    cartToken: input.cartToken,
+    items: [input.item],
+    clearExisting: input.clearExisting,
+  });
+}
+
+export async function addCoopCartItems(input: {
+  accessToken: string;
+  terminalCode: string;
+  cartToken: string;
+  items: CoopCartItem[];
+  clearExisting?: boolean;
+}) {
+  if (!input.items.length) {
+    throw new CoopOrderError("Co.op cần ít nhất 1 sản phẩm để tạo giỏ.", {
+      status: 400,
+      code: "COOP_CART_ITEMS_EMPTY",
+    });
+  }
   const url = new URL(CART_ITEMS_API_URL);
   url.searchParams.set("terminal", input.terminalCode);
   const payload = {
     groups: [
       {
-        products: [
-          {
-            sku: input.item.sku,
-            sellerSku: input.item.sellerSku,
-            quantity: input.item.quantity,
-          },
-        ],
+        products: input.items.map((item) => ({
+          sku: item.sku,
+          sellerSku: item.sellerSku,
+          quantity: item.quantity,
+        })),
       },
     ],
     override: input.clearExisting === true,
@@ -1181,17 +1201,27 @@ function parseDeliveryCheck(cart: unknown): CoopDeliveryCheck {
   const service = data.deliveryServices?.find((item) => item.isSelected) ?? data.deliveryServices?.[0];
   const today = todayLocalIsoDate();
   const selectedDate = toCoopIsoDate(data.deliveryInfo?.scheduledDeliveryDate ?? null);
+  const fallbackTimeSlots = normalizeCoopDeliverySlots(service?.availableTimeSlots);
   const availableSlotsByDate: Record<string, CoopDeliverySlot[]> = {};
   for (const item of service?.availableDeliveryDateTime ?? []) {
     const date = toCoopIsoDate(item.date);
     if (!date || date < today) continue;
-    availableSlotsByDate[date] = normalizeCoopDeliverySlots(item.timeSlots);
+    const datedSlots = normalizeCoopDeliverySlots(item.timeSlots);
+    // Co.op đôi khi chỉ trả danh sách slot chung và để timeSlots theo ngày rỗng.
+    // Slot chung không an toàn cho hôm nay (có thể đã quá hạn), nhưng có thể map
+    // sang ngày tương lai và vẫn được checkout xác nhận lại phía server.
+    availableSlotsByDate[date] = datedSlots.length
+      ? datedSlots
+      : date > today
+        ? fallbackTimeSlots
+        : [];
   }
-  const availableDates = Object.keys(availableSlotsByDate);
+  const availableDates = Object.keys(availableSlotsByDate).filter((date) => availableSlotsByDate[date].length > 0);
   const slotDate = selectedDate && availableSlotsByDate[selectedDate] ? selectedDate : availableDates[0];
   const slotsForDate = slotDate ? availableSlotsByDate[slotDate] ?? [] : [];
-  const fallbackTimeSlots = normalizeCoopDeliverySlots(service?.availableTimeSlots);
-  const availableTimeSlots = slotsForDate.length ? slotsForDate : fallbackTimeSlots;
+  // Nếu có lịch theo ngày thì luôn dùng slot đã gắn với ngày ở trên.
+  const hasDateSpecificSchedule = (service?.availableDeliveryDateTime?.length ?? 0) > 0;
+  const availableTimeSlots = hasDateSpecificSchedule ? slotsForDate : fallbackTimeSlots;
   const selectedSlotFrom = data.deliveryInfo?.scheduledDeliveryTimeSlotFrom ?? null;
   const selectedSlotTo = data.deliveryInfo?.scheduledDeliveryTimeSlotTo ?? null;
 
@@ -1418,7 +1448,7 @@ export async function prepareCoopCheckout(input: {
     cartToken: confirmation.cartToken,
     locationCode,
   });
-  const realSlots = located.deliveryCheck.availableTimeSlots ?? [];
+  const realSlots = located.deliveryCheck.availableSlotsByDate?.[input.deliveryDate] ?? [];
   const matchedReal = realSlots.find((s) => s.from === input.slotFrom && s.to === input.slotTo && !s.disabled);
   if (!realSlots.length) {
     throw new CoopOrderError(
@@ -1787,9 +1817,17 @@ export async function loginAndToken(input: { flow: CoopOauthFlow; phone: string;
 export async function addItemToCoopAccountCart(input: {
   accessToken: string;
   terminalCode: string;
-  item: CoopCartItem;
+  item?: CoopCartItem;
+  items?: CoopCartItem[];
   deliveryInfo?: CoopDeliveryInfo;
 }) {
+  const items = input.items?.length ? input.items : input.item ? [input.item] : [];
+  if (!items.length) {
+    throw new CoopOrderError("Co.op cần ít nhất 1 sản phẩm để tạo giỏ.", {
+      status: 400,
+      code: "COOP_CART_ITEMS_EMPTY",
+    });
+  }
   const created = await createCoopCart({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
@@ -1799,11 +1837,11 @@ export async function addItemToCoopAccountCart(input: {
     terminalCode: input.terminalCode,
     cartToken: created.cartToken,
   });
-  const added = await addCoopCartItem({
+  const added = await addCoopCartItems({
     accessToken: input.accessToken,
     terminalCode: input.terminalCode,
     cartToken: cleared.cartToken || created.cartToken,
-    item: input.item,
+    items,
     clearExisting: true,
   });
   const cart = await getCoopCart({
