@@ -607,6 +607,17 @@ export default function Home() {
   const [activeChain, setActiveChain] = useState<string | null>(null);
   // Cửa hàng đang xem sản phẩm (mở từ pin trên bản đồ).
   const [storeProducts, setStoreProducts] = useState<Store | null>(null);
+  // Deep-link QR người bán (?sale=…): tên hiển thị "Phục vụ bởi: …". null = không có.
+  const [servedBy, setServedBy] = useState<string | null>(null);
+  // Nhãn hàng gắn kèm khi mở trang cửa hàng qua deep-link (?nhanhang=… + ?storeid=…).
+  // Chỉ dùng cho StoreProductsPage; trường hợp không kèm cửa hàng thì dùng activeBrand như cũ.
+  const [storeBrandTag, setStoreBrandTag] = useState<string | null>(null);
+  // Đã xử lý deep-link (?sale/?nhanhang/?storeid) chưa — chỉ chạy 1 lần sau khi catalog nạp.
+  const [deepLinkDone, setDeepLinkDone] = useState(false);
+  // Có deep-link đang chờ xử lý không → phủ splash che trang chủ tới khi mở đúng trang,
+  // để không "load trang chủ trước rồi mới nhảy sang trang của link". Set ngay khi mount
+  // (trước cả khi catalog nạp) nên trang chủ chưa kịp hiện tile.
+  const [pendingDeepLink, setPendingDeepLink] = useState(false);
   // Ô dịch vụ vừa bấm — để làm nổi bật (highlight) khối được chọn.
   const [activeService, setActiveService] = useState<string | null>(null);
   // Lưới dịch vụ: cuộn ngang + nút mũi tên khi nhiều ô.
@@ -1307,6 +1318,72 @@ export default function Home() {
     }
     setUrlSynced(true);
   }, [catalog, pathname, urlSynced]);
+
+  // Deep-link QR người bán (query string): ?sale=<mã> & ?nhanhang=<slug> & ?storeid=<store_id>.
+  // Cấu trúc link để PG tạo QR (xem sheet cấu hình "sale-config"):
+  //   ?sale=chauhoangtan                                 → hiện "Phục vụ bởi: <tên>"
+  //   ?sale=chauhoangtan&nhanhang=downy                  → + lọc theo nhãn hàng
+  //   ?sale=chauhoangtan&nhanhang=downy&storeid=bhx-q1   → + mở trang cửa hàng đó
+  //   ?storeid=<store_id>                                → chỉ mở trang cửa hàng (không gắn PG)
+  // Link ngắn ?sale=<mã> tự lấy nhãn hàng + cửa hàng MẶC ĐỊNH của mã đó từ sheet;
+  // tham số ghi thẳng trên URL luôn được ưu tiên. Dùng window.location.search (không phải
+  // useSearchParams) để khỏi cần bọc Suspense và chạy hẳn ở client sau khi catalog sẵn sàng.
+  // Ngay khi mount: nếu URL có deep-link thì bật splash che trang chủ (chạy trước catalog).
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("sale") || sp.get("nhanhang") || sp.get("storeid") || sp.get("storeId")) {
+      setPendingDeepLink(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!catalog || deepLinkDone) return;
+    const sp = new URLSearchParams(window.location.search);
+    const saleCode = (sp.get("sale") || "").trim();
+    let brandSlug = (sp.get("nhanhang") || "").trim();
+    let storeId = (sp.get("storeid") || sp.get("storeId") || "").trim();
+    if (!saleCode && !brandSlug && !storeId) { setDeepLinkDone(true); return; }
+
+    const apply = async (servedName?: string) => {
+      if (servedName) setServedBy(servedName);
+      if (storeId) {
+        // getStore chỉ có cửa hàng đang tải ở client (quanh vị trí). Nếu trượt, tra store_id
+        // trực tiếp từ sheet "Cửa hàng" qua /api/store-lookup để mở đúng trang dù ở tỉnh khác.
+        let st = getStore(storeId) ?? null;
+        if (!st) {
+          try {
+            const r = await fetch(`/api/store-lookup?id=${encodeURIComponent(storeId)}`);
+            const j = (await r.json()) as { store?: Store | null };
+            if (j.store) st = j.store;
+          } catch { /* mạng lỗi → bỏ qua, không mở store */ }
+        }
+        if (st) {
+          setStoreProducts(st);
+          if (brandSlug) setStoreBrandTag(brandSlug);
+        }
+      } else if (brandSlug) {
+        const brand = findBrandBySlug(catalog, brandSlug);
+        if (brand) setActiveBrand(brand);
+      }
+      setDeepLinkDone(true);
+    };
+
+    if (saleCode) {
+      fetch("/api/sale-config")
+        .then((r) => r.json())
+        .then((d: { sales?: Record<string, { ten_sale?: string; nhanhang?: string; store_id?: string }> }) => {
+          const cfg = d.sales?.[saleCode.toLowerCase()];
+          if (cfg) {
+            if (!brandSlug && cfg.nhanhang) brandSlug = cfg.nhanhang.trim();
+            if (!storeId && cfg.store_id) storeId = cfg.store_id.trim();
+          }
+          apply(cfg?.ten_sale?.trim() || saleCode);
+        })
+        .catch(() => apply(saleCode));
+    } else {
+      apply();
+    }
+  }, [catalog, deepLinkDone]);
 
   // state → document.title. Khi user mở trang chuỗi / nhãn / danh mục / sản phẩm,
   // tab trình duyệt hiển thị TÊN tương ứng (vd "Astrabean · Affree") thay vì title chung.
@@ -3094,6 +3171,30 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* Deep-link QR người bán (?sale=… không mở trang cửa hàng): banner "Phục vụ bởi: <tên>"
+          dính ngay dưới header cho dễ thấy. Bấm × để tắt. (Mở trang cửa hàng thì banner nằm
+          trong header của StoreProductsPage nên ở đây bỏ qua.) */}
+      {servedBy && !storeProducts && (
+        <div
+          className="sticky z-[2090] border-b border-emerald-200 bg-emerald-50/95 backdrop-blur"
+          style={{ top: headerH || 64 }}
+        >
+          <div className="mx-auto flex max-w-5xl items-center gap-2 px-4 py-2 text-sm">
+            <span className="text-base leading-none">🤝</span>
+            <span className="min-w-0 flex-1 text-slate-700">
+              {t("Phục vụ bởi")}: <span className="font-semibold text-emerald-700">{servedBy}</span>
+            </span>
+            <button
+              onClick={() => setServedBy(null)}
+              aria-label={t("Đóng")}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-white hover:text-slate-700"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {locOpen && (
         <LocationPanel
@@ -6030,6 +6131,15 @@ export default function Home() {
           );
         })()}
 
+      {/* Splash khi mở qua deep-link: che trang chủ tới khi trang cửa hàng/nhãn hàng sẵn sàng,
+          tránh chớp trang chủ rồi mới nhảy. Ẩn ngay khi đã xử lý xong (deepLinkDone). */}
+      {pendingDeepLink && !deepLinkDone && (
+        <div className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-4 bg-white">
+          <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-emerald-200 border-t-emerald-600" />
+          <p className="text-sm font-medium text-slate-500">{t("Đang mở đường dẫn…")}</p>
+        </div>
+      )}
+
       {/* Modal sản phẩm của 1 cửa hàng — mở từ pin trên bản đồ HOẶC từ click sponsor logo.
           Sponsor click set id = "__brand__<lower-name>" → offers filter theo brand thay vì storeId.
           Brand mode dùng RAW catalog (chưa filter region) để show full brand bất kể vùng. */}
@@ -6062,15 +6172,20 @@ export default function Home() {
               lang={lang}
               headerH={headerH}
               groupEmoji={groupEmoji}
-              onClose={() => setStoreProducts(null)}
-              onBuy={(ranked) => {
-                setStoreProducts(null);
-                setBuyOffer(ranked);
-              }}
+              servedBy={servedBy ?? undefined}
+              brandTag={storeBrandTag ?? undefined}
+              // Giữ trang cửa hàng mounted phía sau khi mở modal đặt hàng (hạ z), để đóng
+              // modal là quay lại đúng trang cửa hàng — KHÔNG rơi về trang chủ.
+              behind={!!buyOffer}
+              onClose={() => { setStoreProducts(null); setStoreBrandTag(null); }}
+              onBuy={(ranked) => setBuyOffer(ranked)}
               // Nút [+] trên card (cùng ProductCard với mọi nơi khác): thêm đúng offer đang
               // hiển thị vào giỏ, gắn cửa hàng THẬT của offer (getStore theo storeId).
               onAddToCart={(p, o) => {
-                const real = getStore(o.storeId);
+                // getStore có thể trượt với store_id kiểu sheet (vd "bhx-bhx-223-…") vì client chỉ
+                // nạp cửa hàng quanh vị trí. Non-brand mode: offer thuộc đúng cửa hàng đang mở →
+                // fallback về `storeProducts` (đã có tên chi nhánh đầy đủ) để giỏ hàng ghi đúng tên.
+                const real = getStore(o.storeId) ?? (storeProducts.id.startsWith("__brand__") ? null : storeProducts);
                 addToCart(p, real ? ({ ...o, store: real, product: p, distanceKm: null } as RankedOffer) : undefined);
               }}
               cartQtyFor={(pid) => cartItems.filter((i) => i.product.id === pid).reduce((s, i) => s + i.qty, 0)}

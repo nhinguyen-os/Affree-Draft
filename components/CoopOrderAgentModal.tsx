@@ -2915,7 +2915,7 @@ export default function CoopOrderAgentModal({
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{coopOrderSummaryName}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
+                  <MarqueeText className="mt-0.5 text-xs text-slate-700">{`${chain} · ${activeOffer.store.name}`}</MarqueeText>
                   <div className="mt-1 flex items-center gap-2">
                     <span className="text-sm font-bold text-emerald-600">
                       {formatMoney(total, storeCurrency(activeOffer.store.id))}
@@ -2987,7 +2987,7 @@ export default function CoopOrderAgentModal({
                 )}
                 <div className="min-w-[9rem] flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{coopOrderSummaryName}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
+                  <MarqueeText className="mt-0.5 text-xs text-slate-700">{`${chain} · ${activeOffer.store.name}`}</MarqueeText>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2">
                     <span className="text-base font-bold text-emerald-600">
                       {formatMoney(total, storeCurrency(activeOffer.store.id))}
@@ -3093,23 +3093,6 @@ export default function CoopOrderAgentModal({
                 </Field>
               )}
 
-              {/* Mỗi nguồn yêu cầu khác nhau */}
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <p className="text-xs font-semibold text-slate-800">
-                  {t("{chain} yêu cầu để đặt món này:", { chain })}
-                </p>
-                <ul className="mt-1 space-y-0.5">
-                  {cfg.requirements.map((r) => (
-                    <li key={r} className="flex items-start gap-1.5 text-xs text-slate-700">
-                      <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full bg-slate-400" />
-                      {t(r)}
-                    </li>
-                  ))}
-                </ul>
-                {cfg.note && (
-                  <p className="mt-1.5 text-[11px] text-slate-700">ℹ️ {t(cfg.note)}</p>
-                )}
-              </div>
 
               {cfg.needEmail && (
                 <Field label={t("Email (nhận hoá đơn)")}>

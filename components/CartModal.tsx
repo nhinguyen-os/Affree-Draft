@@ -75,6 +75,8 @@ function detectCardBrand(num: string): CardBrand | null {
 type StoreGroup = {
   storeId: string;
   storeName: string;
+  /** Tên cửa hàng chi tiết (chi nhánh cụ thể, vd "BHX 223 Nguyễn Trọng Tuyển") — hiện dưới tên chuỗi. */
+  storeDetail: string;
   chain: string;
   currency: string;
   items: CartItem[];
@@ -182,6 +184,7 @@ export default function CartModal({
       return {
         storeId,
         storeName: chainLabel(store.chain) || store.name,
+        storeDetail: store.name || "",
         chain: store.chain,
         currency: store.currency || "VND",
         items: storeItems,
@@ -769,6 +772,9 @@ export default function CartModal({
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800 truncate">{group.storeName}</p>
+                      {group.storeDetail && group.storeDetail !== group.storeName && (
+                        <p className="text-xs font-medium text-slate-600 truncate">{group.storeDetail}</p>
+                      )}
                       <p className="text-xs text-slate-500">
                         {group.items.length} {t("sản phẩm")} ·{" "}
                         <span className="font-medium text-rose-600">
