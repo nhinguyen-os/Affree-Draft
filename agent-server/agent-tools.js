@@ -151,15 +151,15 @@ const TOOLS = [
     name: "pause_for_human",
     description:
       "TERMINAL ACTION: Tạm dừng và yêu cầu người dùng can thiệp thủ công. " +
-      "Dùng khi: (1) cần nhập mã OTP, (2) giải CAPTCHA, (3) chọn địa chỉ dropdown đa tầng phức tạp, " +
-      "(4) cần chọn phương thức thanh toán không phải COD, (5) tất cả thông tin đã điền xong và cần review trước khi đặt. " +
+      "Dùng khi: (1) cần tài khoản đăng nhập, (2) cần nhập mã OTP, (3) giải CAPTCHA, (4) người dùng cần chọn màu/size, " +
+      "(5) cần nhập địa chỉ, (6) cần chọn phương thức thanh toán, (7) cần review trước khi đặt. " +
       "KHÔNG tự click nút Đặt hàng/Xác nhận cuối cùng — đây là bước cần người dùng duyệt.",
     parameters: {
       type: "object",
       properties: {
         reason: {
           type: "string",
-          enum: ["otp", "captcha", "address", "payment", "review", "stuck", "other"],
+          enum: ["credentials", "otp", "captcha", "variant", "address", "payment", "review", "stuck", "other"],
           description: "Loại can thiệp cần từ người dùng",
         },
         message: {
@@ -398,7 +398,7 @@ function buildOpenAIMessages(history, systemPrompt) {
     if (msg.role === "user") {
       messages.push({ role: "user", content: msg.content || "" });
     } else if (msg.role === "assistant") {
-      const m = { role: "assistant", content: msg.content || null };
+      const m = { role: "assistant", content: msg.content || "" };
       if (msg.toolCalls && msg.toolCalls.length > 0) {
         m.tool_calls = msg.toolCalls.map((tc) => ({
           id: tc.id,

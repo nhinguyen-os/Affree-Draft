@@ -40,6 +40,8 @@ const WebSocket = require("ws");
 const { runPlaybook, resolvePlaybook } = require("./playbooks");
 const { runAgenticToolUseLoop } = require("./agent-llm");
 const cooponlinePlaybook = require("./playbooks/cooponline");
+const walmartPlaybook = require("./playbooks/walmart");
+const { getWalmartAccount } = require("./account-sheet");
 const { updateSkillFromSession } = require("./skill-updater");
 const { domainFromUrl } = require("./skill-store");
 
@@ -65,11 +67,19 @@ const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
 const DEFAULT_GEO_LAT = Number(process.env.AGENT_GEO_LAT || "10.8050");
 const DEFAULT_GEO_LON = Number(process.env.AGENT_GEO_LON || "106.6650");
+const CHROME_LAUNCH_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+  "--disable-save-password-bubble",
+  "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication",
+];
 
 console.log(`[Agent Server] Đang chạy tại cổng ${PORT}...`);
 
 wss.on("connection", async (ws, req) => {
   console.log("[Agent Server] Client mới đã kết nối. Đang khởi tạo trình duyệt...");
+  const connectionUrl = new URL(req?.url || "/", `ws://localhost:${PORT}`);
+  const connectionChain = String(connectionUrl.searchParams.get("chain") || "").toLowerCase();
+  const isWalmartConnection = connectionChain === "walmart";
 
   let browser = null;
   let context = null;
@@ -81,6 +91,7 @@ wss.on("connection", async (ws, req) => {
   let popupFocusState = null;
   let popupFrameInterval = null;
   let completionMonitor = null;
+  let walmartCaptchaMonitor = null;
   let completionSent = false;
   let paymentFailureSent = false;
   let lastPaymentOrderCode = null;
@@ -156,11 +167,61 @@ wss.on("connection", async (ws, req) => {
   function startPopupFrameInterval() {
     clearPopupFrameInterval();
     if (!popupFocusState) return;
-    popupFrameInterval = setInterval(() => {
+    popupFrameInterval = setInterval(async () => {
+      if (popupFocusState?.kind === "walmart_variant" && !popupFocusState.freezeBounds) {
+        const nextBounds = await detectWalmartVariantBounds();
+        if (nextBounds) popupFocusState.bounds = nextBounds;
+      }
       const clip = getPopupFrameBounds(popupFocusState);
       if (!clip) return;
       void sendScreenshotFrame({ clip, mode: `popup-focus-${popupFocusState.view || "full"}` });
     }, 1200);
+  }
+
+  async function detectWalmartVariantBounds() {
+    if (!page || page.isClosed()) return null;
+    const clip = await page.evaluate(() => {
+      const viewportWidth = window.innerWidth || 1024;
+      const viewportHeight = window.innerHeight || 768;
+      const visible = (node) => {
+        const rect = node.getBoundingClientRect();
+        const style = window.getComputedStyle(node);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      };
+      const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const candidates = Array.from(document.querySelectorAll(
+        '[data-testid="variant-tile-chip"], [aria-label*="Color" i], [aria-label*="Size" i], button[data-automation-id*="variant" i]'
+      )).filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < viewportHeight;
+      });
+      if (!candidates.length) return null;
+      const title = Array.from(document.querySelectorAll('h1')).find((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, div, span, p")).filter((node) => {
+        if (!visible(node)) return false;
+        const ownText = clean(Array.from(node.childNodes)
+          .filter((child) => child.nodeType === Node.TEXT_NODE)
+          .map((child) => child.textContent)
+          .join(" "));
+        return /^(?:color|colour|clothing size|shoe size|size)\s*:/i.test(ownText);
+      });
+      const rects = [...candidates, title, ...headings].filter(Boolean).map((node) => node.getBoundingClientRect());
+      const minTop = Math.min(...rects.map((rect) => rect.top).filter(Number.isFinite));
+      const maxBottom = Math.max(...rects.map((rect) => rect.bottom).filter(Number.isFinite));
+      const titleTop = title?.getBoundingClientRect().top;
+      const top = Math.max(0, Math.min(Number.isFinite(titleTop) ? titleTop - 28 : minTop - 28, minTop - 28));
+      const bottom = Math.min(viewportHeight, Math.max(maxBottom + 28, top + 360));
+      return {
+        x: 0,
+        y: top,
+        width: Math.max(420, Math.min(Math.round(viewportWidth * 0.76), viewportWidth - 8)),
+        height: Math.max(320, bottom - top),
+      };
+    }).catch(() => null);
+    return clip ? normalizeClip(clip) : null;
   }
 
   function normalizeClip(clip) {
@@ -180,7 +241,15 @@ wss.on("connection", async (ws, req) => {
     const maxHeight = Math.max(1, viewport.height - y);
     const width = Math.max(1, Math.min(maxWidth, Math.floor(Number(clip.width) || 0)));
     const height = Math.max(1, Math.min(maxHeight, Math.floor(Number(clip.height) || 0)));
-    return { x, y, width, height };
+    return {
+      ...clip,
+      x,
+      y,
+      width,
+      height,
+      sourceX: Number.isFinite(Number(clip.sourceX)) ? Number(clip.sourceX) : x,
+      sourceY: Number.isFinite(Number(clip.sourceY)) ? Number(clip.sourceY) : y,
+    };
   }
 
   // Gửi message tự do về client (BHX dùng để gửi popup chọn giờ/OTP).
@@ -193,8 +262,38 @@ wss.on("connection", async (ws, req) => {
     }
   }
 
+  async function focusWalmartVariantArea() {
+    if (!page || page.isClosed()) return;
+    const clip = await detectWalmartVariantBounds() || normalizeClip({ x: 0, y: 120, width: 780, height: 648 });
+
+    popupFocusState = {
+      kind: "walmart_variant",
+      view: "variant",
+      title: "Chọn màu và size",
+      text: "Chọn biến thể sản phẩm trước khi thêm vào giỏ.",
+      actions: [],
+      freezeBounds: true,
+      bounds: normalizeClip(clip),
+    };
+    sendPopupState(popupFocusState);
+    startPopupFrameInterval();
+    await sendScreenshotFrame({ clip: popupFocusState.bounds, mode: "walmart-variant" });
+  }
+
   // Gửi cập nhật trạng thái đặt hàng về client
   function sendStatus(phase, details = {}) {
+    if (
+      phase === "waiting_user_input"
+      && isWalmartPayload(lastOrderPayload || {})
+      && ["address", "payment", "checkout_options"].includes(details?.pauseReason)
+    ) {
+      details = {
+        ...details,
+        pauseReason: "review",
+        nativeForm: false,
+      };
+    }
+
     try {
       ws.send(JSON.stringify({ type: "status", phase, ...details }));
     } catch (e) { }
@@ -208,10 +307,58 @@ wss.on("connection", async (ws, req) => {
       return;
     }
 
+    if (phase === "waiting_user_input" && details?.pauseReason === "variant" && isWalmartPayload(lastOrderPayload || {})) {
+      if (details?.nativeForm && Array.isArray(details?.optionGroups) && details.optionGroups.length > 0) {
+        clearPopupFrameInterval();
+        sendPopupState(null);
+        return;
+      }
+      void focusWalmartVariantArea();
+      return;
+    }
+
+    if (phase === "waiting_user_input" && details?.pauseReason === "captcha" && isWalmartPayload(lastOrderPayload || {})) {
+      clearPopupFrameInterval();
+      sendPopupState(null);
+      void page?.bringToFront().catch(() => { });
+      void sendScreenshotFrame({ mode: "walmart-captcha" });
+      startWalmartCaptchaMonitor();
+      return;
+    }
+
+    if (phase === "waiting_user_input" && details?.pauseReason === "review" && isWalmartPayload(lastOrderPayload || {})) {
+      clearPopupFrameInterval();
+      sendPopupState(null);
+      void page?.bringToFront().catch(() => { });
+      void sendScreenshotFrame({ mode: "walmart-review" });
+      return;
+    }
+
     if (phase === "running" || phase === "completed" || phase === "failed" || phase === "cancelled") {
+      stopWalmartCaptchaMonitor();
       clearPopupFrameInterval();
       sendPopupState(null);
     }
+  }
+
+  function isWalmartPayload(payload = {}) {
+    if (String(payload.chain || "").toLowerCase() === "walmart") return true;
+    try {
+      const hostname = new URL(payload.url || "").hostname.replace(/^www\./, "");
+      return hostname === "walmart.com" || hostname.endsWith(".walmart.com");
+    } catch {
+      return false;
+    }
+  }
+
+  function bindContextPageEvents(targetContext) {
+    targetContext.on("page", async (newPage) => {
+      bindPaymentPageEvents(newPage);
+      await newPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
+      if (isPaymentGatewayUrl(newPage.url())) {
+        await switchScreencastPage(newPage, "payment-popup");
+      }
+    });
   }
 
   async function handleClientMessage(messageStr) {
@@ -322,6 +469,20 @@ wss.on("connection", async (ws, req) => {
           }
           sendClientLog(`Đã nhận lệnh đặt hàng cho: ${msg.payload?.productName || msg.productName || "unknown product"}`, "info");
           lastOrderPayload = msg.payload || msg;
+          if (isWalmartPayload(lastOrderPayload) && !lastOrderPayload.account?.email) {
+            try {
+              const account = await getWalmartAccount();
+              lastOrderPayload = {
+                ...lastOrderPayload,
+                account,
+                customer: { ...(lastOrderPayload.customer || {}), email: lastOrderPayload.customer?.email || "" },
+              };
+              sendLog("Walmart: Đã lấy tài khoản đặt hộ từ sheet.", "success");
+            } catch (error) {
+              sendStatus("failed", { error: error.message });
+              break;
+            }
+          }
           isBachHoaXanhFlow = lastOrderPayload?.chain === "bhx";
           runAutomatedOrder(lastOrderPayload);
           break;
@@ -410,6 +571,16 @@ wss.on("connection", async (ws, req) => {
           break;
         }
 
+        case "coop_payment_scanned": {
+          sendLog("Co.opmart: Người dùng đã quét QR, kiểm tra trạng thái giao dịch ngay.", "info");
+          const completed = await emitCompletionIfDetected("coop_payment");
+          if (!completed) {
+            sendStatus("coop_payment_verifying", { provider: "coop" });
+            startCompletionMonitor("coop_payment");
+          }
+          break;
+        }
+
         case "popup_switch_view": {
           if (isAutomating) break;
           const nextView = msg.view === "confirm" || msg.view === "full" ? msg.view : "qr";
@@ -471,12 +642,154 @@ wss.on("connection", async (ws, req) => {
 
         case "resume_agent":
           // Người dùng bấm "Tiếp tục đặt hàng" trên GUI sau khi hoàn thành bước thủ công
+          if (msg.reason === "variant" && lastOrderPayload && isWalmartPayload(lastOrderPayload)) {
+            lastOrderPayload = { ...lastOrderPayload, variantConfirmed: true };
+          }
           await resumeAgenticLoop(msg.reason || "manual_resume", async () => {
             const note = msg.note || "";
             if (note) sendLog(`Ghi chú người dùng: ${note}`, "info");
             sendLog("Người dùng đã xác nhận hoàn thành bước thủ công. Tiếp tục...", "success");
           });
           break;
+
+        case "walmart_submit_credentials": {
+          if (!lastOrderPayload || !isWalmartPayload(lastOrderPayload)) {
+            sendStatus("failed", { error: "Không có phiên Walmart để cập nhật tài khoản." });
+            break;
+          }
+          const email = String(msg.account?.email || "").trim();
+          const password = String(msg.account?.password || "");
+          if (!email || !password) {
+            sendStatus("waiting_user_input", {
+              reason: "Vui lòng nhập email và mật khẩu Walmart.",
+              pauseReason: "credentials",
+            });
+            break;
+          }
+          lastOrderPayload = {
+            ...lastOrderPayload,
+            account: { email, password },
+            customer: { ...(lastOrderPayload.customer || {}), email },
+          };
+          sendLog("Walmart: Đã nhận tài khoản, bắt đầu đăng nhập.", "success");
+          await resumeAgenticLoop("credentials_submitted");
+          break;
+        }
+
+        case "walmart_submit_options": {
+          if (!lastOrderPayload || !isWalmartPayload(lastOrderPayload)) {
+            sendStatus("failed", { error: "Không có phiên Walmart để cập nhật lựa chọn." });
+            break;
+          }
+          const stage = String(msg.stage || "");
+          const selections = msg.selections || {};
+          try {
+            if (await walmartBlockingOverlayVisible()) {
+              await pauseForWalmartCaptcha("Walmart đang yêu cầu xác minh trước khi chọn biến thể. Vui lòng xử lý trực tiếp trên màn hình.");
+              break;
+            }
+
+            // ── stage: color_preview — click màu trên Walmart thật, re-extract size mới ──
+            if (stage === "color_preview") {
+              const colorSelection = selections.color;
+              if (!colorSelection) break;
+              try {
+                await walmartPlaybook.applyOptions(page, { color: colorSelection });
+                sendLog(`Walmart: Đã click màu ${colorSelection.label || colorSelection}, đang đọc lại size...`, "info");
+                await page.waitForTimeout(700);
+                const freshGroups = await walmartPlaybook.extractVariantGroups(page);
+                // Đánh dấu đang trong quá trình chọn variant để AI không hỏi lại
+                lastOrderPayload = { ...lastOrderPayload, _colorSelected: colorSelection.label || colorSelection };
+                sendStatus("waiting_user_input", {
+                  reason: "Vui lòng chọn màu và kích thước.",
+                  pauseReason: "variant",
+                  optionGroups: freshGroups,
+                  nativeForm: true,
+                });
+              } catch (colorErr) {
+                sendLog(`Walmart: Không click được màu (${colorErr.message}), giữ nguyên UI.`, "warning");
+              }
+              break;
+            }
+
+            const applied = await walmartPlaybook.applyOptions(page, selections);
+            sendLog(`Walmart: Đã áp dụng lựa chọn ${applied.join(", ") || stage}.`, "success");
+            if (stage === "variant") {
+              lastOrderPayload = { ...lastOrderPayload, variantConfirmed: true };
+              const cartResult = await walmartPlaybook.addProductToCart(page, lastOrderPayload);
+              if (cartResult.success) {
+                lastOrderPayload = { ...lastOrderPayload, cartReady: true };
+
+                // Tự động fill địa chỉ giao hàng từ Affree vào Walmart cart
+                sendLog("Walmart: Đang cập nhật địa chỉ giao hàng...", "info");
+                const addrResult = await walmartPlaybook.fillAddressInCart(page, lastOrderPayload);
+                if (addrResult.skipped) {
+                  sendLog("Walmart: Địa chỉ đã đúng, bỏ qua cập nhật.", "info");
+                } else if (addrResult.success) {
+                  sendLog("Walmart: Đã cập nhật địa chỉ giao hàng thành công.", "success");
+                } else {
+                  sendLog(`Walmart: Không cập nhật được địa chỉ (${addrResult.reason}), tiếp tục checkout.`, "warning");
+                }
+
+                const checkoutResult = await walmartPlaybook.openCheckoutFromCart(page);
+                if (!checkoutResult.success) {
+                  await resumeAgenticLoop("variant_selected");
+                  break;
+                }
+
+                // Tự động fill địa chỉ ở trang checkout nếu form đang hiện
+                if (/walmart\.com\/checkout/i.test(page.url())) {
+                  sendLog("Walmart: Đang fill địa chỉ tại checkout...", "info");
+                  const checkoutAddrResult = await walmartPlaybook.fillAddressInCheckout(page, lastOrderPayload);
+                  if (checkoutAddrResult.skipped) {
+                    sendLog("Walmart: Địa chỉ checkout đã đúng, bỏ qua.", "info");
+                  } else if (checkoutAddrResult.success) {
+                    sendLog("Walmart: Đã fill địa chỉ tại checkout thành công.", "success");
+                  } else {
+                    sendLog(`Walmart: Không fill được địa chỉ checkout (${checkoutAddrResult.reason}), để user tự điền.`, "warning");
+                  }
+                  await page.waitForTimeout(800);
+                  await sendScreenshotFrame({ mode: "walmart-checkout" });
+                }
+
+                isAutomating = false;
+                await sendScreenshotFrame({ mode: "walmart-checkout" });
+                sendStatus("waiting_user_input", {
+                  reason: "Walmart đã mở checkout hoặc form địa chỉ. Vui lòng kiểm tra thông tin và tiếp tục trực tiếp trên màn hình.",
+                  pauseReason: "review",
+                  checkoutUrl: page.url(),
+                  nativeForm: false,
+                });
+              } else {
+                await resumeAgenticLoop("variant_selected");
+              }
+              break;
+            }
+
+            await sendScreenshotFrame({ mode: "walmart-review" }).catch(() => { });
+            sendStatus("waiting_user_input", {
+              reason: "Walmart đã mở màn hình cần thao tác. Vui lòng tiếp tục trực tiếp trên màn hình Walmart.",
+              pauseReason: "review",
+              checkoutUrl: page.url(),
+              nativeForm: false,
+            });
+          } catch (error) {
+            const message = String(error?.message || error || "");
+            const blockedByOverlay = /intercepts pointer events|OverlayScrim|ModalPortal|robot or human|captcha|press\s*&?\s*hold|nhấn\s+và\s+giữ|vui lòng thử lại/i.test(message)
+              || await walmartBlockingOverlayVisible();
+            if (blockedByOverlay) {
+              await pauseForWalmartCaptcha("Walmart đang có màn hình xác minh/lớp phủ che lựa chọn. Vui lòng xử lý trực tiếp trên màn hình.");
+              break;
+            }
+            sendLog(`Walmart: Không áp dụng được lựa chọn (${message}), mở màn hình dự phòng.`, "warning");
+            sendStatus("waiting_user_input", {
+              reason: "Walmart đã cập nhật giao diện. Vui lòng chọn trực tiếp trên màn hình.",
+              pauseReason: stage === "variant" ? "variant" : "review",
+              nativeForm: false,
+            });
+          }
+          break;
+        }
 
         case "coop_show_cart":
           if (isAutomating) {
@@ -725,6 +1038,120 @@ wss.on("connection", async (ws, req) => {
   function stopCompletionMonitor() {
     if (completionMonitor) clearInterval(completionMonitor);
     completionMonitor = null;
+  }
+
+  function stopWalmartCaptchaMonitor() {
+    if (walmartCaptchaMonitor) clearInterval(walmartCaptchaMonitor);
+    walmartCaptchaMonitor = null;
+  }
+
+  async function walmartCaptchaStillVisible() {
+    if (!page || page.isClosed()) return false;
+    return page.evaluate(() => {
+      const bodyText = String(document.body?.innerText || "").replace(/\s+/g, " ");
+      const dialogText = Array.from(document.querySelectorAll("iframe, [role='dialog'], div, main"))
+        .slice(0, 300)
+        .map((node) => String(node.getAttribute?.("title") || node.getAttribute?.("aria-label") || node.textContent || ""))
+        .join(" ")
+        .replace(/\s+/g, " ");
+      const text = `${bodyText} ${dialogText}`;
+      return /robot or human|press\s*&\s*hold|activate and hold|confirm that you'?re human|please try again|nhấn\s+và\s+giữ|nhan\s+va\s+giu|vui lòng thử lại|vui long thu lai/i.test(text);
+    }).catch(() => false);
+  }
+
+  async function walmartBlockingOverlayVisible() {
+    if (!page || page.isClosed()) return false;
+    if (await walmartCaptchaStillVisible()) return true;
+    return page.evaluate(() => {
+      const captchaPattern = /robot or human|press\s*&\s*hold|activate and hold|confirm that you'?re human|please try again|nhấn\s+và\s+giữ|nhan\s+va\s+giu|vui lòng thử lại|vui long thu lai/i;
+      const selectors = [
+        '[class*="OverlayScrim_scrim"]',
+        '[class*="ModalPortal_scrim"]',
+        '.OverlayScrim_scrim__x5LLJ',
+        '.ModalPortal_scrim__jLfxn',
+        '[aria-modal="true"]',
+        '[role="dialog"]',
+      ];
+
+      return selectors.some((selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const rect = node.getBoundingClientRect();
+        const style = window.getComputedStyle(node);
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        if (Number(style.opacity || "1") <= 0.01) return false;
+        if (style.pointerEvents === "none") return false;
+
+        const text = String(node.textContent || node.getAttribute?.("aria-label") || "");
+        const className = String(node.className || "");
+        return captchaPattern.test(text) || /OverlayScrim|ModalPortal/.test(className);
+      });
+    }).catch(() => false);
+  }
+
+  async function pauseForWalmartCaptcha(reason = "Walmart đang yêu cầu xác minh. Vui lòng thao tác trên màn hình rồi Affree sẽ tự tiếp tục.") {
+    if (!page || page.isClosed()) {
+      sendStatus("failed", { error: "Trình duyệt Walmart đã đóng." });
+      return;
+    }
+    isAutomating = false;
+    clearPopupFrameInterval();
+    sendPopupState(null);
+    sendLog("Walmart: CAPTCHA hoặc lớp xác minh đang che màn hình. Chuyển sang stream để người dùng xử lý.", "warning");
+    await page.bringToFront().catch(() => { });
+    sendStatus("waiting_user_input", {
+      reason,
+      pauseReason: "captcha",
+      nativeForm: false,
+    });
+  }
+
+  function startWalmartCaptchaMonitor() {
+    stopWalmartCaptchaMonitor();
+    if (!lastOrderPayload || !isWalmartPayload(lastOrderPayload) || !page || page.isClosed()) return;
+
+    const startedAt = Date.now();
+    const startUrl = page.url();
+    let sawCaptchaText = false;
+
+    walmartCaptchaMonitor = setInterval(async () => {
+      if (
+        !lastOrderPayload ||
+        !isWalmartPayload(lastOrderPayload) ||
+        !page ||
+        page.isClosed() ||
+        ws.readyState !== WebSocket.OPEN
+      ) {
+        stopWalmartCaptchaMonitor();
+        return;
+      }
+      if (isAutomating) return;
+
+      if (Date.now() - startedAt > 10 * 60 * 1000) {
+        stopWalmartCaptchaMonitor();
+        return;
+      }
+
+      const currentUrl = page.url();
+      const urlChanged = currentUrl !== startUrl;
+      const leftBlockedPage = /walmart\.com\/blocked/i.test(startUrl) && !/walmart\.com\/blocked/i.test(currentUrl);
+      const stillVisible = await walmartCaptchaStillVisible();
+      if (stillVisible) {
+        sawCaptchaText = true;
+        return;
+      }
+
+      const waitedLongEnough = Date.now() - startedAt > 1200;
+      if (!leftBlockedPage && !urlChanged && (!sawCaptchaText || !waitedLongEnough)) return;
+
+      stopWalmartCaptchaMonitor();
+      sendLog("Walmart: CAPTCHA đã được xử lý, tự tiếp tục luồng.", "success");
+      await resumeAgenticLoop("captcha_auto_resolved", async () => {
+        await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
+        await page.waitForTimeout(600);
+      });
+    }, 1000);
   }
 
   async function emitCompletionIfDetected(source = "screen_share_monitor") {
@@ -984,8 +1411,8 @@ wss.on("connection", async (ws, req) => {
         data: data.toString("base64"),
         width: clip.width,
         height: clip.height,
-        sourceX: clip.x,
-        sourceY: clip.y,
+        sourceX: Number.isFinite(Number(options.sourceX)) ? Number(options.sourceX) : (Number.isFinite(Number(clip.sourceX)) ? Number(clip.sourceX) : clip.x),
+        sourceY: Number.isFinite(Number(options.sourceY)) ? Number(options.sourceY) : (Number.isFinite(Number(clip.sourceY)) ? Number(clip.sourceY) : clip.y),
         sourceWidth: clip.width,
         sourceHeight: clip.height,
         mode: options.mode || (options.clip ? "partial" : "full"),
@@ -1006,38 +1433,50 @@ wss.on("connection", async (ws, req) => {
       }
     })();
 
-    const options = {
-      headless: process.env.HEADLESS !== "false",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-blink-features=AutomationControlled"
-      ],
-    }
-    
-    const proxyConfig = PROXY_CONFIG[requestedChain] && PROXY_CONFIG[requestedChain].server ? PROXY_CONFIG[requestedChain] : null;
-    
-    if (proxyConfig) {
-      options.proxy = proxyConfig;
-      sendLog(`Sử dụng proxy cho chain ${requestedChain}: ${proxyConfig.server}`, "info");
+    let options;
+    if (isWalmartConnection) {
+      // Walmart: dùng Chrome thật, headed, --start-maximized
+      options = {
+        headless: false,
+        channel: "chrome",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-blink-features=AutomationControlled",
+          "--start-maximized",
+        ],
+      };
+      console.log("[Agent Server] Walmart: mở Google Chrome thật ở chế độ headed.");
+    } else {
+      options = {
+        headless: process.env.HEADLESS !== "false",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-blink-features=AutomationControlled",
+        ],
+      };
+
+      const proxyConfig = PROXY_CONFIG[requestedChain] && PROXY_CONFIG[requestedChain].server ? PROXY_CONFIG[requestedChain] : null;
+      if (proxyConfig) {
+        options.proxy = proxyConfig;
+        sendLog(`Sử dụng proxy cho chain ${requestedChain}: ${proxyConfig.server}`, "info");
+      }
     }
 
     browser = await chromium.launch(options);
 
-    context = await browser.newContext({
+    const contextOptions = {
       viewport: { width: 1024, height: 768 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       deviceScaleFactor: 1,
       geolocation: { latitude: DEFAULT_GEO_LAT, longitude: DEFAULT_GEO_LON },
-    });
+    };
+    if (!isWalmartConnection) {
+      contextOptions.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    }
+    context = await browser.newContext(contextOptions);
     await context.grantPermissions(["geolocation"]);
-    context.on("page", async (newPage) => {
-      bindPaymentPageEvents(newPage);
-      await newPage.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => { });
-      if (isPaymentGatewayUrl(newPage.url())) {
-        await switchScreencastPage(newPage, "payment-popup");
-      }
-    });
+    bindContextPageEvents(context);
 
     page = await context.newPage();
     bindPaymentPageEvents(page);
@@ -1079,9 +1518,10 @@ wss.on("connection", async (ws, req) => {
 
     isAutomating = true;
     cancelledByUser = false;
-    clearPopupFrameInterval();
-    sendPopupState(null);
-    try {
+    stopWalmartCaptchaMonitor();
+      clearPopupFrameInterval();
+      sendPopupState(null);
+      try {
       if (typeof extraAction === "function") {
         await extraAction();
       }
@@ -1513,13 +1953,21 @@ wss.on("connection", async (ws, req) => {
         sendMessage("Mở website Bách Hóa Xanh.");
       }
 
+      if (isWalmartPayload(payload)) {
+        sendLog("Walmart: dùng luồng agentic click ban đầu, bắt đầu từ /orders rồi vào Sign In.", "info");
+      }
+
       const resolvedPlaybook = resolvePlaybook(payload);
 
       // ── Bước 1: Thử Playbook ────────────────────────────────────────────────
       let playbookResult = null;
       try {
-        sendLog(`[Playbook] Kiểm tra playbook cho chain: ${chain.toUpperCase()}`, "info");
-        playbookResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
+        if (isWalmartPayload(payload)) {
+          playbookResult = null;
+        } else {
+          sendLog(`[Playbook] Kiểm tra playbook cho chain: ${chain.toUpperCase()}`, "info");
+          playbookResult = await runPlaybook(page, payload, sendLog, sendStatus, sendMessage, sendScreenshotFrame);
+        }
       } catch (playbookErr) {
         sendLog(`[Playbook] Thất bại: ${playbookErr.message} → chuyển sang AI Tool-Use`, "warning");
         playbookResult = null;
@@ -1547,18 +1995,20 @@ wss.on("connection", async (ws, req) => {
         }
       }
 
-      if (!HAS_LLM_API_KEY) {
+      if (!HAS_LLM_API_KEY && !isWalmartPayload(payload)) {
         sendLog("⚠️ Chưa cấu hình API Key (QWEN/GEMINI/ANTHROPIC).", "error");
       }
 
       // ── Bước 2: AI Tool-Use Loop ────────────────────────────────────────────
-      if (playbookResult === null) {
+      if (isWalmartPayload(payload)) {
+        sendLog("[AI] Walmart dùng Qwen Tool-Use làm bộ điều phối chính; playbook chỉ hỗ trợ đọc trạng thái.", "info");
+      } else if (playbookResult === null) {
         sendLog(`[AI] Không có playbook phù hợp, dùng Agentic Tool-Use Loop.`, "info");
       } else {
         sendLog(`[AI] Playbook đã bootstrap, tiếp tục với Agentic Tool-Use Loop.`, "info");
       }
 
-      const skipGoto = playbookResult !== null;
+      const skipGoto = !isWalmartPayload(payload) && playbookResult !== null;
       const result = await runAgenticToolUseLoop(page, payload, sendLog, sendStatus, { skipInitialGoto: skipGoto }, sendMessage);
 
       if (result?.tracer) activeTracer = result.tracer;
@@ -1585,6 +2035,7 @@ wss.on("connection", async (ws, req) => {
     console.log("[Agent Server] Đang dọn dẹp tài nguyên phiên...");
     clearPopupFrameInterval();
     try {
+      stopWalmartCaptchaMonitor();
       stopCompletionMonitor();
       if (cdpSession) await cdpSession.detach().catch(() => { });
       if (context) await context.close().catch(() => { });

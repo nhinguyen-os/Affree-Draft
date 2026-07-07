@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "react-qr-code";
-import type { RankedOffer } from "@/lib/types";
+import type { CartItem, RankedOffer } from "@/lib/types";
 import { chainLabel, chainMinOrder, storeCurrency } from "@/lib/stores";
 import { distanceKm, formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
@@ -17,7 +17,6 @@ import { detectCardBrand, CARD_BRANDS, CARD_BRAND_STYLE } from "./PaymentSection
 import { ChainBadge } from "./ChainBadge";
 import { MarqueeText } from "./MarqueeText";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
-import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
@@ -144,12 +143,21 @@ type CoopAddressParts = {
   wardName: string;
 };
 
+type CoopPaymentMethod = NonNullable<NonNullable<CoopOrderResult["paymentCheck"]>["methods"]>[number];
+
 const SLOTS = [
-  { key: "today", label: "Trong hôm nay (2–4 giờ)" },
-  { key: "tonight", label: "Tối nay (18:00–21:00)" },
-  { key: "tomorrow_morning", label: "Sáng mai (8:00–11:00)" },
-  { key: "tomorrow_afternoon", label: "Chiều mai (14:00–17:00)" },
+  "Sáng hôm nay (7:00–11:00)",
+  "Chiều hôm nay (13:00–18:00)",
+  "Sáng ngày mai (7:00–11:00)",
+  "Chiều ngày mai (13:00–18:00)",
 ];
+const CART_PROTOTYPE_SLOTS = [
+  "Trong hôm nay (2–4 giờ)",
+  "Tối nay (18:00–21:00)",
+  "Sáng mai (8:00–11:00)",
+  "Chiều mai (14:00–17:00)",
+];
+const ACCEPTED_PROTOTYPE_SLOTS = [...SLOTS, ...CART_PROTOTYPE_SLOTS];
 
 const COOP_TIME_SLOTS: Array<{ from: string; to: string; disabled?: boolean }> = [
   { from: "10:00", to: "12:00" },
@@ -269,7 +277,7 @@ async function getAgentWsUrl(sessionId: string, chain?: string) {
   return `${baseUrl}${separator}sessionId=${sessionId}${chain ? `&chain=${encodeURIComponent(chain)}` : ""}`;
 }
 
-export default function OrderAgentModal({
+export default function CoopOrderAgentModal({
   offer,
   alternatives = [],
   geoAddr,
@@ -279,6 +287,10 @@ export default function OrderAgentModal({
   defaultPhone,
   defaultAddress,
   defaultQty,
+  sameStoreCartItems = [],
+  initialPayMethod = null,
+  initialSlot,
+  autoStart = false,
   onClose,
   onPlaced,
   lang = "vi",
@@ -295,6 +307,12 @@ export default function OrderAgentModal({
   defaultPhone?: string;
   defaultAddress?: string;
   defaultQty?: number;
+  /** Các dòng trong giỏ thuộc cùng một cửa hàng Co.op. Có dữ liệu này thì tạo 1 đơn nhiều sản phẩm. */
+  sameStoreCartItems?: CartItem[];
+  initialPayMethod?: DemoPayMethod | null;
+  initialSlot?: string;
+  /** Dùng khi mở từ CartModal: form đã đủ thông tin, tự bấm bước kết nối Co.op để tránh phải click lần 2. */
+  autoStart?: boolean;
   onClose: () => void;
   onPlaced: (orderCode: string, chosen: RankedOffer, note?: string) => void;
   lang?: Lang;
@@ -307,10 +325,9 @@ export default function OrderAgentModal({
   const chain = chainLabel(activeOffer.store.chain);
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
-  const DEMO_MODE = true;
   const isCoopReal = process.env.NEXT_PUBLIC_COOP_REAL === "true" && activeOffer.store.chain === "coop";
-  const isTXNNReal = !DEMO_MODE && activeOffer.store.chain === "tuoixanhnhanhngon";
-  const isBHXReal = !DEMO_MODE && activeOffer.store.chain === "bhx";
+  const isTXNNReal = process.env.NEXT_PUBLIC_TXNN_REAL === "true" && activeOffer.store.chain === "tuoixanhnhanhngon";
+  const isBHXReal = process.env.NEXT_PUBLIC_BHX_REAL === "true" && activeOffer.store.chain === "bhx";
 
   // Thông tin cần có để đặt món này — tự điền lại từ hồ sơ đã lưu (nếu có)
   const saved = useMemo(() => getProfile(), []);
@@ -332,16 +349,36 @@ export default function OrderAgentModal({
   // Phần SL "tự thêm" để đủ mức mua tối thiểu của chuỗi (vd Co.op 200k) — bơm 1 lần lúc mở
   // form, y như giỏ hàng bake vào item.qty. Bấm +/- (chỉnh tay) sẽ reset về 0 → counter thuần.
   const [autoQty, setAutoQty] = useState(0);
-  const [slot, setSlot] = useState(SLOTS[0].label);
+  const coopOrderLines = useMemo(() => {
+    const sameStore = sameStoreCartItems
+      .map((item) => ({
+        product: item.product,
+        offer: item.offer,
+        qty: Math.max(1, Math.floor(item.qty || 1)),
+      }));
+    if (sameStore.length) return sameStore;
+    return [{ product: activeOffer.product, offer: activeOffer, qty }];
+  }, [activeOffer, qty, sameStoreCartItems]);
+  const isMultiCoopOrder = isCoopReal && coopOrderLines.length > 1;
+  const coopOrderTotal = coopOrderLines.reduce((sum, line) => sum + line.offer.price * line.qty, 0);
+  const coopOrderSummaryName =
+    coopOrderLines.length > 1
+      ? `${coopOrderLines[0].product.name} + ${coopOrderLines.length - 1} sản phẩm`
+      : activeOffer.product.name;
+  const [slot, setSlot] = useState(initialSlot && ACCEPTED_PROTOTYPE_SLOTS.includes(initialSlot) ? initialSlot : SLOTS[0]);
   // Ghi chú cho cửa hàng — đồng bộ cấu trúc với ô ghi chú từng cửa hàng của giỏ (CartModal).
   const [note, setNote] = useState("");
   const [coopDeliveryDate, setCoopDeliveryDate] = useState("");
   const [coopSlotFrom, setCoopSlotFrom] = useState("");
   const [coopSlotTo, setCoopSlotTo] = useState("");
 
-  function getSlotKey() {
-    return SLOTS.find((item) => item.label === slot)?.key || null;
-  }
+  useEffect(() => {
+    if (!isPrototypeCoopSlotPast(slot)) return;
+    const pool = CART_PROTOTYPE_SLOTS.includes(slot) ? CART_PROTOTYPE_SLOTS : SLOTS;
+    const next = pool.find((item) => !isPrototypeCoopSlotPast(item));
+    if (next && next !== slot) setSlot(next);
+  }, [slot]);
+
   // Khoá scroll body khi modal mở (refcount chung — lib/scroll-lock.ts)
   useEffect(() => acquireBodyScrollLock(), []);
 
@@ -373,7 +410,7 @@ export default function OrderAgentModal({
   // hiển thị như "tin nhắn" để bạn nhập thử. KHÔNG phải mã thật từ cửa hàng.
   const [simOtp, setSimOtp] = useState("");
   // KHÔNG mặc định chọn phương thức thanh toán — user tự chọn (null = chưa chọn).
-  const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod | null>(null);
+  const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod | null>(initialPayMethod);
   const [cardNum, setCardNum] = useState("");
   const [cardExp, setCardExp] = useState("");
   const [cardCvv, setCardCvv] = useState("");
@@ -461,6 +498,9 @@ export default function OrderAgentModal({
   const [coopBrowserVisible, setCoopBrowserVisible] = useState(false);
   const [coopBrowserStatus, setCoopBrowserStatus] = useState("");
   const [coopBrowserFrame, setCoopBrowserFrame] = useState("");
+  const [coopPaymentQrImage, setCoopPaymentQrImage] = useState("");
+  const [coopPaymentQrBusy, setCoopPaymentQrBusy] = useState(false);
+  const [coopPaymentVerifying, setCoopPaymentVerifying] = useState(false);
   const [coopBrowserSize, setCoopBrowserSize] = useState({ width: 1024, height: 768 });
   const [coopAddressBusy, setCoopAddressBusy] = useState(false);
   const [coopAddressChecked, setCoopAddressChecked] = useState(false);
@@ -472,33 +512,29 @@ export default function OrderAgentModal({
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
   const [coopSelectedPaymentCode, setCoopSelectedPaymentCode] = useState("COD");
   const [coopGeo, setCoopGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [bhxMessages, setBhxMessages] = useState<Array<{ message: string; status?: string }>>([]);
   const [bhxBusy, setBhxBusy] = useState(false);
-  const [bhxQR, setBhxQR] = useState<string | null>(null);
-  const bhxRuntime: BhxOrderRuntime = {
-    setStepIndex,
-    setOtp,
-    setOtpError,
-    setSimOtp,
-    setPhase,
-    setBhxBusy,
-    setOrderCode,
-    setBhxQR,
-    getSlotKey,
-    getAgentWsUrl,
-    otp,
-    activeOffer,
-    qty,
-    name,
-    phone,
-    address,
-    demoPayMethod,
-    t,
-  };
+  const [bhxDeliveryHtml, setBhxDeliveryHtml] = useState("");
+  const [bhxSelectedDeliveryText, setBhxSelectedDeliveryText] = useState("");
+  const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
+  const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
+  const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
+  const bhxShowScreencastRef = useRef(false);
+  const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
+  const [bhxOtp, setBhxOtp] = useState("");
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
   const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
   const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
   const lastCoopLookupAddressRef = useRef("");
   const coopCompletionHandledRef = useRef(false);
+  const coopAutoPrepareRef = useRef(false);
+  const coopAutoPlaceRef = useRef(false);
+  const coopAutoStartRef = useRef(false);
+  const bhxBrowserWsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    bhxShowScreencastRef.current = bhxShowScreencast;
+  }, [bhxShowScreencast]);
 
   const requiredInput = serverState?.requiredInput;
   const currentStepKind: StepKind =
@@ -539,67 +575,44 @@ export default function OrderAgentModal({
     // Affree đặt hộ bằng tài khoản Affree trên nguồn — khách KHÔNG cần đăng nhập/OTP.
     // (SĐT khách chỉ dùng làm liên hệ nhận hàng, điền cùng bước địa chỉ giao.)
 
-    if (isBHXReal) {
-      s.push({ kind: "otp", label: t("Nhập OTP nhận qua SMS để đăng nhập…") });
+    s.push({
+      kind: "auto",
+      label: coopOrderLines.length > 1
+        ? t("Thêm {count} sản phẩm vào giỏ Co.op…", { count: coopOrderLines.length })
+        : t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }),
+    });
 
-      s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
-
-      s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
-
-      if (cfg.needSlot) {
-        s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
-      }
-      
-      s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
-      
-      s.push({ kind: "auto", label: t("Đặt hàng thành công") });
-
-      if (demoPayMethod === "qr") {
-        s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
-      } else if (demoPayMethod === "card") {
-        // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
-        s.push(cardConfirmed
-          ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
-          : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
-      } else {
-        s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
-      }
-      
-      s.push({ kind: "success", label: t("Đặt hàng thành công") });
-    } else {
-      s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
-
-      s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
-
-      if (cfg.needStorePick) {
-        s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
-      }
-
-      if (cfg.needEmail) {
-        s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
-      }
-
-      if (cfg.needSlot) {
-        s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
-      }
-
-      // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
-      // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
-      if (demoPayMethod === "qr") {
-        s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
-      } else if (demoPayMethod === "card") {
-        // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
-        s.push(cardConfirmed
-          ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
-          : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
-      } else {
-        s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
-      }
-
-      s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
-      s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
-      s.push({ kind: "success", label: t("Đặt hàng thành công") });
+    if (cfg.needStorePick) {
+      s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
     }
+
+    s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
+
+    if (cfg.needEmail) {
+      s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
+    }
+
+    if (cfg.needSlot) {
+      s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
+    }
+
+    // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
+    // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
+    if (demoPayMethod === "qr") {
+      s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
+    } else if (demoPayMethod === "card") {
+      // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
+      s.push(cardConfirmed
+        ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
+        : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
+    } else {
+      s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
+    }
+
+    s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
+    s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
+    s.push({ kind: "success", label: t("Đặt hàng thành công") });
+
     return s;
   }, [
     serverState,
@@ -610,6 +623,7 @@ export default function OrderAgentModal({
     email,
     address,
     qty,
+    coopOrderLines,
     slot,
     demoPayMethod,
     cardConfirmed,
@@ -721,28 +735,28 @@ export default function OrderAgentModal({
   }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp, note]);
 
   // Demo: tự chạy qua bước "auto" sau 1.2s; đến bước "success" → chuyển phase done.
-  // useEffect(() => {
-  //   if (phase !== "running" || sessionId || !current) return;
-  //   if (current.kind === "success") {
-  //     const timer = window.setTimeout(() => {
-  //       setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
-  //       setPhase("done");
-  //       onPlaced("DEMO", activeOffer, note);
-  //     }, 800);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  //   if (current.kind === "auto") {
-  //     const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  //   if (current.kind === "otp") {
-  //     const code = String(Math.floor(100000 + Math.random() * 900000));
-  //     const timer = window.setTimeout(() => setSimOtp(code), 2000);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  // }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
+  useEffect(() => {
+    if (phase !== "running" || sessionId || !current) return;
+    if (current.kind === "success") {
+      const timer = window.setTimeout(() => {
+        setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+        setPhase("done");
+        onPlaced("DEMO", activeOffer, note);
+      }, 800);
+      return () => window.clearTimeout(timer);
+    }
+    if (current.kind === "auto") {
+      const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
+      return () => window.clearTimeout(timer);
+    }
+    if (current.kind === "otp") {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const timer = window.setTimeout(() => setSimOtp(code), 2000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
 
-  const total = activeOffer.price * qty;
+  const total = isCoopReal ? coopOrderTotal : activeOffer.price * qty;
   const coopMinTotal = 200000;
   const coopBelowMinimum = isCoopReal && total < coopMinTotal;
   // Ràng buộc tối thiểu: số lượng từ cfg (mặc định 1); giá mua tối thiểu lấy từ sheet
@@ -759,6 +773,7 @@ export default function OrderAgentModal({
   useEffect(() => {
     if (minPumpedRef.current === minPumpKey) return;
     minPumpedRef.current = minPumpKey;
+    if (isMultiCoopOrder) return;
     const price = activeOffer.price;
     if (minOrder == null || price <= 0) return;
     const base = price * qty;
@@ -768,7 +783,7 @@ export default function OrderAgentModal({
     setQty(qty + add);
     // qty cố ý bỏ khỏi deps: chỉ bơm 1 lần/offer lúc mở (guard bằng minPumpedRef).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minPumpKey, minOrder, activeOffer.price]);
+  }, [minPumpKey, minOrder, activeOffer.price, isMultiCoopOrder]);
   const todayInput = formatDateInput(new Date());
   const coopDeliveryDates = (coopResult?.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
   const coopDeliverySlots =
@@ -776,7 +791,11 @@ export default function OrderAgentModal({
     coopResult?.deliveryCheck?.availableTimeSlots ??
     [];
   const coopSavedAddress = coopResult?.deliveryCheck?.fullAddress || "";
-  const coopPaymentMethods = (coopResult?.paymentCheck?.methods ?? []).filter((method) => method.methodCode);
+  // GUI Co.op rút gọn chỉ còn ba lựa chọn. Mỗi lựa chọn vẫn giữ nguyên
+  // methodCode thật mà API trả về để prepareCheckout/placeOrder dùng đúng logic Dev.
+  const coopPaymentMethods = selectCoopPrototypePaymentMethods(
+    (coopResult?.paymentCheck?.methods ?? []).filter((method) => method.methodCode),
+  );
   const selectedCoopPaymentMethod =
     coopPaymentMethods.find((method) => method.methodCode === coopSelectedPaymentCode) ??
     coopPaymentMethods.find((method) => method.isSelected);
@@ -791,7 +810,7 @@ export default function OrderAgentModal({
   const effectiveCoopDeliverySlots = getEffectiveCoopDeliverySlots(
     coopDeliverySlots.length ? coopDeliverySlots : COOP_TIME_SLOTS,
     coopDeliveryDate,
-  );
+  ).slice(0, 4);
   const activeCoopTerminalCode = activeOffer.store.id.replace(/^coop-/, "");
   const coopTerminalCode = coopSelectedTerminalCode || activeCoopTerminalCode;
   const selectedCoopTerminal =
@@ -829,6 +848,19 @@ export default function OrderAgentModal({
     resetCoopAddressLookup();
   };
 
+  const updateCoopPrototypeAddress = (value: string) => {
+    setAddress(value);
+    const parsed = parseCoopAddressParts(value);
+    setCoopAddressLine(parsed.addressLine || value);
+    setCoopProvinceCode(parsed.provinceCode);
+    setCoopProvinceName(parsed.provinceName);
+    setCoopDistrictCode(parsed.districtCode);
+    setCoopDistrictName(parsed.districtName);
+    setCoopWardCode(parsed.wardCode);
+    setCoopWardName(parsed.wardName);
+    resetCoopAddressLookup();
+  };
+
   // Kiểm tra SĐT theo quốc gia của cửa hàng (suy từ tiền tệ): VN / US / quốc tế.
   const rule = useMemo(
     () => phoneRule(storeCurrency(activeOffer.store.id)),
@@ -856,7 +888,7 @@ export default function OrderAgentModal({
     !coopBelowMinimum &&
     qty > 0;
   // Nhánh nào hiện tabs QR/Thẻ/COD (BHX + demo) → bắt buộc CHỌN phương thức mới cho đặt.
-  const payTabsShown = isBHXReal || (!isCoopReal && !isTXNNReal);
+  const payTabsShown = !isTXNNReal;
   const canStart =
     !!name.trim() &&
     phoneValid &&
@@ -877,7 +909,7 @@ export default function OrderAgentModal({
     serverState?.status === "verifying_payment";
   const paymentLabel = isTXNNReal
     ? t("QR chuyển khoản")
-    : isBHXReal || (!sessionId && !isCoopReal)
+    : !isTXNNReal
       ? demoPayMethod === "qr" ? t("QR chuyển khoản") : demoPayMethod === "card" ? (cardLast4 ? maskedCardLabel : t("Thẻ tín dụng/ghi nợ")) : demoPayMethod === "cod" ? t("COD (tiền mặt khi nhận)") : t("Chưa chọn")
       : usesQrPayment ? t("QR chuyển khoản") : t("COD (tiền mặt khi nhận)");
   const paymentConfirmBusy = paymentConfirmSubmitting || serverState?.status === "verifying_payment";
@@ -1067,6 +1099,15 @@ export default function OrderAgentModal({
     productId: activeOffer.product.id,
     productName: activeOffer.product.name,
     productUrl: activeOffer.productUrl,
+    items: coopOrderLines.map((line) => ({
+      quantity: line.qty,
+      price: line.offer.price,
+      sku: line.offer.productId,
+      productId: line.product.id,
+      productName: line.product.name,
+      productUrl: line.offer.productUrl,
+      terminalCode: coopTerminalCode,
+    })),
     terminalCode: coopTerminalCode,
     terminalName: selectedCoopTerminal ? getCoopTerminalName(selectedCoopTerminal) : activeOffer.store.name,
     terminalAddress: selectedCoopTerminal ? getCoopTerminalAddress(selectedCoopTerminal) : activeOffer.store.address,
@@ -1079,9 +1120,12 @@ export default function OrderAgentModal({
 
   const applyCoopDeliverySelection = (data: CoopOrderResult) => {
     const dates = (data.deliveryCheck?.availableDates ?? []).filter((date) => date >= todayInput);
-    const selectedDate = data.deliveryCheck?.selectedDate && data.deliveryCheck.selectedDate >= todayInput
-      ? data.deliveryCheck.selectedDate
-      : dates[0] || coopDeliveryDate || "";
+    const preferredDate = prototypeSlotDate(slot);
+    const selectedDate = dates.includes(preferredDate)
+      ? preferredDate
+      : data.deliveryCheck?.selectedDate && data.deliveryCheck.selectedDate >= todayInput
+        ? data.deliveryCheck.selectedDate
+        : dates[0] || coopDeliveryDate || "";
     if (selectedDate) setCoopDeliveryDate(selectedDate);
 
     const candidateSlots = getEffectiveCoopDeliverySlots(
@@ -1089,7 +1133,9 @@ export default function OrderAgentModal({
         ? data.deliveryCheck.availableSlotsByDate[selectedDate]
         : data.deliveryCheck?.availableTimeSlots?.length
           ? data.deliveryCheck.availableTimeSlots
-          : COOP_TIME_SLOTS,
+          : data.deliveryCheck
+            ? []
+            : COOP_TIME_SLOTS,
       selectedDate,
     );
     const selectedSlot =
@@ -1099,11 +1145,18 @@ export default function OrderAgentModal({
           item.to === data.deliveryCheck?.selectedSlotTo &&
           !item.disabled,
       ) ??
+      findClosestCoopSlot(candidateSlots, slot) ??
       candidateSlots.find((item) => !item.disabled) ??
       candidateSlots[0];
     if (selectedSlot) {
       setCoopSlotFrom(selectedSlot.from);
       setCoopSlotTo(selectedSlot.to);
+      console.info("[coop/delivery-slot]", {
+        guiSlot: slot,
+        selectedDate,
+        slotFrom: selectedSlot.from,
+        slotTo: selectedSlot.to,
+      });
     } else {
       setCoopSlotFrom("");
       setCoopSlotTo("");
@@ -1116,14 +1169,194 @@ export default function OrderAgentModal({
     setOtp("");
     setCoopCheckoutPrepared(false);
     setCoopStep("delivery");
-    setStepIndex(2);
-    setCoopSelectedPaymentCode(data.paymentCheck?.selectedMethodCode || "COD");
+    const paymentStepIndex = steps.findIndex((step) => step.kind === "payment-select");
+    setStepIndex(paymentStepIndex >= 0 ? paymentStepIndex : 0);
+    const prototypeMethods = selectCoopPrototypePaymentMethods(data.paymentCheck?.methods ?? []);
+    const selectedFromPrototype = prototypeMethods.find((method) =>
+      demoPayMethod === "qr"
+        ? method.name === "QR"
+        : demoPayMethod === "card"
+          ? method.name === "Thẻ Quốc Tế"
+          : method.name === "COD",
+    );
+    setCoopSelectedPaymentCode(selectedFromPrototype?.methodCode || data.paymentCheck?.selectedMethodCode || "COD");
     applyCoopDeliverySelection(data);
   };
 
-  
+  const startBHXOrder = async () => {
+    if (bhxBrowserWsRef.current) {
+      bhxBrowserWsRef.current.close();
+    }
 
-  
+    setStepIndex(0);
+    setOtp("");
+    setOtpError(false);
+    setSimOtp("");
+    setPhase("running");
+    setBhxBusy(true);
+    setBhxMessages([{ message: t("Đang kết nối agent-server…") }]);
+    setBhxDeliveryHtml("");
+    setBhxSelectedDeliveryText("");
+    setBhxBrowserFrame("");
+    setBhxBrowserSize({ width: 1024, height: 768 });
+    setBhxShowScreencast(false);
+    bhxShowScreencastRef.current = false;
+    setBhxOtpVisible(false);
+    setBhxOtp("");
+
+    const wsSessionId = `bhx-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const wsUrl = await getAgentWsUrl(wsSessionId, activeOffer.store.chain);
+    const ws = new WebSocket(wsUrl);
+    bhxBrowserWsRef.current = ws;
+
+    const sendBHXOrderRequest = () => {
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "run_order",
+            payload: {
+              url: activeOffer.productUrl,
+              productName: activeOffer.product.name,
+              qty,
+              buyerName: name,
+              buyerPhone: phone,
+              buyerAddress: address,
+              chain: activeOffer.store.chain,
+              paymentMethod: demoPayMethod ?? "cod",
+            },
+          }),
+        );
+      } catch (err) {
+        setBhxBusy(false);
+        setBhxMessages((logs) => [
+          ...logs,
+          { message: err instanceof Error ? err.message : String(err), status: "error" },
+        ]);
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(String(event.data)) as {
+          type?: string;
+          message?: string;
+          status?: string;
+          phase?: string;
+          content?: string;
+          data?: string;
+          width?: number;
+          height?: number;
+        };
+        if (message.type === "screencast" && message.data) {
+          if (bhxShowScreencastRef.current) {
+            setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
+            if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
+          }
+        } else if (message.type === "message" && message.content) {
+          setBhxMessages((logs) => [...logs, { message: message.content || "", status: 'success' }]);
+        } else if (message.type === "status") {
+          if (message.phase === 'ready') {
+            setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
+            sendBHXOrderRequest();
+          } else if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
+            setBhxBusy(false);
+          }
+        } else if (message.type === 'popup_delivery_time' && message.content) {
+          setBhxDeliveryHtml(message.content);
+        } else if (message.type === 'order_success' && message.content) {
+          setBhxBusy(false);
+          bhxShowScreencastRef.current = true;
+          setBhxShowScreencast(true);
+          setBhxDeliveryHtml("");
+          setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
+        } else if (message.type === 'input_otp') {
+          setBhxOtpVisible(true);
+          setBhxOtp("");
+          setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
+        }
+      } catch (err) {
+        console.error("Error handling BHX agent message:", err);
+      }
+    };
+    ws.onerror = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Không kết nối được agent-server BHX."), status: "error" }]);
+    };
+    ws.onclose = () => {
+      setBhxBusy(false);
+      setBhxMessages((logs) => [...logs, { message: t("Kết nối agent-server đã đóng."), status: "info" }]);
+    };
+  };
+
+  const handleBHXDeliveryChoice = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+
+    const dateEl = target.closest<HTMLElement>("[data-delivery-date]");
+    const labelEl = target.closest<HTMLElement>("label.radio-wrapper");
+    const optionEl = labelEl || dateEl;
+    if (!optionEl) return;
+
+    const selectedText =
+      labelEl?.querySelector<HTMLElement>(".line-clamp-1")?.textContent?.trim() ||
+      dateEl?.textContent?.trim() ||
+      optionEl.textContent?.trim() ||
+      "";
+    const price = labelEl?.querySelector<HTMLElement>(".text-right")?.textContent?.trim() || "";
+    const deliveryDate = dateEl?.dataset.deliveryDate || "";
+    const kind = dateEl ? "date" : "time";
+    const compactText = selectedText.replace(/\s+/g, " ").trim();
+
+    if (!compactText) return;
+    setBhxSelectedDeliveryText(price ? `${compactText} - ${price}` : compactText);
+
+    if (kind === "time") {
+      const radio = labelEl?.querySelector<HTMLInputElement>('input[type="radio"]');
+      if (radio) radio.checked = true;
+      setBhxMessages((logs) => [
+        ...logs,
+        {
+          message: price
+            ? t("Bạn đã chọn: {choice} - {price}", { choice: compactText, price })
+            : t("Bạn đã chọn: {choice}", { choice: compactText }),
+          status: "success",
+        },
+      ]);
+    }
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi lựa chọn giao hàng."), status: "error" }]);
+      return;
+    }
+    ws.send(
+      JSON.stringify({
+        type: "delivery_time_selected",
+        kind,
+        selectedText: compactText,
+        price,
+        deliveryDate,
+      }),
+    );
+    if (kind === "time") {
+      setBhxDeliveryHtml("");
+    }
+  };
+
+  const submitBHXOtp = () => {
+    const code = bhxOtp.trim();
+    if (!code) return;
+
+    const ws = bhxBrowserWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi OTP."), status: "error" }]);
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: "submit_otp", otp: code }));
+    setBhxOtpVisible(false);
+    setBhxMessages((logs) => [...logs, { message: t("Đã gửi OTP tới agent-server."), status: "success" }]);
+  };
 
   const startCoopOrder = async () => {
     setCoopBusy(true);
@@ -1144,11 +1377,7 @@ export default function OrderAgentModal({
       const data = await postCoopOrder({ action: "register", ...coopPayload() });
       setCoopResult(data);
       if (data.phase === "otp" && data.flowId) {
-        setCoopResult(data);
-        setCoopFlowId(data.flowId);
-        setCoopStep("otp");
-        setStepIndex(1);
-        return;
+        throw new Error(t("Tài khoản đặt hộ Co.op không được yêu cầu OTP. Vui lòng kiểm tra lại tài khoản trong sheet."));
       }
       if (data.phase === "cart") {
         setCoopCartReady(data);
@@ -1167,6 +1396,15 @@ export default function OrderAgentModal({
       setCoopBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!autoStart || coopAutoStartRef.current) return;
+    if (!isCoopReal || phase !== "form" || !canStart || coopBusy) return;
+    coopAutoStartRef.current = true;
+    void startCoopOrder();
+    // startCoopOrder intentionally runs once for cart-origin modal after derived readiness settles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, isCoopReal, phase, canStart, coopBusy]);
 
   const confirmCoopOtp = async () => {
     if (!coopFlowId || otp.length !== 6) return;
@@ -1229,6 +1467,30 @@ export default function OrderAgentModal({
     }
   };
 
+  // Sau khi API tạo giỏ và trả ngày/khung giờ thật, GUI prototype không có nút
+  // "Cập nhật checkout" riêng nên tự gửi lịch giao + phương thức đã chọn.
+  useEffect(() => {
+    if (!isCoopReal || phase !== "running" || coopStep !== "delivery") return;
+    if (!coopResult?.checkoutFlowId || !coopDeliveryReady || coopBusy || coopCheckoutPrepared) return;
+    if (coopAutoPrepareRef.current) return;
+    coopAutoPrepareRef.current = true;
+    void prepareCoopCheckout().finally(() => {
+      coopAutoPrepareRef.current = false;
+    });
+  }, [
+    isCoopReal,
+    phase,
+    coopStep,
+    coopResult?.checkoutFlowId,
+    coopDeliveryReady,
+    coopDeliveryDate,
+    coopSlotFrom,
+    coopSlotTo,
+    coopSelectedPaymentCode,
+    coopBusy,
+    coopCheckoutPrepared,
+  ]);
+
   const placeCoopOrder = async () => {
     if (!coopResult?.checkoutFlowId || !coopCheckoutPrepared) return;
     if (!coopSelectedPaymentIsOnline) {
@@ -1251,9 +1513,14 @@ export default function OrderAgentModal({
       const paymentUrl = data.paymentUrl || data.order?.paymentUrl;
       if (paymentUrl) {
         setOrderCode(code);
-        setCoopStep("review");
-        setCoopBrowserStatus(t("Đang mở màn hình thanh toán để bạn hoàn tất giao dịch..."));
-        openCoopBrowserAssist({ ...(coopResult ?? {}), ...data, paymentUrl }, "paymentScreen");
+        setCoopStep("payment");
+        const nextResult = { ...(coopResult ?? {}), ...data, paymentUrl };
+        if (demoPayMethod === "qr") {
+          void openCoopPaymentQrSnapshot(nextResult);
+        } else {
+          setCoopBrowserStatus(t("Đang mở màn hình thanh toán để bạn hoàn tất giao dịch..."));
+          openCoopBrowserAssist(nextResult, "paymentScreen");
+        }
         return;
       }
       if (coopSelectedPaymentIsOnline) {
@@ -1270,11 +1537,87 @@ export default function OrderAgentModal({
     }
   };
 
+  // GUI prototype không có nút review riêng như bản Dev. Sau khi đã chuẩn bị
+  // checkout với lựa chọn QR/Thẻ, tự tạo đơn để nhận paymentUrl thật từ VNPAY.
+  useEffect(() => {
+    if (!isCoopReal || phase !== "running" || coopStep !== "review") return;
+    if (!coopCheckoutPrepared || coopBusy || !coopSelectedPaymentIsOnline) return;
+    if (coopAutoPlaceRef.current) return;
+    coopAutoPlaceRef.current = true;
+    void placeCoopOrder().finally(() => {
+      coopAutoPlaceRef.current = false;
+    });
+  }, [isCoopReal, phase, coopStep, coopCheckoutPrepared, coopBusy, coopSelectedPaymentIsOnline]);
+
   const sendCoopBrowserMessage = (message: Record<string, unknown>) => {
     const ws = coopBrowserWsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
     }
+  };
+
+  const openCoopPaymentQrSnapshot = async (result: CoopOrderResult) => {
+    const paymentUrl = result.paymentUrl || result.order?.paymentUrl;
+    if (!paymentUrl) return;
+    setCoopPaymentQrImage("");
+    setCoopPaymentQrBusy(true);
+    closeCoopBrowser();
+
+    const wsSessionId = `coop-qr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ws = new WebSocket(await getAgentWsUrl(wsSessionId, "coop"));
+    coopBrowserWsRef.current = ws;
+    const timeout = window.setTimeout(() => {
+      setCoopPaymentQrBusy(false);
+      setCoopError(t("Không lấy được mã QR VNPAY. Kiểm tra agent-server rồi thử lại."));
+      ws.close();
+    }, 45000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: "coop_payment_qr_snapshot",
+        paymentUrl,
+        orderCode: result.order?.code || result.order?.orderId || orderCode,
+        paymentMethodCode: result.order?.paymentMethodCode || coopSelectedPaymentCode,
+        paymentMethodName: coopSelectedPaymentName,
+      }));
+    };
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as {
+        type?: string;
+        phase?: string;
+        qrImageBase64?: string;
+        qrContentType?: string;
+        error?: string;
+        orderCode?: string;
+      };
+      if (message.type === "status" && message.phase === "coop_payment_qr_ready" && message.qrImageBase64) {
+        window.clearTimeout(timeout);
+        setCoopPaymentQrImage(`data:${message.qrContentType || "image/jpeg"};base64,${message.qrImageBase64}`);
+        setCoopPaymentQrBusy(false);
+      } else if (message.type === "status" && message.phase === "coop_payment_verifying") {
+        setCoopPaymentVerifying(true);
+      } else if (message.type === "status" && (message.phase === "failed" || message.phase === "coop_payment_failed")) {
+        window.clearTimeout(timeout);
+        setCoopPaymentQrBusy(false);
+        setCoopPaymentVerifying(false);
+        setCoopError(message.error || t("Không lấy được mã QR VNPAY."));
+      } else if (message.type === "status" && message.phase === "completed" && !coopCompletionHandledRef.current) {
+        window.clearTimeout(timeout);
+        coopCompletionHandledRef.current = true;
+        const code = message.orderCode || orderCode || `COOP-${Date.now().toString().slice(-6)}`;
+        setOrderCode(code);
+        setCoopPaymentQrBusy(false);
+        setCoopStep("success");
+        setPhase("done");
+        onPlaced(code, activeOffer, note);
+        ws.close();
+      }
+    };
+    ws.onerror = () => {
+      window.clearTimeout(timeout);
+      setCoopPaymentQrBusy(false);
+      setCoopError(t("Mất kết nối agent-server khi lấy mã QR VNPAY."));
+    };
   };
 
   const closeCoopBrowser = () => {
@@ -1856,10 +2199,12 @@ export default function OrderAgentModal({
     }
   }, [coopDeliveryDate, effectiveCoopDeliverySlots, coopSlotFrom, coopSlotTo]);
 
-  if (isCoopReal) {
+  // Không render modal wizard riêng của bản Dev. Co.op thật phải dùng đúng phần
+  // giao diện prototype chung bên dưới; toàn bộ state/API/agent logic vẫn giữ nguyên.
+  if (false && isCoopReal) {
     const coopWizard = [
-      { id: "account" as CoopStepId, label: "Nhập tài khoản và địa chỉ" },
-      { id: "otp" as CoopStepId, label: "Nhập OTP nếu Co.op gửi" },
+      { id: "account" as CoopStepId, label: "Thông tin người nhận" },
+      { id: "otp" as CoopStepId, label: "Xác thực tài khoản đặt hộ" },
       { id: "delivery" as CoopStepId, label: "Chọn ngày và khung giờ" },
       { id: "payment" as CoopStepId, label: "Chọn phương thức thanh toán" },
       { id: "review" as CoopStepId, label: "Xác nhận đặt hàng" },
@@ -1930,7 +2275,7 @@ export default function OrderAgentModal({
                 {phase === "done" ? "Đã đặt hàng Co.op" : "Đặt hàng Co.op"}
               </h2>
               <p className="truncate text-xs text-slate-500">
-                {activeOffer.product.name} · {chain}
+                {coopOrderSummaryName} · {chain}
               </p>
             </div>
             <button onClick={handleCloseModal} className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100" aria-label={t("Đóng")}>
@@ -1946,12 +2291,12 @@ export default function OrderAgentModal({
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
                   <div className="flex items-center gap-2.5">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-sm font-bold text-emerald-700">
-                      {qty}
+                      {coopOrderLines.length > 1 ? coopOrderLines.length : qty}
                     </span>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-900">{activeOffer.product.name}</p>
+                      <p className="truncate text-sm font-bold text-slate-900">{coopOrderSummaryName}</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
-                        {activeOffer.store.name} · {formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))}
+                        {activeOffer.store.name} · {formatMoney(total, storeCurrency(activeOffer.store.id))}
                       </p>
                     </div>
                   </div>
@@ -2334,7 +2679,7 @@ export default function OrderAgentModal({
                     }
                   >
                     <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
-                      <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                      <Row k={t("Món")} v={isMultiCoopOrder ? `${coopOrderSummaryName} (${coopOrderLines.length} món)` : `${activeOffer.product.name} ×${qty}`} />
                       <Row k={t("Giao tới")} v={coopSavedAddress || address} />
                       <Row k={t("Ngày nhận")} v={formatCoopDate(coopDeliveryDate)} />
                       <Row k={t("Khung giờ")} v={`${coopSlotFrom} - ${coopSlotTo}`} />
@@ -2520,7 +2865,7 @@ export default function OrderAgentModal({
               {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
             </h2 >
             <p className="truncate text-xs text-slate-700">
-              {activeOffer.product.name} · {chain}
+              {coopOrderSummaryName} · {chain}
             </p>
           </div >
           <button
@@ -2569,15 +2914,20 @@ export default function OrderAgentModal({
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
+                  <p className="truncate text-sm font-semibold text-slate-900">{coopOrderSummaryName}</p>
                   <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
                   <div className="mt-1 flex items-center gap-2">
                     <span className="text-sm font-bold text-emerald-600">
                       {formatMoney(total, storeCurrency(activeOffer.store.id))}
                     </span>
-                    {qty > 1 && (
+                    {coopOrderLines.length === 1 && qty > 1 && (
                       <span className="text-xs text-slate-600">
                         ({formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))} × {qty})
+                      </span>
+                    )}
+                    {coopOrderLines.length > 1 && (
+                      <span className="text-xs text-slate-600">
+                        ({coopOrderLines.length} món)
                       </span>
                     )}
                   </div>
@@ -2585,23 +2935,22 @@ export default function OrderAgentModal({
               </div>
               {/* QR chỉ hiện khi ĐÃ CHỌN thanh toán QR (như giỏ hàng) — thẻ/COD không liên quan QR */}
               {demoPayMethod === "qr" && (
-                isBHXReal ? (
-                  bhxQR ? (
-                    <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
-                      <div dangerouslySetInnerHTML={{ __html: bhxQR }} />
-                      <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
-                        {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
-                      </p>
-                    </div>
-                  ) : null
-                ) : (
-                  <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                  {isCoopReal ? (
+                    coopPaymentQrImage ? (
+                      <img src={coopPaymentQrImage} alt={t("Mã QR VNPAY")} className="h-20 w-20 object-contain" />
+                    ) : (
+                      <div className="flex h-20 w-20 items-center justify-center rounded bg-slate-50">
+                        {coopPaymentQrBusy ? <Spinner /> : <span className="text-[10px] text-slate-400">VNPAY QR</span>}
+                      </div>
+                    )
+                  ) : (
                     <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
-                    <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
-                      {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
-                    </p>
-                  </div>
-                )
+                  )}
+                  <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
+                    {isCoopReal ? t("QR thanh toán VNPAY") : t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
+                  </p>
+                </div>
               )}
             </div>
           )}
@@ -2617,7 +2966,7 @@ export default function OrderAgentModal({
                 address={address}
                 onName={setName}
                 onPhone={setPhone}
-                onAddress={setAddress}
+                onAddress={isCoopReal ? updateCoopPrototypeAddress : setAddress}
                 currency={storeCurrency(activeOffer.store.id)}
               />
 
@@ -2637,20 +2986,26 @@ export default function OrderAgentModal({
                   </div>
                 )}
                 <div className="min-w-[9rem] flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
+                  <p className="truncate text-sm font-semibold text-slate-900">{coopOrderSummaryName}</p>
                   <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2">
                     <span className="text-base font-bold text-emerald-600">
-                      {formatMoney(activeOffer.price * qty, storeCurrency(activeOffer.store.id))}
+                      {formatMoney(total, storeCurrency(activeOffer.store.id))}
                     </span>
-                    {qty > 1 && (
+                    {coopOrderLines.length === 1 && qty > 1 && (
                       <span className="text-xs text-slate-600">
                         ({formatMoney(activeOffer.price, storeCurrency(activeOffer.store.id))} × {qty})
+                      </span>
+                    )}
+                    {coopOrderLines.length > 1 && (
+                      <span className="text-xs text-slate-600">
+                        ({coopOrderLines.length} món)
                       </span>
                     )}
                   </div>
                 </div>
                 {/* Qty control */}
+                {!isMultiCoopOrder ? (
                 <div className="flex shrink-0 flex-col items-center gap-1 ml-auto">
                   <span className="text-[10px] font-medium text-slate-400">{t("Số lượng")}</span>
                   <div className="flex items-center gap-1">
@@ -2681,7 +3036,24 @@ export default function OrderAgentModal({
                     </button>
                   </div>
                 </div>
+                ) : (
+                  <div className="ml-auto shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-500 ring-1 ring-slate-200">
+                    {coopOrderLines.length} {t("món")}
+                  </div>
+                )}
               </div>
+              {isMultiCoopOrder && (
+                <div className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2.5">
+                  {coopOrderLines.map((line) => (
+                    <div key={`${line.offer.store.id}:${line.product.id}`} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="min-w-0 truncate text-slate-700">{line.product.name}</span>
+                      <span className="shrink-0 font-semibold text-slate-900">
+                        {formatMoney(line.offer.price, storeCurrency(activeOffer.store.id))} × {line.qty}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Ghi chú tối thiểu cho KH biết */}
               {(minQty > 1 || minOrder != null) && (
@@ -2713,8 +3085,8 @@ export default function OrderAgentModal({
                     className="input"
                   >
                     {SLOTS.map((s) => (
-                      <option key={s.label} value={s.label}>
-                        {t(s.label)}
+                      <option key={s} value={s} disabled={isPrototypeCoopSlotPast(s)}>
+                        {t(s)}
                       </option>
                     ))}
                   </select>
@@ -2859,7 +3231,7 @@ export default function OrderAgentModal({
               )}
 
               {/* ── Thanh toán — tabs ngang CÙNG CẤU TRÚC với form giỏ hàng ── */}
-              {isBHXReal || (!isCoopReal && !isTXNNReal) ? (
+              {!isTXNNReal ? (
                 <section className="rounded-2xl border border-slate-200 p-3">
                   <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     {t("Thanh toán")}
@@ -3074,7 +3446,7 @@ export default function OrderAgentModal({
           }
 
           {/* PHASE 2: trợ lý chạy */}
-          {phase === "running" && isCoopReal && (
+          {phase === "running" && false && isCoopReal && (
             <div className="space-y-3">
               <ol className="space-y-2.5">
                 <li className="flex items-start gap-2.5">
@@ -3093,60 +3465,44 @@ export default function OrderAgentModal({
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="mt-0.5 shrink-0">
-                    {coopBusy ? <Spinner /> : <PauseDot />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-slate-800">
-                      {t("Nhập OTP thật Co.op gửi về {phone}", { phone: phoneDigits })}
-                    </p>
-                    <PauseBox tone="blue" hint={t("Mã này đến từ Co.op, Affree không đọc SMS giúp bạn.")}>
-                      <div className="flex gap-2">
-                        <input
-                          value={otp}
-                          onChange={(e) => {
-                            setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
-                            setCoopError("");
-                          }}
-                          inputMode="numeric"
-                          placeholder={t("6 SỐ OTP")}
-                          className="input flex-1"
-                          autoFocus
-                        />
-                        <button
-                          disabled={otp.length !== 6 || coopBusy}
-                          onClick={() => void confirmCoopOtp()}
-                          className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          {coopBusy ? t("Đang gửi…") : t("Xác thực")}
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={coopBusy}
-                        onClick={() => void resendCoopOtp()}
-                        className="mt-2 text-xs font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
-                      >
-                        {t("Gửi lại OTP")}
-                      </button>
-                      {coopError && (
-                        <p className="mt-2 text-xs font-medium text-rose-600">{coopError}</p>
-                      )}
-                    </PauseBox>
-                  </div>
-                </li>
-                <li className="flex items-start gap-2.5">
-                  <span className="mt-0.5 shrink-0">
-                    <PauseDot />
+                    {coopBusy ? <Spinner /> : <CheckIcon />}
                   </span>
                   <p className="text-sm text-slate-500">
-                    {t("Sau OTP: login OAuth, tạo cart Co.op, add sản phẩm, validate đơn tối thiểu 200.000đ và đọc ngày/khung giờ giao hợp lệ.")}
+                    {coopBusy
+                      ? t("Đang đăng nhập tài khoản đặt hộ, tạo giỏ và thêm sản phẩm Co.op…")
+                      : t("Đã đăng nhập tài khoản đặt hộ, tạo giỏ và thêm sản phẩm Co.op.")}
                   </p>
                 </li>
               </ol>
+              {coopBrowserVisible && (
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div className="flex items-center justify-between gap-2 bg-slate-900 px-3 py-2 text-xs text-white">
+                    <span>{coopBrowserStatus || t("Đang lấy mã QR VNPAY thật…")}</span>
+                    <button type="button" onClick={closeCoopBrowser} className="rounded bg-white/10 px-2 py-1 font-semibold hover:bg-white/20">
+                      {t("Đóng màn hình")}
+                    </button>
+                  </div>
+                  <div className="flex min-h-72 items-center justify-center bg-white">
+                    {coopBrowserFrame ? (
+                      <img
+                        ref={coopStreamImageRef}
+                        src={coopBrowserFrame}
+                        alt={t("Màn hình thanh toán VNPAY")}
+                        className="max-h-[520px] w-full cursor-crosshair object-contain"
+                        onClick={clickCoopBrowser}
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2 py-12 text-sm text-slate-500">
+                        <Spinner /> {t("Đang mở checkout và lấy mã QR VNPAY…")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {phase === "running" && !isBHXReal && (
+          {phase === "running" && isBHXReal && (
             <div className="space-y-3">
               <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
                 <div className="flex items-center gap-2">
@@ -3159,10 +3515,102 @@ export default function OrderAgentModal({
                   {t("Log từ agent-server sẽ hiển thị bên dưới.")}
                 </p>
               </div>
+
+              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {bhxMessages.map((log, i) => {
+                  const tone =
+                    log.status === "error"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : log.status === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : log.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-white text-slate-700";
+                  return (
+                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
+                      <div className="flex items-start gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
+                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              {bhxOtpVisible && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <p className="mb-2 text-sm font-semibold text-blue-800">
+                    {t("Nhập OTP Bách Hóa Xanh")}
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={bhxOtp}
+                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitBHXOtp();
+                      }}
+                      inputMode="numeric"
+                      placeholder={t("Nhập mã OTP")}
+                      className="input flex-1 bg-white"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      disabled={!bhxOtp.trim()}
+                      onClick={submitBHXOtp}
+                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t("Gửi")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bhxShowScreencast && (
+                <div className="rounded-xl border border-emerald-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Màn hình sau khi đặt hàng")}
+                  </p>
+                  <div
+                    className="overflow-hidden rounded-lg bg-slate-950"
+                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
+                  >
+                    {bhxBrowserFrame ? (
+                      <img
+                        src={bhxBrowserFrame}
+                        alt={t("Màn hình Bách Hóa Xanh")}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
+                        {t("Đang chờ ảnh màn hình...")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {bhxDeliveryHtml && (
+                <div className="rounded-xl border border-slate-200 bg-white p-2">
+                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
+                    {t("Chọn thời gian giao hàng")}
+                  </p>
+                  <div
+                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
+                    onClick={handleBHXDeliveryChoice}
+                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
+                  />
+                  {bhxSelectedDeliveryText && (
+                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {phase === "running" && (!isCoopReal || isBHXReal) && (
+          {phase === "running" && !isBHXReal && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
                 {visibleSteps.map((s, i) => {
@@ -3207,7 +3655,7 @@ export default function OrderAgentModal({
 
                         {isCurrent && s.kind === "otp" && (
                           <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
-                            {!isBHXReal && !usesServerTimeline && !simOtp ? (
+                            {!usesServerTimeline && !simOtp ? (
                               <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
                                 <Spinner />
                                 {t("Đang chờ {chain} gửi mã…", { chain })}
@@ -3251,22 +3699,19 @@ export default function OrderAgentModal({
                                 autoFocus
                               />
                               <button
-                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp && !isBHXReal)}
+                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp)}
                                 onClick={() => {
-                                  if (!isBHXReal && !usesServerTimeline && otp !== simOtp) {
+                                  if (!usesServerTimeline && otp !== simOtp) {
                                     setOtpError(true);
                                     return;
                                   }
                                   const submittedOtp = otp;
+                                  setOtp("");
                                   setOtpError(false);
                                   if (usesServerTimeline) {
-                                    setOtp("");
                                     void sendSessionEvent({ type: "otp_submitted", otp: submittedOtp });
                                     return;
-                                  } else if (isBHXReal) {
-                                    void submitBHXOtp(bhxRuntime);
                                   }
-                                  setOtp("");
                                   setSimOtp("");
                                   setStepIndex((x) => x + 1);
                                 }}
@@ -3360,13 +3805,29 @@ export default function OrderAgentModal({
                                 </div>
                               )}
 
-                              <button
-                                type="button"
-                                onClick={() => setStepIndex((x) => x + 1)}
-                                className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                              >
-                                {demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
-                              </button>
+                              {isCoopReal && demoPayMethod === "qr" && (
+                                <button
+                                  type="button"
+                                  disabled={!coopPaymentQrImage || coopPaymentQrBusy || coopPaymentVerifying}
+                                  onClick={() => {
+                                    setCoopPaymentVerifying(true);
+                                    sendCoopBrowserMessage({ type: "coop_payment_scanned" });
+                                  }}
+                                  className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                >
+                                  {coopPaymentVerifying ? t("Đang kiểm tra thanh toán…") : t("Đã quét QR →")}
+                                </button>
+                              )}
+
+                              {!isCoopReal && (
+                                <button
+                                  type="button"
+                                  onClick={() => setStepIndex((x) => x + 1)}
+                                  className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                                >
+                                  {demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
+                                </button>
+                              )}
                             </div>
                           </PauseBox>
                         )}
@@ -3509,7 +3970,7 @@ export default function OrderAgentModal({
                             <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
                               <Row k={t("Tên người đặt")} v={name} />
                               <Row k={t("Số điện thoại")} v={phone} />
-                              <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                              <Row k={t("Món")} v={isMultiCoopOrder ? `${coopOrderSummaryName} (${coopOrderLines.length} món)` : `${activeOffer.product.name} ×${qty}`} />
                               <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
                               <Row k={t("Giao tới")} v={address} />
                               {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
@@ -3522,8 +3983,6 @@ export default function OrderAgentModal({
                                 if (usesServerTimeline) {
                                   void sendSessionEvent({ type: "confirm_final_action" });
                                   return;
-                                } else if (isBHXReal) {
-                                  void submitBHXFinalConfirm(bhxRuntime);
                                 }
                                 setStepIndex((x) => x + 1);
                               }}
@@ -3560,7 +4019,7 @@ export default function OrderAgentModal({
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
               <div className="mt-4 w-full space-y-1.5 rounded-xl bg-slate-50 p-3 text-left text-sm">
-                <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
+                <Row k={t("Món")} v={isMultiCoopOrder ? `${coopOrderSummaryName} (${coopOrderLines.length} món)` : `${activeOffer.product.name} ×${qty}`} />
                 <Row k={t("Nơi bán")} v={`${chain} · ${activeOffer.store.name}`} />
                 <Row k={t("Giao tới")} v={address} />
                 {cfg.needEmail && email.trim() && <Row k="Email" v={email} />}
@@ -3755,7 +4214,7 @@ export default function OrderAgentModal({
                 <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
               </div>
               <button
-                disabled={!canStart || (isCoopReal || isBHXReal ? coopBusy : false)}
+                disabled={autoStart || !canStart || (isCoopReal || isBHXReal ? coopBusy : false)}
                 onClick={() => {
                   flushProfile({ name, phone, address });
                   // Thẻ mới đủ thông tin + tick "Lưu thẻ" → nhớ lại cho lần sau (localStorage, không rời máy).
@@ -3769,7 +4228,7 @@ export default function OrderAgentModal({
                   } else if (isCoopReal) {
                     void startCoopOrder();
                   } else if (isBHXReal) {
-                    void startBHXOrder(bhxRuntime).catch((err: unknown) => {
+                    startBHXOrder().catch((err) => {
                       console.error("Bach Hoa Xanh order error:", err);
                       alert(err instanceof Error ? err.message : String(err));
                     });
@@ -3785,15 +4244,19 @@ export default function OrderAgentModal({
               >
                 {isTXNNReal && submitting
                   ? t("Đang tạo phiên đặt hàng…")
+                  : autoStart && isCoopReal && !coopBusy
+                    ? t("Đang tự kết nối Co.op…")
                   : coopBusy
                     ? t("Đang kết nối Co.op…")
                     : isCoopReal
                       ? t("Kết nối Co.op và thêm vào giỏ →")
-                      : t("Để trợ lý đặt giúp 111 →")}
+                      : t("Để trợ lý đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
-                  {isCoopReal
+                  {autoStart && isCoopReal
+                    ? t("Đang chuẩn bị địa chỉ và cửa hàng Co.op gần nhất, bạn không cần bấm thêm.")
+                    : isCoopReal
                     ? t("Nhập đủ tên, số điện thoại, địa chỉ và đảm bảo đơn Co.op từ 200.000đ.")
                     : payTabsShown && demoPayMethod === null && name.trim() && phoneValid && address.trim()
                       ? t("Chọn phương thức thanh toán để tiếp tục.")
@@ -4172,6 +4635,64 @@ function getEffectiveCoopDeliverySlots(
     ...slot,
     disabled: slot.disabled || parseSlotStartMinutes(slot.from) <= earliestStartMinutes,
   }));
+}
+
+function prototypeSlotRange(label: string) {
+  const normalized = normalizeCoopText(label);
+  if (normalized.includes("toi")) return { from: 18 * 60, to: 21 * 60 };
+  if (normalized.includes("sang")) return { from: 8 * 60, to: 11 * 60 };
+  if (normalized.includes("chieu")) return { from: 14 * 60, to: 17 * 60 };
+  return { from: 0, to: 24 * 60 };
+}
+
+function prototypeSlotDate(label: string) {
+  const date = new Date();
+  const normalized = normalizeCoopText(label);
+  if (normalized.includes("ngay mai") || /\bmai\b/.test(normalized)) date.setDate(date.getDate() + 1);
+  return formatDateInput(date);
+}
+
+function isPrototypeCoopSlotPast(label: string) {
+  const normalized = normalizeCoopText(label);
+  if (normalized.includes("ngay mai") || /\bmai\b/.test(normalized)) return false;
+  const range = prototypeSlotRange(label);
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() + COOP_DELIVERY_LEAD_MINUTES >= range.to;
+}
+
+function findClosestCoopSlot(
+  slots: Array<{ from: string; to: string; disabled?: boolean }>,
+  prototypeSlot: string,
+) {
+  const target = prototypeSlotRange(prototypeSlot);
+  const targetMidpoint = (target.from + target.to) / 2;
+  return slots
+    .filter((item) => !item.disabled)
+    .map((item) => {
+      const from = parseSlotStartMinutes(item.from);
+      const to = parseSlotStartMinutes(item.to);
+      const overlap = Math.max(0, Math.min(to, target.to) - Math.max(from, target.from));
+      const midpointDistance = Math.abs((from + to) / 2 - targetMidpoint);
+      return { item, overlap, midpointDistance };
+    })
+    .sort((a, b) => b.overlap - a.overlap || a.midpointDistance - b.midpointDistance)[0]?.item;
+}
+
+function selectCoopPrototypePaymentMethods(methods: CoopPaymentMethod[]): CoopPaymentMethod[] {
+  const byCode = (patterns: RegExp[]) => methods.find((method) => {
+    const haystack = `${method.methodCode || ""} ${method.methodGroupCode || ""} ${method.name || ""}`;
+    return !method.isDisabled && patterns.some((pattern) => pattern.test(haystack));
+  });
+
+  const qr = byCode([/VNPAY_GATEWAY_QR/i, /MOMO_GATEWAY/i, /\bQR\b/i]);
+  const cod = byCode([/^COD\b/i, /thanh toán khi nhận/i, /tiền mặt/i]);
+  const internationalCard = byCode([/INTERNATIONAL_CARD/i, /quốc tế/i, /VISA/i, /MASTERCARD/i]);
+
+  const selected: CoopPaymentMethod[] = [];
+  if (qr) selected.push({ ...qr, name: "QR" });
+  if (cod) selected.push({ ...cod, name: "COD" });
+  if (internationalCard) selected.push({ ...internationalCard, name: "Thẻ Quốc Tế" });
+  return selected;
 }
 
 function coopStepRank(step: CoopStepId | "success") {

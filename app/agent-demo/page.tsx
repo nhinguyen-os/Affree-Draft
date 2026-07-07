@@ -12,6 +12,44 @@ type LogEntry = {
   status: "info" | "success" | "warning" | "error";
 };
 
+const WALMART_FULFILLMENTS = [
+  { value: "shipping", label: "Shipping" },
+  { value: "pickup", label: "Store pickup" },
+  { value: "delivery", label: "Delivery from store" },
+];
+
+const WALMART_PAYMENTS = [
+  { value: "card", label: "Credit / debit card" },
+  { value: "paypal", label: "PayPal" },
+  { value: "giftcard", label: "Walmart gift card" },
+  { value: "ebt", label: "EBT/SNAP" },
+];
+
+const WALMART_STATES = ["CA", "TX", "NY", "FL", "WA", "IL", "NJ", "MA", "AZ", "GA"];
+
+const AGENT_DEMO_PRODUCTS = [
+  ...PRODUCTS,
+  {
+    id: "demo-cod-mw3-ps5",
+    name: "Call of Duty: Modern Warfare III - PlayStation 5",
+    brand: "Activision",
+    category: "Game",
+    unit: "PS5 disc",
+  },
+];
+
+const AGENT_DEMO_OFFERS = [
+  ...SEED_CATALOG.offers,
+  {
+    productId: "demo-cod-mw3-ps5",
+    storeId: "walmart",
+    price: 49.94,
+    inStock: true,
+    productUrl: "https://www.walmart.com/ip/Call-of-Duty-Modern-Warfare-III-PlayStation-5/2974504286",
+    lastChecked: new Date().toISOString(),
+  },
+];
+
 export default function AgentDemoPage() {
   // Trạng thái kết nối
   const [wsUrl, setWsUrl] = useState(process.env.NEXT_PUBLIC_ORDER_AGENT_SERVER_URL || "ws://localhost:8080");
@@ -24,16 +62,26 @@ export default function AgentDemoPage() {
   const [buyerAddress, setBuyerAddress] = useState(savedProfile.address || "5 Đống Đa, Phường 2, Quận Tân Bình, Thành phố Hồ Chí Minh");
 
   // Chọn sản phẩm test
-  const [selectedProductId, setSelectedProductId] = useState(PRODUCTS[0].id);
+  const [selectedProductId, setSelectedProductId] = useState(AGENT_DEMO_PRODUCTS[0].id);
   const [selectedChain, setSelectedChain] = useState("concung");
   const [qty, setQty] = useState(1);
   const [customUrl, setCustomUrl] = useState("");
+  const [walmartEmail, setWalmartEmail] = useState("");
+  const [walmartPassword, setWalmartPassword] = useState("");
+  const [walmartStreet, setWalmartStreet] = useState("");
+  const [walmartApt, setWalmartApt] = useState("");
+  const [walmartCity, setWalmartCity] = useState("Houston");
+  const [walmartState, setWalmartState] = useState("TX");
+  const [walmartZip, setWalmartZip] = useState("77072");
+  const [walmartFulfillment, setWalmartFulfillment] = useState("shipping");
+  const [walmartPayment, setWalmartPayment] = useState("card");
 
-  const activeProduct = useMemo(() => PRODUCTS.find((p) => p.id === selectedProductId)!, [selectedProductId]);
+  const activeProduct = useMemo(() => AGENT_DEMO_PRODUCTS.find((p) => p.id === selectedProductId)!, [selectedProductId]);
+  const isWalmartSelected = selectedChain === "walmart";
 
   // Tìm URL sản phẩm trong seed catalog tương ứng chuỗi
   const activeOffer = useMemo(() => {
-    return SEED_CATALOG.offers.find(
+    return AGENT_DEMO_OFFERS.find(
       (o) => o.productId === selectedProductId && o.storeId.startsWith(selectedChain)
     );
   }, [selectedProductId, selectedChain]);
@@ -46,13 +94,20 @@ export default function AgentDemoPage() {
     return SOURCE_META[selectedChain]?.home || "https://concung.com";
   }, [customUrl, activeOffer, selectedChain]);
 
+  const walmartFullAddress = useMemo(() => {
+    return [walmartStreet, walmartApt, walmartCity, walmartState, walmartZip]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(", ");
+  }, [walmartStreet, walmartApt, walmartCity, walmartState, walmartZip]);
+
   // Khi đổi chuỗi cửa hàng, tự chọn sản phẩm đầu tiên có hỗ trợ chuỗi đó
   useEffect(() => {
-    const hasOffer = SEED_CATALOG.offers.some(
+    const hasOffer = AGENT_DEMO_OFFERS.some(
       (o) => o.productId === selectedProductId && o.storeId.startsWith(selectedChain)
     );
     if (!hasOffer) {
-      const firstValidOffer = SEED_CATALOG.offers.find((o) => o.storeId.startsWith(selectedChain));
+      const firstValidOffer = AGENT_DEMO_OFFERS.find((o) => o.storeId.startsWith(selectedChain));
       if (firstValidOffer) {
         setSelectedProductId(firstValidOffer.productId);
       }
@@ -106,7 +161,8 @@ export default function AgentDemoPage() {
         return res.json();
       })
       .then((data) => {
-        let finalUrl = `${wsUrl}${separator}sessionId=${wsSessionId}`;
+        const chainParam = selectedChain === "walmart" ? "&chain=walmart" : "";
+        let finalUrl = `${wsUrl}${separator}sessionId=${wsSessionId}${chainParam}`;
         if (data.token) {
           finalUrl += `&timestamp=${data.timestamp}&token=${data.token}`;
         }
@@ -221,12 +277,38 @@ export default function AgentDemoPage() {
         type: "run_order",
         payload: {
           url: targetUrl,
+          productUrl: targetUrl,
           productName: activeProduct.name,
           qty,
           buyerName,
           buyerPhone,
-          buyerAddress,
-          chain: selectedChain
+          buyerAddress: isWalmartSelected ? walmartFullAddress || buyerAddress : buyerAddress,
+          chain: selectedChain,
+          ...(isWalmartSelected
+            ? {
+              account: {
+                email: walmartEmail,
+                password: walmartPassword,
+              },
+              customer: {
+                name: buyerName,
+                phone: buyerPhone,
+                email: walmartEmail,
+              },
+              address: {
+                street: walmartStreet,
+                apt: walmartApt,
+                city: walmartCity,
+                state: walmartState,
+                zip: walmartZip,
+                full: walmartFullAddress,
+              },
+              fulfillment: walmartFulfillment,
+              payment: {
+                method: walmartPayment,
+              },
+            }
+            : {}),
         }
       })
     );
@@ -446,7 +528,7 @@ export default function AgentDemoPage() {
                       onChange={(e) => setSelectedProductId(e.target.value)}
                       className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-emerald-500"
                     >
-                      {PRODUCTS.map((p) => (
+                      {AGENT_DEMO_PRODUCTS.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
@@ -465,6 +547,7 @@ export default function AgentDemoPage() {
                       <option value="bhx">Bách Hóa Xanh</option>
                       <option value="aeon">AEON</option>
                       <option value="pnj">PNJ</option>
+                      <option value="walmart">Walmart</option>
                     </select>
                   </div>
                 </div>
@@ -508,6 +591,11 @@ export default function AgentDemoPage() {
                     className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-emerald-500"
                   />
                 </div>
+                {isWalmartSelected && (
+                  <div className="rounded-xl border border-blue-500/20 bg-blue-950/20 p-3 text-xs leading-5 text-blue-100">
+                    Walmart sẽ chạy agentic bằng Playwright context tạm. Agent bắt đầu từ /orders → Sign In, đăng nhập trước rồi mới mở URL sản phẩm cụ thể, không search lại.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -546,6 +634,125 @@ export default function AgentDemoPage() {
                     className="w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-emerald-500"
                   />
                 </div>
+
+                {isWalmartSelected && (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-blue-300">
+                      Thông tin Walmart agentic
+                    </h3>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">Email Walmart</label>
+                          <input
+                            type="email"
+                            value={walmartEmail}
+                            onChange={(e) => setWalmartEmail(e.target.value)}
+                            placeholder="name@example.com"
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">Mật khẩu Walmart</label>
+                          <input
+                            type="password"
+                            value={walmartPassword}
+                            onChange={(e) => setWalmartPassword(e.target.value)}
+                            placeholder="Password"
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-400">Street address</label>
+                        <input
+                          type="text"
+                          value={walmartStreet}
+                          onChange={(e) => setWalmartStreet(e.target.value)}
+                          placeholder="702 SW 8th St"
+                          className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-[1fr_0.65fr_0.9fr] gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">City</label>
+                          <input
+                            type="text"
+                            value={walmartCity}
+                            onChange={(e) => setWalmartCity(e.target.value)}
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">State</label>
+                          <select
+                            value={walmartState}
+                            onChange={(e) => setWalmartState(e.target.value)}
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          >
+                            {WALMART_STATES.map((state) => (
+                              <option key={state}>{state}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">ZIP</label>
+                          <input
+                            type="text"
+                            value={walmartZip}
+                            onChange={(e) => setWalmartZip(e.target.value)}
+                            inputMode="numeric"
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-slate-400">Apt, suite (tuỳ chọn)</label>
+                        <input
+                          type="text"
+                          value={walmartApt}
+                          onChange={(e) => setWalmartApt(e.target.value)}
+                          placeholder="Apt 4B"
+                          className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">Fulfillment</label>
+                          <select
+                            value={walmartFulfillment}
+                            onChange={(e) => setWalmartFulfillment(e.target.value)}
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          >
+                            {WALMART_FULFILLMENTS.map((item) => (
+                              <option key={item.value} value={item.value}>{item.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-400">Payment</label>
+                          <select
+                            value={walmartPayment}
+                            onChange={(e) => setWalmartPayment(e.target.value)}
+                            className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-500"
+                          >
+                            {WALMART_PAYMENTS.map((item) => (
+                              <option key={item.value} value={item.value}>{item.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-[11px] text-slate-400">
+                        Payload sẽ gửi `account`, `address`, `fulfillment`, `payment` cho skill Walmart. Agent sẽ dừng nếu gặp OTP/CAPTCHA/review cuối.
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="pt-2">
                   <button
