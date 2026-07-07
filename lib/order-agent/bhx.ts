@@ -98,6 +98,10 @@ export async function startBHXOrder(ctx: BhxOrderRuntime): Promise<void> {
         ctx.setBhxBusy(false);
         ctx.setBhxQR(message.content);
         ctx.setStepIndex(7);
+      } else if (message.type === "message" && message.content) {
+        console.log("BHX agent message:", message.content);
+      } else if (message.type === "log" && message.message) {
+        console.log("BHX agent log:", message.message);
       }
     } catch (err) {
       console.error("Error handling BHX agent message:", err);
