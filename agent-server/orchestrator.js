@@ -44,10 +44,21 @@ const wss = new WebSocket.Server({ port: PORT });
 
 console.log(`[Orchestrator] Cổng chính đang lắng nghe tại: ${PORT}...`);
 
+// Các cổng đã được "giữ chỗ" cho một session khác nhưng container có thể
+// chưa kịp bind xong (docker run chạy bất đồng bộ). Không dùng Set này thì
+// 2 kết nối đến gần nhau sẽ cùng thấy một cổng "trống" (do lúc kiểm tra
+// server test đã đóng lại ngay) rồi cùng chọn nó, gây lỗi "port is already
+// allocated" ở lần docker run thứ hai.
+const reservedPorts = new Set();
+
 // Hàm tìm cổng trống khả dụng trên host bắt đầu từ port 9000
 function getFreePort(startPort = 9001) {
   return new Promise((resolve) => {
     function checkPort(port) {
+      if (reservedPorts.has(port)) {
+        checkPort(port + 1);
+        return;
+      }
       const server = net.createServer();
       server.once("error", () => {
         // Cổng đã bận, kiểm tra cổng tiếp theo
@@ -168,6 +179,7 @@ wss.on("connection", async (clientWs, req) => {
 
   // Tìm cổng trống
   const hostPort = await getFreePort();
+  reservedPorts.add(hostPort); // Giữ chỗ ngay lập tức, giải phóng ở cleanupDocker/lỗi launch
   console.log(`[Orchestrator] Đã tìm thấy cổng trống cho session: ${hostPort}`);
 
   // Chuẩn bị biến môi trường để truyền qua container docker
@@ -206,6 +218,7 @@ wss.on("connection", async (clientWs, req) => {
   // của process nên API key không xuất hiện trong command/error log.
   execFile("docker", dockerArgs, { env: process.env }, async (err, stdout, stderr) => {
     if (err) {
+      reservedPorts.delete(hostPort);
       console.error(`[Orchestrator] Không khởi chạy được Docker container cho session ${sessionId}:`, err.message);
       console.error(`[Orchestrator] Docker stderr:`, stderr);
       clientWs.send(JSON.stringify({
@@ -236,6 +249,7 @@ wss.on("connection", async (clientWs, req) => {
     function cleanupDocker() {
       if (cleanedUp) return;
       cleanedUp = true;
+      reservedPorts.delete(hostPort);
       console.log(`[Orchestrator] Đang kết thúc container: ${containerName}`);
       exec(`docker kill ${containerName}`, (killErr) => {
         if (killErr) {
