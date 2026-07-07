@@ -1278,19 +1278,47 @@ wss.on("connection", async (ws, req) => {
       };
     };
 
+    await page.waitForSelector(".qr-section img.qrcodeimg-modal[src^='data:image/png;base64'], img.qrcodeimg-modal[src^='data:image/png;base64']", {
+      state: "attached",
+      timeout: 15000,
+    }).catch(() => { });
+
     const findQrDataImageInFrame = (frame) => frame.evaluate(() => {
       const preferredSelectors = [
+        ".qr-section img.qrcodeimg-modal[src^='data:image/png;base64']",
+        "img.qrcodeimg-modal[src^='data:image/png;base64']",
         "img.qrcodeimg-modal",
         ".qr img[src^='data:image']",
         "img[alt='QR CODE']",
         "img[alt*='QR']",
+        "img[src^='data:image/png;base64']",
       ];
-      const readSrc = (img) => img?.getAttribute("src") || img?.src || "";
+      const readSrc = (img) => img?.getAttribute("src") || img?.currentSrc || img?.src || "";
+      const visibleScore = (node) => {
+        const rect = node?.getBoundingClientRect?.();
+        if (!rect || rect.width < 80 || rect.height < 80) return 0;
+        const ratio = rect.width / rect.height;
+        if (ratio < 0.7 || ratio > 1.35) return 0;
+        const text = (node.closest?.("section, div, main, body")?.textContent || "").slice(0, 800).toLowerCase();
+        let score = Math.min(rect.width, rect.height);
+        if (/qr|qrcode|quét mã|quet ma|vnpay|thanh toán|thanh toan/.test(text)) score += 260;
+        if (Math.abs(rect.width - rect.height) < 24) score += 120;
+        return score;
+      };
       for (const selector of preferredSelectors) {
         const src = readSrc(document.querySelector(selector));
         if (src.startsWith("data:image/")) return src;
       }
+      const canvas = Array.from(document.querySelectorAll("canvas"))
+        .map((node) => ({ node, score: visibleScore(node) }))
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score)[0]?.node;
+      if (canvas && typeof canvas.toDataURL === "function") {
+        const src = canvas.toDataURL("image/png");
+        if (src.startsWith("data:image/")) return src;
+      }
       const images = Array.from(document.querySelectorAll("img"));
+      const dataImageCandidates = [];
       for (const img of images) {
         const src = readSrc(img);
         if (!src.startsWith("data:image/")) continue;
@@ -1302,7 +1330,11 @@ wss.on("connection", async (ws, req) => {
           img.closest(".qr, [class*='qr'], [id*='qr']")?.getAttribute("id"),
         ].filter(Boolean).join(" ").toLowerCase();
         if (/qr|qrcode|vnpay|momo/.test(label)) return src;
+        const score = visibleScore(img);
+        if (score > 0) dataImageCandidates.push({ src, score });
       }
+      dataImageCandidates.sort((a, b) => b.score - a.score);
+      if (dataImageCandidates[0]?.src) return dataImageCandidates[0].src;
       return "";
     });
     const findQrDataImage = async () => {

@@ -497,7 +497,7 @@ export async function POST(req: NextRequest) {
   const action = readString(body.action);
 
   try {
-    if (action === "register") {
+    if (action === "register" || action === "createCart") {
       const phone = normalizeCoopPhone(readString(body.phone));
       const password = readString(body.password);
       if (!isValidCoopPhone(phone)) {
@@ -507,7 +507,7 @@ export async function POST(req: NextRequest) {
       const deliveryInfo = buildDeliveryInfo(body, phone);
       const browserSessionMeta = readBrowserSessionMeta(body, deliveryInfo);
       const resolved = await resolveCartItems(body);
-      logCoopOrderItems("register", resolved);
+      logCoopOrderItems(action === "createCart" ? "createCart" : "register", resolved);
 
       // Affree đặt hộ bằng tài khoản Affree — không đăng ký/OTP với SĐT khách.
       const affree = await affreeCoopAccount();

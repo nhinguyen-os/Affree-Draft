@@ -1604,10 +1604,12 @@ function buildCoopPaymentPayload(input: {
 }) {
   const data = readConfirmationData(input.confirmationCart);
   const selectedPayment = data.paymentMethods?.find((item) => item.isSelected);
-  if (!selectedPayment?.methodCode || selectedPayment.methodCode === "COD") return null;
+  if (!selectedPayment?.methodCode) return null;
   if (selectedPayment.isDisabled) return null;
 
-  const methodGroupCode = selectedPayment.methodGroupCode || "CARD";
+  const isCod = selectedPayment.methodCode === "COD";
+  // COD dùng methodGroupCode "CREDIT" (confirmed từ debug network), non-COD dùng giá trị từ API
+  const methodGroupCode = isCod ? "CREDIT" : (selectedPayment.methodGroupCode || "CARD");
   const groupKey = methodGroupCode.toLowerCase();
   const orderCode = input.checkoutResult.code || input.checkoutResult.orderId || input.checkoutResult.id;
   const orderId = input.checkoutResult.orderId || input.checkoutResult.id || input.checkoutResult.code;
@@ -1617,14 +1619,21 @@ function buildCoopPaymentPayload(input: {
   const amount = Math.max(0, grandTotal - totalPaid - previousPayments);
   if (!orderId || amount <= 0) return null;
 
-  const methodPayment = {
+  const clientTransactionCode = genPaymentClientTransactionCode(orderCode, methodGroupCode);
+
+  // COD không cần type/bankCode, non-COD cần URL_REDIRECT
+  const methodPayment: Record<string, unknown> = {
     ...selectedPayment,
     amount,
-    type: "URL_REDIRECT",
-    clientTransactionCode: genPaymentClientTransactionCode(orderCode, methodGroupCode),
-    bankCode: selectedPayment.methodCode === "VNPAY_GATEWAY_QR" ? "VNPAYQR" : undefined,
+    clientTransactionCode,
+    merchantCode: selectedPayment.merchantCode || data.paymentMerchantCode || "",
   };
-  if (!methodPayment.bankCode) delete methodPayment.bankCode;
+  if (!isCod) {
+    methodPayment.type = "URL_REDIRECT";
+    if (selectedPayment.methodCode === "VNPAY_GATEWAY_QR") {
+      methodPayment.bankCode = "VNPAYQR";
+    }
+  }
 
   return {
     terminalCode: selectedPayment.paymentTerminalCode || data.paymentTerminalCode || input.terminalCode,
@@ -1768,15 +1777,16 @@ export async function submitCoopCheckout(input: {
   const paymentCheck = parsePaymentCheck(confirmation.data);
   const selectedPaymentCode = paymentCheck.selectedMethodCode || result.paymentMethodCode;
   const checkoutPaymentUrl = findPaymentUrl(raw);
-  const payment =
-    checkoutPaymentUrl || selectedPaymentCode === "COD"
-      ? { paymentUrl: checkoutPaymentUrl, payments: undefined, raw: undefined }
-      : await createCoopPaymentUrl({
-          accessToken: input.accessToken,
-          confirmationCart: confirmation.data,
-          checkoutResult: result,
-          terminalCode: input.terminalCode,
-        });
+  // Luôn gọi create-payment cho mọi phương thức (kể cả COD) để hoàn tất đặt hàng.
+  // Nếu checkout API đã trả paymentUrl sẵn thì dùng luôn, không cần gọi thêm.
+  const payment = checkoutPaymentUrl
+    ? { paymentUrl: checkoutPaymentUrl, payments: undefined, raw: undefined }
+    : await createCoopPaymentUrl({
+        accessToken: input.accessToken,
+        confirmationCart: confirmation.data,
+        checkoutResult: result,
+        terminalCode: input.terminalCode,
+      });
   return {
     cartToken: readCartToken(res, confirmation.cartToken),
     orderPayload: order,
