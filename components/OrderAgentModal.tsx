@@ -17,7 +17,7 @@ import { detectCardBrand, CARD_BRANDS, CARD_BRAND_STYLE } from "./PaymentSection
 import { ChainBadge } from "./ChainBadge";
 import { MarqueeText } from "./MarqueeText";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
-import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, submitPayment, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
+import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
@@ -552,7 +552,7 @@ export default function OrderAgentModal({
       
       s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
       
-      s.push({ kind: "auto", label: t("Đặt hàng thành công") });
+      s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
 
       if (demoPayMethod === "qr") {
         s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
@@ -721,26 +721,30 @@ export default function OrderAgentModal({
   }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp, note]);
 
   // Demo: tự chạy qua bước "auto" sau 1.2s; đến bước "success" → chuyển phase done.
-  // useEffect(() => {
-  //   if (phase !== "running" || sessionId || !current) return;
-  //   if (current.kind === "success") {
-  //     const timer = window.setTimeout(() => {
-  //       setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
-  //       setPhase("done");
-  //       onPlaced("DEMO", activeOffer, note);
-  //     }, 800);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  //   if (current.kind === "auto") {
-  //     const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  //   if (current.kind === "otp") {
-  //     const code = String(Math.floor(100000 + Math.random() * 900000));
-  //     const timer = window.setTimeout(() => setSimOtp(code), 2000);
-  //     return () => window.clearTimeout(timer);
-  //   }
-  // }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
+  useEffect(() => {
+    if (phase !== "running" || sessionId || !current) return;
+    if (current.kind === "success") {
+      const timer = window.setTimeout(() => {
+        if (!isBHXReal) {
+          setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+        }
+        setPhase("done");
+        onPlaced("DEMO", activeOffer, note);
+      }, 800);
+      return () => window.clearTimeout(timer);
+    }
+    if (!isBHXReal) {
+      if (current.kind === "auto") {
+        const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
+        return () => window.clearTimeout(timer);
+      }
+      if (current.kind === "otp") {
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        const timer = window.setTimeout(() => setSimOtp(code), 2000);
+        return () => window.clearTimeout(timer);
+      }
+    }
+  }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
 
   const total = activeOffer.price * qty;
   const coopMinTotal = 200000;
@@ -3146,22 +3150,6 @@ export default function OrderAgentModal({
             </div>
           )}
 
-          {phase === "running" && !isBHXReal && (
-            <div className="space-y-3">
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  {bhxBusy ? <Spinner /> : <CheckIcon />}
-                  <p className="text-sm font-semibold text-slate-900">
-                    {bhxBusy ? t("Đang chạy agent Bách Hóa Xanh…") : t("Agent Bách Hóa Xanh đã dừng")}
-                  </p>
-                </div>
-                <p className="mt-1 text-xs text-slate-600">
-                  {t("Log từ agent-server sẽ hiển thị bên dưới.")}
-                </p>
-              </div>
-            </div>
-          )}
-
           {phase === "running" && (!isCoopReal || isBHXReal) && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
@@ -3362,12 +3350,7 @@ export default function OrderAgentModal({
 
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setStepIndex((x) => x + 1);
-                                  if (isBHXReal) {
-                                    void submitPayment(bhxRuntime)
-                                  }
-                                }}
+                                onClick={() => setStepIndex((x) => x + 1)}
                                 className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700"
                               >
                                 {demoPayMethod === "qr" ? t("Đã chuyển khoản →") : t("Xác nhận thẻ →")}
@@ -3794,7 +3777,7 @@ export default function OrderAgentModal({
                     ? t("Đang kết nối Co.op…")
                     : isCoopReal
                       ? t("Kết nối Co.op và thêm vào giỏ →")
-                      : t("Để trợ lý đặt giúp 111 →")}
+                      : t("Để trợ lý đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">

@@ -1912,15 +1912,23 @@ wss.on("connection", async (ws, req) => {
 
               const html = await img.evaluate((el) => el.outerHTML);
 
-              const detail = page.locator("p:has-text('Mã đơn hàng')").first();
-                await detail.waitFor({ state: "visible", timeout: 30000 });
-                await detail.click();
+              const detail = page.locator("p:has-text('Xem chi tiết đơn hàng')").first();
+              await detail.waitFor({ state: "visible", timeout: 30000 });
+              await detail.click();
 
               const orderCode = page.locator("span:has-text('Đơn hàng #')").first();
-              await orderCode.waitFor({ state: "visible", timeout: 30000 });
-              const orderCodeText = await orderCode.textContent();
+              let orderCodeText = "";
+              for (let i = 0; i < 30; i++) {
+                  orderCodeText = (await orderCode.textContent())?.trim() || "";
 
-              sendMessage(orderCodeText, "order_code");
+                  if (/Đơn hàng #\d+/.test(orderCodeText)) {
+                      break;
+                  }
+
+                  await page.waitForTimeout(1000);
+              }
+
+              sendMessage(orderCodeText.split('Đơn hàng #')[1].trim(), "order_code");
               sendMessage(html, "order_success");
               break;
             }
