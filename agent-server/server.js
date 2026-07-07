@@ -384,14 +384,18 @@ wss.on("connection", async (ws, req) => {
           break;
 
         case "confirm_final_action":
-          await resumeAgenticLoop("confirm_final_action", async () => {
-            try {
-              await page.getByText(/đặt hàng|xác nhận|mua ngay|hoàn tất/i).first().click({ timeout: 3000 });
-              sendLog("Đã thử click nút xác nhận cuối cùng trên trang.", "success");
-            } catch (err) {
-              sendLog("Không tìm thấy nút xác nhận cuối cùng bằng matcher tổng quát, AI sẽ tự tiếp tục.", "warning");
-            }
-          });
+          if (isBachHoaXanhFlow) {
+            await resumeAgenticLoopBHX("submit");
+          } else {
+            await resumeAgenticLoop("confirm_final_action", async () => {
+              try {
+                await page.getByText(/đặt hàng|xác nhận|mua ngay|hoàn tất/i).first().click({ timeout: 3000 });
+                sendLog("Đã thử click nút xác nhận cuối cùng trên trang.", "success");
+              } catch (err) {
+                sendLog("Không tìm thấy nút xác nhận cuối cùng bằng matcher tổng quát, AI sẽ tự tiếp tục.", "warning");
+              }
+            });
+          }
           break;
 
         case "payment_submitted": {
@@ -1462,7 +1466,22 @@ wss.on("connection", async (ws, req) => {
               await btn.scrollIntoViewIfNeeded();
               await btn.click();
               sendLog("Bach Hoa Xanh: Click lại nút Đặt hàng sau khi chọn giờ giao.", "success");
-              sendMessage("Đã đặt hàng thành công.", "order_success");
+
+              const img = page.locator("img[alt='qr bank']").first();
+              await img.waitFor({ state: "visible", timeout: 30000 });
+
+              const html = await img.evaluate((el) => el.outerHTML);
+
+              const detail = page.locator("p:has-text('Mã đơn hàng')").first();
+                await detail.waitFor({ state: "visible", timeout: 30000 });
+                await detail.click();
+
+              const orderCode = page.locator("span:has-text('Đơn hàng #')").first();
+              await orderCode.waitFor({ state: "visible", timeout: 30000 });
+              const orderCodeText = await orderCode.textContent();
+
+              sendMessage(orderCodeText, "order_code");
+              sendMessage(html, "order_success");
               break;
             }
           } catch (err) {

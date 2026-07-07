@@ -17,6 +17,7 @@ import { detectCardBrand, CARD_BRANDS, CARD_BRAND_STYLE } from "./PaymentSection
 import { ChainBadge } from "./ChainBadge";
 import { MarqueeText } from "./MarqueeText";
 import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-agent/types";
+import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, type BhxOrderRuntime } from "@/lib/order-agent/bhx";
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
@@ -144,10 +145,10 @@ type CoopAddressParts = {
 };
 
 const SLOTS = [
-  "Trong hôm nay (2–4 giờ)",
-  "Tối nay (18:00–21:00)",
-  "Sáng mai (8:00–11:00)",
-  "Chiều mai (14:00–17:00)",
+  { key: "today", label: "Trong hôm nay (2–4 giờ)" },
+  { key: "tonight", label: "Tối nay (18:00–21:00)" },
+  { key: "tomorrow_morning", label: "Sáng mai (8:00–11:00)" },
+  { key: "tomorrow_afternoon", label: "Chiều mai (14:00–17:00)" },
 ];
 
 const COOP_TIME_SLOTS: Array<{ from: string; to: string; disabled?: boolean }> = [
@@ -308,7 +309,7 @@ export default function OrderAgentModal({
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
   // DEMO_MODE: tắt tích hợp thật (BHX/Coop/TXNN cần agent-server/kết nối) → mọi nguồn
   // chạy luồng mô phỏng để test 3 phương thức thanh toán không cần kết nối.
-  const DEMO_MODE = true;
+  const DEMO_MODE = false;
   const isCoopReal = !DEMO_MODE && activeOffer.store.chain === "coop";
   const isTXNNReal = !DEMO_MODE && activeOffer.store.chain === "tuoixanhnhanhngon";
   const isBHXReal = !DEMO_MODE && activeOffer.store.chain === "bhx";
@@ -333,13 +334,16 @@ export default function OrderAgentModal({
   // Phần SL "tự thêm" để đủ mức mua tối thiểu của chuỗi (vd Co.op 200k) — bơm 1 lần lúc mở
   // form, y như giỏ hàng bake vào item.qty. Bấm +/- (chỉnh tay) sẽ reset về 0 → counter thuần.
   const [autoQty, setAutoQty] = useState(0);
-  const [slot, setSlot] = useState(SLOTS[0]);
+  const [slot, setSlot] = useState(SLOTS[0].label);
   // Ghi chú cho cửa hàng — đồng bộ cấu trúc với ô ghi chú từng cửa hàng của giỏ (CartModal).
   const [note, setNote] = useState("");
   const [coopDeliveryDate, setCoopDeliveryDate] = useState("");
   const [coopSlotFrom, setCoopSlotFrom] = useState("");
   const [coopSlotTo, setCoopSlotTo] = useState("");
 
+  function getSlotKey() {
+    return SLOTS.find((item) => item.label === slot)?.key || null;
+  }
   // Khoá scroll body khi modal mở (refcount chung — lib/scroll-lock.ts)
   useEffect(() => acquireBodyScrollLock(), []);
 
@@ -470,26 +474,33 @@ export default function OrderAgentModal({
   const [coopSelectedTerminalCode, setCoopSelectedTerminalCode] = useState("");
   const [coopSelectedPaymentCode, setCoopSelectedPaymentCode] = useState("COD");
   const [coopGeo, setCoopGeo] = useState<{ lat: number; lng: number } | null>(null);
-  const [bhxMessages, setBhxMessages] = useState<Array<{ message: string; status?: string }>>([]);
   const [bhxBusy, setBhxBusy] = useState(false);
-  const [bhxDeliveryHtml, setBhxDeliveryHtml] = useState("");
-  const [bhxSelectedDeliveryText, setBhxSelectedDeliveryText] = useState("");
-  const [bhxBrowserFrame, setBhxBrowserFrame] = useState("");
-  const [bhxBrowserSize, setBhxBrowserSize] = useState({ width: 1024, height: 768 });
-  const [bhxShowScreencast, setBhxShowScreencast] = useState(false);
-  const bhxShowScreencastRef = useRef(false);
-  const [bhxOtpVisible, setBhxOtpVisible] = useState(false);
-  const [bhxOtp, setBhxOtp] = useState("");
+  const [bhxQR, setBhxQR] = useState<string | null>(null);
+  const bhxRuntime: BhxOrderRuntime = {
+    setStepIndex,
+    setOtp,
+    setOtpError,
+    setSimOtp,
+    setPhase,
+    setBhxBusy,
+    setOrderCode,
+    setBhxQR,
+    getSlotKey,
+    getAgentWsUrl,
+    otp,
+    activeOffer,
+    qty,
+    name,
+    phone,
+    address,
+    demoPayMethod,
+    t,
+  };
   const coopBrowserWsRef = useRef<WebSocket | null>(null);
   const coopStreamWheelRef = useRef<HTMLDivElement | null>(null);
   const coopStreamImageRef = useRef<HTMLImageElement | null>(null);
   const lastCoopLookupAddressRef = useRef("");
   const coopCompletionHandledRef = useRef(false);
-  const bhxBrowserWsRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    bhxShowScreencastRef.current = bhxShowScreencast;
-  }, [bhxShowScreencast]);
 
   const requiredInput = serverState?.requiredInput;
   const currentStepKind: StepKind =
@@ -530,39 +541,67 @@ export default function OrderAgentModal({
     // Affree đặt hộ bằng tài khoản Affree trên nguồn — khách KHÔNG cần đăng nhập/OTP.
     // (SĐT khách chỉ dùng làm liên hệ nhận hàng, điền cùng bước địa chỉ giao.)
 
-    s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
+    if (isBHXReal) {
+      s.push({ kind: "otp", label: t("Nhập OTP nhận qua SMS để đăng nhập…") });
 
-    if (cfg.needStorePick) {
-      s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
-    }
+      s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
 
-    s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
+      s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
 
-    if (cfg.needEmail) {
-      s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
-    }
+      if (cfg.needSlot) {
+        s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
+      }
+      
+      s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
+      
+      s.push({ kind: "auto", label: t("Đặt hàng thành công") });
 
-    if (cfg.needSlot) {
-      s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
-    }
-
-    // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
-    // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
-    if (demoPayMethod === "qr") {
-      s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
-    } else if (demoPayMethod === "card") {
-      // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
-      s.push(cardConfirmed
-        ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
-        : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
+      if (demoPayMethod === "qr") {
+        s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
+      } else if (demoPayMethod === "card") {
+        // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
+        s.push(cardConfirmed
+          ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
+          : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
+      } else {
+        s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
+      }
+      
+      s.push({ kind: "success", label: t("Đặt hàng thành công") });
     } else {
-      s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
+      s.push({ kind: "auto", label: t("Điền thông tin nhận hàng: {address} · SĐT {phone}…", { address: address || t("(địa chỉ của bạn)"), phone: phone || t("(của bạn)") }) });
+
+      s.push({ kind: "auto", label: t('Thêm "{name}" vào giỏ (SL {qty})…', { name: activeOffer.product.name, qty }) });
+
+      if (cfg.needStorePick) {
+        s.push({ kind: "auto", label: t("Chọn điểm giao: {store}…", { store: activeOffer.store.name }) });
+      }
+
+      if (cfg.needEmail) {
+        s.push({ kind: "auto", label: t("Điền email nhận hoá đơn: {email}…", { email: email || t("(email của bạn)") }) });
+      }
+
+      if (cfg.needSlot) {
+        s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
+      }
+
+      // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
+      // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
+      if (demoPayMethod === "qr") {
+        s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
+      } else if (demoPayMethod === "card") {
+        // Thẻ đã đủ ở form (đã lưu / vừa nhập) → bước thẻ tự chạy như giỏ hàng, không hỏi lại.
+        s.push(cardConfirmed
+          ? { kind: "auto", label: t("Thanh toán bằng thẻ ****{last4}…", { last4: cardLast4 }) }
+          : { kind: "payment-select", label: t("Nhập thông tin thẻ") });
+      } else {
+        s.push({ kind: "auto", label: demoPayMethod === "cod" ? t("Chọn thanh toán COD — tiền mặt khi nhận hàng…") : t("Chọn phương thức thanh toán…") });
+      }
+
+      s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
+      s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
+      s.push({ kind: "success", label: t("Đặt hàng thành công") });
     }
-
-    s.push({ kind: "confirm", label: t("Kiểm tra & xác nhận đơn hàng") });
-    s.push({ kind: "auto", label: t("Đang gửi đơn tới {chain}…", { chain }) });
-    s.push({ kind: "success", label: t("Đặt hàng thành công") });
-
     return s;
   }, [
     serverState,
@@ -684,26 +723,26 @@ export default function OrderAgentModal({
   }, [serverState, phase, stepIndex, current, activeOffer, onPlaced, simOtp, note]);
 
   // Demo: tự chạy qua bước "auto" sau 1.2s; đến bước "success" → chuyển phase done.
-  useEffect(() => {
-    if (phase !== "running" || sessionId || !current) return;
-    if (current.kind === "success") {
-      const timer = window.setTimeout(() => {
-        setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
-        setPhase("done");
-        onPlaced("DEMO", activeOffer, note);
-      }, 800);
-      return () => window.clearTimeout(timer);
-    }
-    if (current.kind === "auto") {
-      const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
-      return () => window.clearTimeout(timer);
-    }
-    if (current.kind === "otp") {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      const timer = window.setTimeout(() => setSimOtp(code), 2000);
-      return () => window.clearTimeout(timer);
-    }
-  }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
+  // useEffect(() => {
+  //   if (phase !== "running" || sessionId || !current) return;
+  //   if (current.kind === "success") {
+  //     const timer = window.setTimeout(() => {
+  //       setOrderCode("DEMO-" + Math.random().toString(36).slice(2, 8).toUpperCase());
+  //       setPhase("done");
+  //       onPlaced("DEMO", activeOffer, note);
+  //     }, 800);
+  //     return () => window.clearTimeout(timer);
+  //   }
+  //   if (current.kind === "auto") {
+  //     const timer = window.setTimeout(() => setStepIndex((x) => x + 1), 1200);
+  //     return () => window.clearTimeout(timer);
+  //   }
+  //   if (current.kind === "otp") {
+  //     const code = String(Math.floor(100000 + Math.random() * 900000));
+  //     const timer = window.setTimeout(() => setSimOtp(code), 2000);
+  //     return () => window.clearTimeout(timer);
+  //   }
+  // }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
 
   const total = activeOffer.price * qty;
   const coopMinTotal = 200000;
@@ -1084,180 +1123,9 @@ export default function OrderAgentModal({
     applyCoopDeliverySelection(data);
   };
 
-  const startBHXOrder = async () => {
-    if (bhxBrowserWsRef.current) {
-      bhxBrowserWsRef.current.close();
-    }
+  
 
-    setStepIndex(0);
-    setOtp("");
-    setOtpError(false);
-    setSimOtp("");
-    setPhase("running");
-    setBhxBusy(true);
-    setBhxMessages([{ message: t("Đang kết nối agent-server…") }]);
-    setBhxDeliveryHtml("");
-    setBhxSelectedDeliveryText("");
-    setBhxBrowserFrame("");
-    setBhxBrowserSize({ width: 1024, height: 768 });
-    setBhxShowScreencast(false);
-    bhxShowScreencastRef.current = false;
-    setBhxOtpVisible(false);
-    setBhxOtp("");
-
-    const wsSessionId = `bhx-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    const wsUrl = await getAgentWsUrl(wsSessionId, activeOffer.store.chain);
-    const ws = new WebSocket(wsUrl);
-    bhxBrowserWsRef.current = ws;
-
-    const sendBHXOrderRequest = () => {
-      try {
-        ws.send(
-          JSON.stringify({
-            type: "run_order",
-            payload: {
-              url: activeOffer.productUrl,
-              productName: activeOffer.product.name,
-              qty,
-              buyerName: name,
-              buyerPhone: phone,
-              buyerAddress: address,
-              chain: activeOffer.store.chain,
-              paymentMethod: demoPayMethod ?? "cod",
-            },
-          }),
-        );
-      } catch (err) {
-        setBhxBusy(false);
-        setBhxMessages((logs) => [
-          ...logs,
-          { message: err instanceof Error ? err.message : String(err), status: "error" },
-        ]);
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(String(event.data)) as {
-          type?: string;
-          message?: string;
-          status?: string;
-          phase?: string;
-          content?: string;
-          data?: string;
-          width?: number;
-          height?: number;
-        };
-        if (message.type === "screencast" && message.data) {
-          if (bhxShowScreencastRef.current) {
-            setBhxBrowserFrame(`data:image/jpeg;base64,${message.data}`);
-            if (message.width && message.height) setBhxBrowserSize({ width: message.width, height: message.height });
-          }
-        } else if (message.type === "message" && message.content) {
-          setBhxMessages((logs) => [...logs, { message: message.content || "", status: 'success' }]);
-        } else if (message.type === "status") {
-          if (message.phase === 'ready') {
-            setBhxMessages((logs) => [...logs, { message: t("Agent-server đã sẵn sàng, bắt đầu chạy Bách Hóa Xanh."), status: "success" }]);
-            sendBHXOrderRequest();
-          } else if (message.phase === "failed" || message.phase === "done" || message.phase === "success") {
-            setBhxBusy(false);
-          }
-        } else if (message.type === 'popup_delivery_time' && message.content) {
-          setBhxDeliveryHtml(message.content);
-        } else if (message.type === 'order_success' && message.content) {
-          setBhxBusy(false);
-          bhxShowScreencastRef.current = true;
-          setBhxShowScreencast(true);
-          setBhxDeliveryHtml("");
-          setBhxMessages((logs) => [...logs, { message: message.content || "", status: "success" }]);
-        } else if (message.type === 'input_otp') {
-          setBhxOtpVisible(true);
-          setBhxOtp("");
-          setBhxMessages((logs) => [...logs, { message: message.content || t("Vui lòng nhập mã OTP."), status: "warning" }]);
-        }
-      } catch (err) {
-        console.error("Error handling BHX agent message:", err);
-      }
-    };
-    ws.onerror = () => {
-      setBhxBusy(false);
-      setBhxMessages((logs) => [...logs, { message: t("Không kết nối được agent-server BHX."), status: "error" }]);
-    };
-    ws.onclose = () => {
-      setBhxBusy(false);
-      setBhxMessages((logs) => [...logs, { message: t("Kết nối agent-server đã đóng."), status: "info" }]);
-    };
-  };
-
-  const handleBHXDeliveryChoice = (event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target instanceof HTMLElement ? event.target : null;
-    if (!target) return;
-
-    const dateEl = target.closest<HTMLElement>("[data-delivery-date]");
-    const labelEl = target.closest<HTMLElement>("label.radio-wrapper");
-    const optionEl = labelEl || dateEl;
-    if (!optionEl) return;
-
-    const selectedText =
-      labelEl?.querySelector<HTMLElement>(".line-clamp-1")?.textContent?.trim() ||
-      dateEl?.textContent?.trim() ||
-      optionEl.textContent?.trim() ||
-      "";
-    const price = labelEl?.querySelector<HTMLElement>(".text-right")?.textContent?.trim() || "";
-    const deliveryDate = dateEl?.dataset.deliveryDate || "";
-    const kind = dateEl ? "date" : "time";
-    const compactText = selectedText.replace(/\s+/g, " ").trim();
-
-    if (!compactText) return;
-    setBhxSelectedDeliveryText(price ? `${compactText} - ${price}` : compactText);
-
-    if (kind === "time") {
-      const radio = labelEl?.querySelector<HTMLInputElement>('input[type="radio"]');
-      if (radio) radio.checked = true;
-      setBhxMessages((logs) => [
-        ...logs,
-        {
-          message: price
-            ? t("Bạn đã chọn: {choice} - {price}", { choice: compactText, price })
-            : t("Bạn đã chọn: {choice}", { choice: compactText }),
-          status: "success",
-        },
-      ]);
-    }
-
-    const ws = bhxBrowserWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi lựa chọn giao hàng."), status: "error" }]);
-      return;
-    }
-    ws.send(
-      JSON.stringify({
-        type: "delivery_time_selected",
-        kind,
-        selectedText: compactText,
-        price,
-        deliveryDate,
-      }),
-    );
-    if (kind === "time") {
-      setBhxDeliveryHtml("");
-    }
-  };
-
-  const submitBHXOtp = () => {
-    const code = bhxOtp.trim();
-    if (!code) return;
-
-    const ws = bhxBrowserWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setBhxMessages((logs) => [...logs, { message: t("Chưa kết nối agent-server để gửi OTP."), status: "error" }]);
-      return;
-    }
-
-    ws.send(JSON.stringify({ type: "submit_otp", otp: code }));
-    setBhxOtpVisible(false);
-    setBhxMessages((logs) => [...logs, { message: t("Đã gửi OTP tới agent-server."), status: "success" }]);
-  };
+  
 
   const startCoopOrder = async () => {
     setCoopBusy(true);
@@ -2719,12 +2587,23 @@ export default function OrderAgentModal({
               </div>
               {/* QR chỉ hiện khi ĐÃ CHỌN thanh toán QR (như giỏ hàng) — thẻ/COD không liên quan QR */}
               {demoPayMethod === "qr" && (
-                <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
-                  <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
-                  <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
-                    {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
-                  </p>
-                </div>
+                isBHXReal ? (
+                  bhxQR ? (
+                    <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                      <div dangerouslySetInnerHTML={{ __html: bhxQR }} />
+                      <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
+                        {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
+                      </p>
+                    </div>
+                  ) : null
+                ) : (
+                  <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                    <QRCode value={`AFFREE|${phone || "..."}|${total}`} size={80} style={{ height: "auto", maxWidth: "100%", width: "100%" }} />
+                    <p className="w-full break-words text-center text-[10px] leading-tight text-slate-400">
+                      {t("Nội dung: AFFREE {phone}", { phone: phone || "..." })}
+                    </p>
+                  </div>
+                )
               )}
             </div>
           )}
@@ -2836,8 +2715,8 @@ export default function OrderAgentModal({
                     className="input"
                   >
                     {SLOTS.map((s) => (
-                      <option key={s} value={s}>
-                        {t(s)}
+                      <option key={s.label} value={s.label}>
+                        {t(s.label)}
                       </option>
                     ))}
                   </select>
@@ -3269,7 +3148,7 @@ export default function OrderAgentModal({
             </div>
           )}
 
-          {phase === "running" && isBHXReal && (
+          {phase === "running" && !isBHXReal && (
             <div className="space-y-3">
               <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
                 <div className="flex items-center gap-2">
@@ -3282,102 +3161,10 @@ export default function OrderAgentModal({
                   {t("Log từ agent-server sẽ hiển thị bên dưới.")}
                 </p>
               </div>
-
-              <ol className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                {bhxMessages.map((log, i) => {
-                  const tone =
-                    log.status === "error"
-                      ? "border-rose-200 bg-rose-50 text-rose-700"
-                      : log.status === "warning"
-                        ? "border-amber-200 bg-amber-50 text-amber-800"
-                        : log.status === "success"
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : "border-slate-200 bg-white text-slate-700";
-                  return (
-                    <li key={`${i}-${log.message}`} className={`rounded-lg border px-3 py-2 text-sm ${tone}`}>
-                      <div className="flex items-start gap-2">
-                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
-                        <span className="min-w-0 whitespace-pre-wrap break-words">{log.message}</span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-
-              {bhxOtpVisible && (
-                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                  <p className="mb-2 text-sm font-semibold text-blue-800">
-                    {t("Nhập OTP Bách Hóa Xanh")}
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      value={bhxOtp}
-                      onChange={(e) => setBhxOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") submitBHXOtp();
-                      }}
-                      inputMode="numeric"
-                      placeholder={t("Nhập mã OTP")}
-                      className="input flex-1 bg-white"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      disabled={!bhxOtp.trim()}
-                      onClick={submitBHXOtp}
-                      className="shrink-0 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {t("Gửi")}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {bhxShowScreencast && (
-                <div className="rounded-xl border border-emerald-200 bg-white p-2">
-                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                    {t("Màn hình sau khi đặt hàng")}
-                  </p>
-                  <div
-                    className="overflow-hidden rounded-lg bg-slate-950"
-                    style={{ aspectRatio: `${bhxBrowserSize.width} / ${bhxBrowserSize.height}` }}
-                  >
-                    {bhxBrowserFrame ? (
-                      <img
-                        src={bhxBrowserFrame}
-                        alt={t("Màn hình Bách Hóa Xanh")}
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-xs font-medium text-slate-300">
-                        {t("Đang chờ ảnh màn hình...")}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {bhxDeliveryHtml && (
-                <div className="rounded-xl border border-slate-200 bg-white p-2">
-                  <p className="mb-2 px-1 text-sm font-semibold text-emerald-700">
-                    {t("Chọn thời gian giao hàng")}
-                  </p>
-                  <div
-                    className="bhx-delivery-html max-h-[360px] overflow-y-auto rounded-lg bg-slate-50"
-                    onClick={handleBHXDeliveryChoice}
-                    dangerouslySetInnerHTML={{ __html: bhxDeliveryHtml }}
-                  />
-                  {bhxSelectedDeliveryText && (
-                    <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                      {t("Đã gửi lựa chọn: {choice}", { choice: bhxSelectedDeliveryText })}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
           )}
 
-          {phase === "running" && !isCoopReal && !isBHXReal && (
+          {phase === "running" && (!isCoopReal || isBHXReal) && (
             <div className="space-y-1">
               <ol className="space-y-2.5">
                 {visibleSteps.map((s, i) => {
@@ -3422,7 +3209,7 @@ export default function OrderAgentModal({
 
                         {isCurrent && s.kind === "otp" && (
                           <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
-                            {!usesServerTimeline && !simOtp ? (
+                            {!isBHXReal && !usesServerTimeline && !simOtp ? (
                               <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
                                 <Spinner />
                                 {t("Đang chờ {chain} gửi mã…", { chain })}
@@ -3466,19 +3253,22 @@ export default function OrderAgentModal({
                                 autoFocus
                               />
                               <button
-                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp)}
+                                disabled={otp.length < 4 || (!usesServerTimeline && !simOtp && !isBHXReal)}
                                 onClick={() => {
-                                  if (!usesServerTimeline && otp !== simOtp) {
+                                  if (!isBHXReal && !usesServerTimeline && otp !== simOtp) {
                                     setOtpError(true);
                                     return;
                                   }
                                   const submittedOtp = otp;
-                                  setOtp("");
                                   setOtpError(false);
                                   if (usesServerTimeline) {
+                                    setOtp("");
                                     void sendSessionEvent({ type: "otp_submitted", otp: submittedOtp });
                                     return;
+                                  } else if (isBHXReal) {
+                                    void submitBHXOtp(bhxRuntime);
                                   }
+                                  setOtp("");
                                   setSimOtp("");
                                   setStepIndex((x) => x + 1);
                                 }}
@@ -3734,6 +3524,8 @@ export default function OrderAgentModal({
                                 if (usesServerTimeline) {
                                   void sendSessionEvent({ type: "confirm_final_action" });
                                   return;
+                                } else if (isBHXReal) {
+                                  void submitBHXFinalConfirm(bhxRuntime);
                                 }
                                 setStepIndex((x) => x + 1);
                               }}
@@ -3979,7 +3771,7 @@ export default function OrderAgentModal({
                   } else if (isCoopReal) {
                     void startCoopOrder();
                   } else if (isBHXReal) {
-                    startBHXOrder().catch((err) => {
+                    void startBHXOrder(bhxRuntime).catch((err: unknown) => {
                       console.error("Bach Hoa Xanh order error:", err);
                       alert(err instanceof Error ? err.message : String(err));
                     });
@@ -3999,7 +3791,7 @@ export default function OrderAgentModal({
                     ? t("Đang kết nối Co.op…")
                     : isCoopReal
                       ? t("Kết nối Co.op và thêm vào giỏ →")
-                      : t("Để trợ lý đặt giúp →")}
+                      : t("Để trợ lý đặt giúp 111 →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
