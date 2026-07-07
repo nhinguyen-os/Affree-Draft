@@ -21,6 +21,33 @@ const SLOTS = [
   "Sáng mai (8:00–11:00)",
   "Chiều mai (14:00–17:00)",
 ];
+const DELIVERY_LEAD_MINUTES = 180;
+
+function slotRange(label: string) {
+  const normalized = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase();
+  if (normalized.includes("toi")) return { from: 18 * 60, to: 21 * 60 };
+  if (normalized.includes("sang")) return { from: 8 * 60, to: 11 * 60 };
+  if (normalized.includes("chieu")) return { from: 14 * 60, to: 17 * 60 };
+  return { from: 0, to: 24 * 60 };
+}
+
+function isSlotPast(label: string) {
+  const normalized = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
+    .toLowerCase();
+  if (normalized.includes("ngay mai") || /\bmai\b/.test(normalized)) return false;
+  const range = slotRange(label);
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() + DELIVERY_LEAD_MINUTES >= range.to;
+}
 
 // Loại thẻ chấp nhận — hiện chip ở form nhập thẻ; chip sáng theo đầu số đang gõ.
 const CARD_BRANDS = ["Visa", "Mastercard", "JCB", "Amex", "Napas"] as const;
@@ -57,6 +84,8 @@ type StoreGroup = {
   total: number;
 };
 
+type PayMethod = "qr" | "card" | "cod";
+
 export default function CartModal({
   items,
   onClose,
@@ -71,7 +100,16 @@ export default function CartModal({
   onUpdateQty: (productId: string, storeId: string, qty: number) => void;
   onRemove: (productId: string, storeId: string) => void;
   /** Trả true nếu đã tự xử lý (mở form khác) → cart không chạy mô phỏng trợ lý. */
-  onOrderWithAgent?: (offers: RankedOffer[]) => boolean;
+  onOrderWithAgent?: (
+    offers: RankedOffer[],
+    context: {
+      name: string;
+      phone: string;
+      address: string;
+      payMethod: PayMethod | null;
+      slotsByStoreId: Record<string, string>;
+    },
+  ) => boolean;
   /** Gọi sau khi đặt xong với danh sách storeId đặt thành công → cha xoá khỏi giỏ. */
   onOrdered?: (okStoreIds: string[]) => void;
   lang?: Lang;
@@ -97,7 +135,6 @@ export default function CartModal({
   const [cardConfirmed, setCardConfirmed] = useState(false);
 
   // Payment method — không mặc định chọn, user tự chọn (null = chưa chọn)
-  type PayMethod = "qr" | "card" | "cod";
   const [payMethod, setPayMethod] = useState<PayMethod | null>(null);
   const [cardNumber, setCardNumber] = useState("");
   const [cardName, setCardName] = useState("");
@@ -164,6 +201,24 @@ export default function CartModal({
         : g
     );
   }, [items, t]);
+
+  useEffect(() => {
+    setStoreSlots((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const group of storeGroups) {
+        if (!group.needSlot) continue;
+        const current = next[group.storeId] ?? SLOTS[0];
+        if (!isSlotPast(current)) continue;
+        const replacement = SLOTS.find((slot) => !isSlotPast(slot));
+        if (replacement && replacement !== current) {
+          next[group.storeId] = replacement;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [storeGroups]);
 
   const grandTotal = storeGroups.reduce((s, g) => s + g.total, 0);
 
@@ -800,7 +855,7 @@ export default function CartModal({
                           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                         >
                           {SLOTS.map((s) => (
-                            <option key={s} value={s}>
+                            <option key={s} value={s} disabled={isSlotPast(s)}>
                               {t(s)}
                             </option>
                           ))}
@@ -1033,7 +1088,13 @@ export default function CartModal({
                 // onOrderWithAgent trả true nếu đã tự xử lý (vd giỏ toàn nhạc → mở form nhạc).
                 // Trả false/không có → chạy mô phỏng trợ lý đặt từng cửa hàng (startAgent).
                 const offers = storeGroups.map((g) => g.items[0].offer);
-                if (onOrderWithAgent && onOrderWithAgent(offers)) return;
+                if (onOrderWithAgent && onOrderWithAgent(offers, {
+                  name,
+                  phone,
+                  address,
+                  payMethod,
+                  slotsByStoreId: Object.fromEntries(storeGroups.map((group) => [group.storeId, slotOf(group.storeId)])),
+                })) return;
                 startAgent();
               }}
               disabled={!phone.trim() || !address.trim() || !paymentReady}

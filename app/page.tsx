@@ -43,6 +43,7 @@ import { acquireBodyScrollLock, hasActiveScrollLock } from "@/lib/scroll-lock";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 const OrderAgentModal = dynamic(() => import("@/components/OrderAgentModal"), { ssr: false });
+const CoopOrderAgentModal = dynamic(() => import("@/components/CoopOrderAgentModal"), { ssr: false });
 const WalmartAgentModal = dynamic(() => import("@/components/WalmartAgentModal"), { ssr: false });
 const OrderAgentModalDev = dynamic(() => import("@/components/OrderAgentModalDev"), { ssr: false });
 const TuiAgentModal = dynamic(() => import("@/components/TuiAgentModal"), { ssr: false });
@@ -562,6 +563,7 @@ export default function Home() {
   const [modelDev, setModelDev] = useState(
     process.env.NEXT_PUBLIC_MODAL_DEV === 'true' || false,
   );
+  const coopReal = process.env.NEXT_PUBLIC_COOP_REAL === 'true';
   const ActiveOrderAgentModal = modelDev ? OrderAgentModalDev : OrderAgentModal;
 
   // rawCatalog/rawStores = dữ liệu gốc; catalog/stores đã được scope theo region.
@@ -681,6 +683,14 @@ export default function Home() {
   const [buyNote, setBuyNote] = useState("");
   const [buySubmitting, setBuySubmitting] = useState(false);
   const [buyOffer, setBuyOffer] = useState<RankedOffer | null>(null);
+  const [coopCartStoreId, setCoopCartStoreId] = useState<string | null>(null);
+  const [coopCartPrefill, setCoopCartPrefill] = useState<{
+    name: string;
+    phone: string;
+    address: string;
+    payMethod: "qr" | "card" | "cod" | null;
+    slot?: string;
+  } | null>(null);
   const [txnnLiveOpen, setTxnnLiveOpen] = useState(false);
   const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
@@ -5398,12 +5408,31 @@ export default function Home() {
               removeFromCart(pid, sid);
               if (cartItems.length <= 1) setCartOpen(false);
             }}
-            onOrderWithAgent={() => {
+            onOrderWithAgent={(_offers, context) => {
               // Giỏ toàn nhạc bản quyền → form đặt nhạc (không agentic). Trả true = đã xử lý.
               const allMusic = cartItems.length > 0 && cartItems.every((i) => i.offer.store.id === "khuccham");
               if (allMusic) {
                 setCartOpen(false);
                 setMusicOrder(cartItems.map((i) => ({ id: i.product.id, name: i.product.name, image: i.product.image || "", price: i.offer.price, qty: i.qty })));
+                return true;
+              }
+              const storeIds = Array.from(new Set(cartItems.map((i) => i.offer.store.id)));
+              const first = cartItems[0];
+              if (
+                coopReal &&
+                storeIds.length === 1 &&
+                first?.offer.store.chain === "coop"
+              ) {
+                setCoopCartStoreId(first.offer.store.id);
+                setCoopCartPrefill({
+                  name: context.name,
+                  phone: context.phone,
+                  address: context.address,
+                  payMethod: context.payMethod,
+                  slot: context.slotsByStoreId[first.offer.store.id],
+                });
+                setBuyOffer(first.offer);
+                setCartOpen(false);
                 return true;
               }
               // Giỏ thường → để CartModal tự đặt nhiều cửa hàng (placeAll).
@@ -5482,22 +5511,53 @@ export default function Home() {
 
       {
         buyOffer && !isWalmartOffer(buyOffer) && (
-          <ActiveOrderAgentModal
-            offer={buyOffer}
-            lang={lang}
-            alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
-            geoAddr={userAddr}
-            defaultAddress={userAddr}
-            // SL gốc (theo giỏ nếu đã có, mặc định 1). Phần "bơm" cho đủ mức mua tối thiểu do
-            // chính OrderAgentModal lo (kèm nhãn "+N tự thêm" như giỏ hàng) — tránh bơm 2 nơi.
-            defaultQty={cartQtyFor(buyOffer.product.id) || 1}
-            onClose={() => setBuyOffer(null)}
-            onPlaced={(code, chosen) => {
-              recordBuy(chosen);
-              setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
-              setTimeout(() => setToast(""), 4000);
-            }}
-          />
+          coopReal && buyOffer.store.chain === "coop" ? (
+            <CoopOrderAgentModal
+              offer={buyOffer}
+              lang={lang}
+              alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
+              geoAddr={userAddr}
+              defaultName={coopCartPrefill?.name}
+              defaultPhone={coopCartPrefill?.phone}
+              defaultAddress={coopCartPrefill?.address || userAddr}
+              defaultQty={cartQtyFor(buyOffer.product.id) || 1}
+              sameStoreCartItems={coopCartStoreId === buyOffer.store.id ? cartItems.filter((i) => i.offer.store.id === buyOffer.store.id) : []}
+              initialPayMethod={coopCartPrefill?.payMethod ?? null}
+              initialSlot={coopCartPrefill?.slot}
+              autoStart={coopCartStoreId === buyOffer.store.id}
+              onClose={() => {
+                setBuyOffer(null);
+                setCoopCartStoreId(null);
+                setCoopCartPrefill(null);
+              }}
+              onPlaced={(code, chosen) => {
+                recordBuy(chosen);
+                if (coopCartStoreId === chosen.store.id) {
+                  setOrderedStoreIds((ids) => Array.from(new Set([...ids, chosen.store.id])));
+                }
+                setCoopCartPrefill(null);
+                setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
+                setTimeout(() => setToast(""), 4000);
+              }}
+            />
+          ) : (
+            <ActiveOrderAgentModal
+              offer={buyOffer}
+              lang={lang}
+              alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
+              geoAddr={userAddr}
+              defaultAddress={userAddr}
+              // SL gốc (theo giỏ nếu đã có, mặc định 1). Phần "bơm" cho đủ mức mua tối thiểu do
+              // chính OrderAgentModal lo (kèm nhãn "+N tự thêm" như giỏ hàng) — tránh bơm 2 nơi.
+              defaultQty={cartQtyFor(buyOffer.product.id) || 1}
+              onClose={() => setBuyOffer(null)}
+              onPlaced={(code, chosen) => {
+                recordBuy(chosen);
+                setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
+                setTimeout(() => setToast(""), 4000);
+              }}
+            />
+          )
         )
       }
 

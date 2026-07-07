@@ -42,6 +42,14 @@ async function fetchSheetCsv(envKey) {
   return parseCsv(await response.text());
 }
 
+function withSheetGid(url, gid) {
+  const parsed = new URL(url);
+  parsed.searchParams.set("format", "csv");
+  parsed.searchParams.set("gid", String(gid));
+  parsed.hash = "";
+  return parsed.toString();
+}
+
 async function getWalmartAccount() {
   const rows = await fetchSheetCsv("ACCOUNT_ORDER_WALMART_URL");
   if (rows.length < 2) throw new Error("Tab Account Walmart chưa có tài khoản.");
@@ -70,7 +78,7 @@ async function getCoopAccount() {
   if (rows.length < 2) throw new Error("Tab Account Co.op chưa có tài khoản.");
 
   const headers = rows[0].map((value) => value.trim().toLowerCase());
-  const phoneIndex = headers.findIndex((value) => /phone|sđt|số điện thoại|username|email/.test(value));
+  const phoneIndex = headers.findIndex((value) => /phone|sđt|số điện thoại|user\s*name|username|email/.test(value));
   const passwordIndex = headers.findIndex((value) => /password|mật khẩu/.test(value));
   const activeIndex = headers.findIndex((value) => /active|status|trạng thái/.test(value));
   if (phoneIndex < 0 || passwordIndex < 0) {
@@ -88,4 +96,4 @@ async function getCoopAccount() {
   return { phone: account.phone, password: account.password };
 }
 
-module.exports = { getWalmartAccount, getCoopAccount, parseCsv, fetchSheetCsv };
+module.exports = { getWalmartAccount, getCoopAccount, parseCsv, fetchSheetCsv, withSheetGid };
