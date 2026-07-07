@@ -7,8 +7,9 @@ import { distanceKm } from "@/lib/util";
 import { ChainBadge } from "@/components/ChainBadge";
 import { ProductCard } from "@/components/ProductCard";
 import { SubCatBar } from "@/components/SubCatBar";
-import { categoryGroup, GROUP_TILE, CATEGORY_GROUPS, DEFAULT_TILE_EMOJIS } from "@/lib/categories";
+import { categoryGroup, GROUP_TILE, DEFAULT_TILE_EMOJIS } from "@/lib/categories";
 import { type Lang, tr } from "@/lib/i18n";
+import { slugify } from "@/lib/slug";
 
 interface Props {
   store: Store;
@@ -19,6 +20,13 @@ interface Props {
   headerH?: number;
   /** Emoji theo nhãn danh mục lấy từ Google Sheet (tab "tệp") — ưu tiên hơn GROUP_TILE. */
   groupEmoji?: Record<string, string>;
+  /** Deep-link QR: tên người bán → hiện "Phục vụ bởi: …" ở header trang cửa hàng. */
+  servedBy?: string;
+  /** Deep-link QR: slug nhãn hàng → lọc sản phẩm theo nhãn + hiện tag (bấm × để bỏ lọc). */
+  brandTag?: string;
+  /** Khi có modal (đặt hàng) mở đè lên: hạ z xuống dưới modal để giữ trang cửa hàng
+   *  mounted phía sau (không mất state/scroll) → đóng modal là quay lại đúng trang này. */
+  behind?: boolean;
   onClose: () => void;
   onBuy: (offer: RankedOffer) => void;
   onAddToCart?: (product: Product, offer: Offer) => void;
@@ -28,8 +36,11 @@ interface Props {
 // 1 dòng sản phẩm trong trang: offer + product + cửa hàng THẬT bán offer đó (brand mode).
 type PageItem = { offer: Offer; product: Product; realStore: Store | null; dist: number | null };
 
-export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, onClose, onBuy, onAddToCart, cartQtyFor }: Props) {
+export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, servedBy, brandTag, behind = false, onClose, onBuy, onAddToCart, cartQtyFor }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
+  // Lọc theo nhãn hàng (deep-link ?nhanhang=…). Bật mặc định khi có brandTag; bấm × để bỏ.
+  const [brandFilterOn, setBrandFilterOn] = useState(!!brandTag);
+  const brandSlug = brandTag ? slugify(brandTag) : "";
   // Emoji của 1 danh mục: ưu tiên sheet (tab "tệp") → GROUP_TILE → emoji mặc định theo index.
   const emojiFor = (name: string, idx: number) =>
     groupEmoji[name] || GROUP_TILE[name]?.emoji || DEFAULT_TILE_EMOJIS[idx % DEFAULT_TILE_EMOJIS.length];
@@ -50,11 +61,15 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
             : null;
         return { ...x, realStore, dist };
       });
-    if (!isBrandMode) return all;
+    // Deep-link ?nhanhang=… : chỉ giữ sản phẩm đúng nhãn hàng (khớp theo slug, bỏ dấu/hoa-thường).
+    const filtered = brandFilterOn && brandSlug
+      ? all.filter((x) => slugify(x.product.brand || "") === brandSlug)
+      : all;
+    if (!isBrandMode) return filtered;
     // Brand mode: cùng 1 sản phẩm có thể có N offer (mỗi cửa hàng 1 offer) → giữ offer
     // TỐT NHẤT: còn hàng trước, rồi gần nhất (offer không rõ vị trí xếp sau), rồi rẻ nhất.
     const best = new Map<string, PageItem>();
-    for (const it of all) {
+    for (const it of filtered) {
       const cur = best.get(it.product.id);
       if (!cur) { best.set(it.product.id, it); continue; }
       const better =
@@ -64,10 +79,22 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
       if (better > 0) best.set(it.product.id, it);
     }
     return [...best.values()];
-  }, [offers, productMap, userLoc, isBrandMode]);
+  }, [offers, productMap, userLoc, isBrandMode, brandFilterOn, brandSlug]);
+
+  // Tên nhãn hàng hiển thị trên tag: lấy đúng chữ gốc từ sản phẩm khớp, fallback brandTag.
+  const brandLabel = useMemo(() => {
+    if (!brandTag) return "";
+    for (const o of offers) {
+      const p = productMap.get(o.productId);
+      if (p?.brand && slugify(p.brand) === brandSlug) return p.brand;
+    }
+    return brandTag;
+  }, [brandTag, brandSlug, offers, productMap]);
 
   // Group by product.category (granular), fallback to categoryGroup tệp nếu category trống.
-  // Sắp xếp: tệp-level theo CATEGORY_GROUPS order, rồi sort alpha trong từng tệp.
+  // THỨ TỰ SECTION = thứ tự category xuất hiện lần đầu trong tab catalog (sheet).
+  // Map giữ insertion order; `items` bám theo thứ tự `offers` = thứ tự dòng trong sheet
+  // (catalog không bị re-sort). Muốn đổi thứ tự ngành hàng → đổi thứ tự dòng trong sheet.
   const sections = useMemo(() => {
     const byGroup = new Map<string, PageItem[]>();
     for (const item of items) {
@@ -76,17 +103,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
       if (!byGroup.has(g)) byGroup.set(g, []);
       byGroup.get(g)!.push(item);
     }
-    // Sắp xếp các category theo tệp cha (CATEGORY_GROUPS order), rồi alpha trong tệp
-    const tepOrder = CATEGORY_GROUPS.map((x) => x.label);
-    const sorted = [...byGroup.keys()].sort((a, b) => {
-      const ta = tepOrder.indexOf(categoryGroup(a) || a);
-      const tb = tepOrder.indexOf(categoryGroup(b) || b);
-      const ta2 = ta === -1 ? 999 : ta;
-      const tb2 = tb === -1 ? 999 : tb;
-      if (ta2 !== tb2) return ta2 - tb2;
-      return a.localeCompare(b, "vi");
-    });
-    return sorted.map((name) => ({ name, items: byGroup.get(name)! }));
+    return [...byGroup.keys()].map((name) => ({ name, items: byGroup.get(name)! }));
   }, [items]);
 
   // null = trang danh mục chính, string = tên danh mục đang xem toàn bộ
@@ -117,13 +134,13 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   const activeEmoji = activeSectionData ? emojiFor(activeSectionData.name, activeSectionIdx) : "🛒";
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[2050] flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50" style={{ top: headerH || 64 }}>
+    <div className={`fixed inset-x-0 bottom-0 flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50 ${behind ? "z-[1050]" : "z-[2050]"}`} style={{ top: headerH || 64 }}>
       <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: "touch" }}>
         {/* Section header CỐ ĐỊNH (sticky top-0 trong overlay): luôn thấy tên cửa hàng +
             số sản phẩm/khoảng cách/địa chỉ khi cuộn. Nền mờ đặc để sản phẩm cuộn dưới
             không lộ qua; overlay đã bắt đầu dưới app header nên không bị che. */}
         <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80">
-          <div className="flex items-center gap-2 px-3 pt-4 pb-3">
+          <div className="flex items-center gap-2 px-3 pt-4 pb-4">
             <button
               onClick={onClose}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 active:bg-slate-200"
@@ -145,6 +162,22 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                 {dist != null && <> · {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}</>}
                 {store.address && <> · {store.address}</>}
               </p>
+              {servedBy && (
+                <p className="mt-2 text-xs font-medium text-emerald-700">
+                  🤝 {t("Phục vụ bởi")}: {servedBy}
+                </p>
+              )}
+              {brandTag && brandFilterOn && (
+                <button
+                  onClick={() => setBrandFilterOn(false)}
+                  className="mt-2 inline-flex items-center gap-1 self-start rounded-full bg-rose-500 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-rose-600"
+                  aria-label={t("Bỏ lọc nhãn hàng")}
+                  title={t("Bỏ lọc nhãn hàng")}
+                >
+                  {brandLabel}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
