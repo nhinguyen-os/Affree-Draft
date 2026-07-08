@@ -107,6 +107,7 @@ wss.on("connection", async (clientWs, req) => {
   const sessionIdRaw = connectionUrl.searchParams.get("sessionId");
   const tokenRaw = connectionUrl.searchParams.get("token");
   const timestampRaw = connectionUrl.searchParams.get("timestamp");
+  const chainRaw = connectionUrl.searchParams.get("chain");
 
   // Kiểm tra token bảo mật bằng HMAC SHA256 nếu cấu hình ORDER_AGENT_SERVER_SECRET_TOKEN tồn tại
   const secretToken = process.env.ORDER_AGENT_SERVER_SECRET_TOKEN;
@@ -269,7 +270,7 @@ wss.on("connection", async (clientWs, req) => {
     function connectAndProxy() {
       if (cleanedUp) return;
 
-      const targetWsUrl = `ws://127.0.0.1:${hostPort}`;
+      const targetWsUrl = `ws://127.0.0.1:${hostPort}${chainRaw ? `?chain=${encodeURIComponent(chainRaw)}` : ''}`;
       console.log(`[Orchestrator] Đang thử kết nối tới container [${containerName}] tại ${targetWsUrl}...`);
 
       targetWs = new WebSocket(targetWsUrl);
