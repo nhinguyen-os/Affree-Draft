@@ -35,6 +35,7 @@ import { KhucChamAlbumList, type MusicBuyItem } from "@/components/KhucChamStore
 import { SiteStats } from "@/components/SiteStats";
 import { SubCatBar } from "@/components/SubCatBar";
 import { AppFooter } from "@/components/AppFooter";
+import { ModelInfo } from "@/components/ModelInfo";
 import type { MusicOrderLine } from "@/components/MusicOrderModal";
 import { SEED_MUSIC } from "@/lib/music";
 import type { MapMarker } from "@/components/MapView";
@@ -2883,6 +2884,7 @@ export default function Home() {
                   <span className="flex flex-col text-[11px] leading-tight text-slate-500">
                     <span className="font-semibold text-slate-700">{t("Kết nối mua bán - Không thu phí")}</span>
                     <span>{t("Tìm gì cũng có - Giá hời quanh đây")}</span>
+                    <ModelInfo lang={lang} />
                   </span>
                 </span>
               </Link>
@@ -3028,6 +3030,7 @@ export default function Home() {
                 <span className="flex flex-col text-[11px] leading-tight text-slate-500">
                   <span className="font-semibold text-slate-700">{t("Kết nối mua bán - Không thu phí")}</span>
                   <span>{t("Tìm gì cũng có - Giá hời quanh đây")}</span>
+                  <ModelInfo lang={lang} />
                 </span>
               </span>
             </Link>
