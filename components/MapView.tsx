@@ -160,6 +160,15 @@ type MapMarker = {
 
 
 
+function maskPhone(phone: string): string {
+  const cleaned = (phone || "").trim();
+  if (cleaned.length <= 4) return cleaned;
+  const first2 = cleaned.substring(0, 2);
+  const last2 = cleaned.substring(cleaned.length - 2);
+  const middle = "x".repeat(cleaned.length - 4);
+  return `${first2}${middle}${last2}`;
+}
+
 // Màu theo loại CSKD cho LEGEND — phải trùng palette catMeta của app/api/marker/route.ts
 // (pin vẽ server-side qua /api/marker; legend client chỉ cần màu, không cần icon).
 function normVi(s: string): string {
@@ -382,6 +391,11 @@ export default function MapView({
   const [map, setMap] = useState<L.Map | null>(null);
   const [selectedStore, setSelectedStore] = useState<MapMarker | null>(null);
   const [portalPos, setPortalPos] = useState<{ x: number; y: number; anchor: "bottom" | "top" } | null>(null);
+  const [showFullPhone, setShowFullPhone] = useState(false);
+
+  useEffect(() => {
+    setShowFullPhone(false);
+  }, [selectedStore]);
 
   const displayCategory = selectedStore
     ? (selectedStore.store.loaiCskd?.[0] || chainLabel(selectedStore.store.chain))
@@ -730,6 +744,48 @@ export default function MapView({
                 </div>
               ) : (
                 <div style={{ fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayCategory}</div>
+              )}
+              {selectedStore.store.phone && (
+                <div style={{ fontSize: 11, color: "#444", display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                  <span>
+                    Liên hệ:{" "}
+                    <a
+                      href={`tel:${selectedStore.store.phone.replace(/\s+/g, "")}`}
+                      style={{ color: "#2563eb", textDecoration: "none" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                    >
+                      {showFullPhone ? selectedStore.store.phone : maskPhone(selectedStore.store.phone)}
+                    </a>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowFullPhone(!showFullPhone)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      color: "#64748b",
+                    }}
+                  >
+                    {showFullPhone ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                        <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+                        <path d="M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+                        <line x1="2" x2="22" y1="2" y2="22"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
               )}
               {/* Tên cửa hàng dài → CHẠY CHỮ (2 bản nối nhau, kéo -50% là khớp) thay vì cắt "…" */}
               {selectedStore.store.name.length > 24 ? (
