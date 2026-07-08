@@ -2,14 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "gia-quanh-day",
+      "name": "affree-hytek-branch",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "dev"
+        "dev",
+        "--",
+        "-p",
+        "3012"
       ],
-      "cwd": "/Users/hanh/Downloads/dev/gia-quanh-day",
-      "port": 3210
+      "port": 3012
     }
   ]
 }

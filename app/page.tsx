@@ -25,7 +25,7 @@ import { getViewCounts, recordView } from "@/lib/recent";
 import { getSavedCart, saveCart } from "@/lib/cart";
 import { fetchMe, logout, type AuthUser } from "@/lib/auth";
 import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
-import { type Lang, langForCountry, tr } from "@/lib/i18n";
+import { type Lang, guessLangFromDevice, langForCountry, tr } from "@/lib/i18n";
 import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
 import { ChainBadge } from "@/components/ChainBadge";
 import { Logo } from "@/components/Logo";
@@ -824,6 +824,39 @@ export default function Home() {
     setCartBumpKey((k) => k + 1);
   }
 
+  // Các nơi bán khác của món DUY NHẤT trong giỏ — xếp hạng theo vị trí user, để CartModal
+  // gợi ý "chọn lại nơi mua" (chỉ khi giỏ có đúng 1 sản phẩm). Tính trực tiếp theo product
+  // trong giỏ (KHÔNG dùng allOffers vì allOffers gắn với sản phẩm đang mở chi tiết).
+  const cartRepickAlternatives = useMemo(
+    () => (catalog && cartItems.length === 1
+      ? rankOffersForProduct(catalog, cartItems[0].product, userLoc)
+      : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog, cartItems, userLoc, storesReady],
+  );
+
+  // Các nơi bán khác của sản phẩm đang "Mua ngay" — tính TRỰC TIẾP theo buyOffer.product
+  // (KHÔNG dùng allOffers vì allOffers gắn với `selected` = sản phẩm đang mở chi tiết; khi bấm
+  // "Mua ngay" từ kết quả tìm kiếm thì `selected` chưa trỏ đúng món → list gợi ý sẽ rỗng).
+  const buyOfferAlternatives = useMemo(
+    () => (catalog && buyOffer
+      ? rankOffersForProduct(catalog, buyOffer.product, userLoc)
+      : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog, buyOffer, userLoc, storesReady],
+  );
+
+  // Đổi nơi mua của món DUY NHẤT trong giỏ (dùng cho list gợi ý trong CartModal khi giỏ 1 món).
+  // Giữ số lượng người dùng đã chọn (bỏ phần bơm min-order cũ), rồi rebalance theo chuỗi mới.
+  function replaceCartOffer(newOffer: RankedOffer) {
+    setCartItems((prev) => {
+      if (prev.length !== 1) return prev;
+      const it = prev[0];
+      const userQty = Math.max(1, it.qty - (it.autoQty ?? 0));
+      return rebalanceMinOrder([{ product: newOffer.product, offer: newOffer, qty: userQty, autoQty: 0 }]);
+    });
+  }
+
   // Nhạc không nằm trong catalog → dựng product/offer/store tổng hợp (store "khuccham") để
   // dùng chung cho cả giỏ hàng lẫn màn agentic (đồng nhất với thẻ sản phẩm).
   function musicOffer(item: MusicBuyItem): RankedOffer {
@@ -1046,12 +1079,17 @@ export default function Home() {
   // mọi auto-detect. Nếu user CHƯA chọn → suy theo quốc gia của vị trí: VN/chưa biết → vi,
   // Mỹ/Canada (và nước khác) → en. User đổi lựa chọn qua toggle VI/EN trên header.
   const [userLang, setUserLang] = useState<Lang | null>(null);
+  // Ngôn ngữ ĐOÁN theo vị trí thiết bị (múi giờ) — dùng khi chưa biết country GPS/địa chỉ.
+  // KHÔNG chạm vào state `country` (country còn dùng để lọc sản phẩm theo quốc gia).
+  const [autoLang, setAutoLang] = useState<Lang | null>(null);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = localStorage.getItem("gqd:lang");
     if (saved === "vi" || saved === "en") setUserLang(saved);
+    setAutoLang(guessLangFromDevice());
   }, []);
-  const lang: Lang = userLang ?? langForCountry(country);
+  // Ưu tiên: (1) user tự chọn → (2) country THẬT từ định vị/địa chỉ → (3) đoán theo thiết bị → vi.
+  const lang: Lang = userLang ?? (country ? langForCountry(country) : (autoLang ?? "vi"));
   const setLang = useCallback((l: Lang) => {
     setUserLang(l);
     try { localStorage.setItem("gqd:lang", l); } catch { }
@@ -4640,7 +4678,10 @@ export default function Home() {
                   <div className="max-w-5xl">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-3">
-                        <ProductThumb product={selected} size={52} />
+                        {/* Khung contain: ảnh sản phẩm dọc/cao không bị object-cover cắt đầu-đuôi. */}
+                        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-100 bg-white">
+                          <ProductThumb product={selected} size={52} contain />
+                        </div>
                         <div className="min-w-0">
                           <h2 className="flex items-center gap-1.5 text-lg font-semibold">
                             <span className="truncate">{selected.name}</span>
@@ -5366,6 +5407,8 @@ export default function Home() {
           <CartModal
             items={cartItems}
             lang={lang}
+            alternatives={cartRepickAlternatives}
+            onReplaceOffer={replaceCartOffer}
             onClose={() => {
               setCartOpen(false);
               // Đóng modal xong mới dọn các cửa hàng đã đặt khỏi giỏ (đã hoãn từ onOrdered).
@@ -5487,7 +5530,7 @@ export default function Home() {
             <CoopOrderAgentModal
               offer={buyOffer}
               lang={lang}
-              alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
+              alternatives={buyOfferAlternatives}
               geoAddr={userAddr}
               geoLat={userLoc?.lat}
               geoLng={userLoc?.lng}
@@ -5518,7 +5561,7 @@ export default function Home() {
             <ActiveOrderAgentModal
               offer={buyOffer}
               lang={lang}
-              alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
+              alternatives={buyOfferAlternatives}
               geoAddr={userAddr}
               defaultAddress={userAddr}
               // SL gốc (theo giỏ nếu đã có, mặc định 1). Phần "bơm" cho đủ mức mua tối thiểu do

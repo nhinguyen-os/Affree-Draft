@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import type { CartItem, RankedOffer } from "@/lib/types";
-import { chainLabel, chainLogo, chainMinOrder } from "@/lib/stores";
+import { chainLabel, chainLogo, chainMinOrder, storeCurrency } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
 import { getSavedCard, saveCard, fetchAccountCard, type SavedCard } from "@/lib/cards";
@@ -91,6 +91,8 @@ type PayMethod = "qr" | "card" | "cod";
 
 export default function CartModal({
   items,
+  alternatives = [],
+  onReplaceOffer,
   onClose,
   onUpdateQty,
   onRemove,
@@ -99,6 +101,11 @@ export default function CartModal({
   lang = "vi",
 }: {
   items: CartItem[];
+  /** Các nơi bán khác của MÓN DUY NHẤT trong giỏ (đã xếp hạng) — để gợi ý chọn lại nơi mua.
+   *  Chỉ dùng khi giỏ có đúng 1 sản phẩm; rỗng ở các trường hợp còn lại. */
+  alternatives?: RankedOffer[];
+  /** Đổi nơi mua của món duy nhất trong giỏ sang offer khác (giữ số lượng người dùng). */
+  onReplaceOffer?: (offer: RankedOffer) => void;
   onClose: () => void;
   onUpdateQty: (productId: string, storeId: string, qty: number) => void;
   onRemove: (productId: string, storeId: string) => void;
@@ -225,6 +232,38 @@ export default function CartModal({
   }, [storeGroups]);
 
   const grandTotal = storeGroups.reduce((s, g) => s + g.total, 0);
+
+  // ── Gợi ý chọn lại nơi mua (CHỈ khi giỏ có đúng 1 sản phẩm) ──
+  // Dùng lại UX của form "Mua ngay": danh sách nơi bán khác của cùng món, lọc gần/rẻ,
+  // bấm để đổi nơi mua. Giỏ nhiều sản phẩm thì KHÔNG hiện (mỗi nguồn là 1 nhóm riêng).
+  const [repickSort, setRepickSort] = useState<"near" | "cheap">("near");
+  const singleStoreId = items.length === 1 ? items[0].offer.store.id : null;
+  const storeChoices = useMemo(() => {
+    if (items.length !== 1 || alternatives.length <= 1) return [];
+    const arr = [...alternatives].sort((a, b) => {
+      if (repickSort === "cheap") return a.price - b.price;
+      const da = a.distanceKm ?? Infinity;
+      const db = b.distanceKm ?? Infinity;
+      return da - db;
+    });
+    // Gộp nơi bán hiển thị GIỐNG HỆT (cùng chuỗi + tên) — vd nhiều chi nhánh online cùng tên
+    // "Long Monaco". Chỉ giữ 1 đại diện (ưu tiên nơi đang chọn) → list chỉ hiện khi có >1 nơi khác.
+    const seen = new Map<string, RankedOffer>();
+    for (const o of arr) {
+      const key = `${chainLabel(o.store.chain)}·${o.store.name}`.toLowerCase().trim();
+      if (!seen.has(key) || o.store.id === singleStoreId) seen.set(key, o);
+    }
+    return [...seen.values()];
+  }, [items.length, alternatives, repickSort, singleStoreId]);
+  const cheapestId = useMemo(
+    () => (storeChoices.length ? storeChoices.reduce((m, o) => (o.price < m.price ? o : m)).store.id : null),
+    [storeChoices],
+  );
+  const nearestId = useMemo(() => {
+    const withD = storeChoices.filter((o) => o.distanceKm != null);
+    if (!withD.length) return null;
+    return withD.reduce((m, o) => ((o.distanceKm ?? Infinity) < (m.distanceKm ?? Infinity) ? o : m)).store.id;
+  }, [storeChoices]);
 
   // Đang dùng thẻ ĐÃ LƯU (mặc định khi có) hay nhập thẻ mới.
   const usingSavedCard = !!savedCard && !useNewCard;
@@ -857,6 +896,86 @@ export default function CartModal({
                     ))}
                   </div>
 
+                  {/* Gợi ý chọn lại nơi mua — chỉ khi giỏ có ĐÚNG 1 sản phẩm & có nơi bán khác */}
+                  {items.length === 1 && storeChoices.length > 1 && (
+                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs text-amber-800">
+                        📍 {t("Món này có bán ở nhiều nơi — chọn lại nơi mua:")}
+                      </p>
+
+                      {/* Lọc: gần / rẻ */}
+                      <div className="mt-2 inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium">
+                        <button
+                          onClick={() => setRepickSort("near")}
+                          className={`rounded-md px-3 py-1 transition ${repickSort === "near"
+                            ? "bg-emerald-600 text-white"
+                            : "text-slate-600 hover:bg-slate-100"
+                            }`}
+                        >
+                          {t("Gần nhất")}
+                        </button>
+                        <button
+                          onClick={() => setRepickSort("cheap")}
+                          className={`rounded-md px-3 py-1 transition ${repickSort === "cheap"
+                            ? "bg-emerald-600 text-white"
+                            : "text-slate-600 hover:bg-slate-100"
+                            }`}
+                        >
+                          {t("Rẻ nhất")}
+                        </button>
+                      </div>
+
+                      <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto">
+                        {storeChoices.map((o) => {
+                          const active = o.store.id === singleStoreId;
+                          return (
+                            <button
+                              key={o.store.id}
+                              onClick={() => { if (!active) onReplaceOffer?.(o); }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${active
+                                ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500"
+                                : "border-slate-200 bg-white hover:border-slate-300"
+                                }`}
+                            >
+                              <span className="min-w-0">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="truncate font-medium text-slate-800">
+                                    {chainLabel(o.store.chain)} · {o.store.name}
+                                  </span>
+                                </span>
+                                <span className="mt-0.5 flex flex-wrap items-center gap-1">
+                                  <span className="text-xs text-slate-500">
+                                    {o.distanceKm != null ? `${o.distanceKm.toFixed(1)} km` : t("Online")}
+                                  </span>
+                                  {o.store.id === cheapestId && (
+                                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                      {t("Rẻ nhất")}
+                                    </span>
+                                  )}
+                                  {o.store.id === nearestId && (
+                                    <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                                      {t("Gần nhất")}
+                                    </span>
+                                  )}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-right">
+                                <span className="block font-semibold text-emerald-600">
+                                  {formatMoney(o.price, storeCurrency(o.store.id))}
+                                </span>
+                                {active && (
+                                  <span className="text-[11px] font-medium text-emerald-600">
+                                    {t("Đang chọn")}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Store-specific fields */}
                   <div className="space-y-2">
                     {group.needSlot && (
@@ -926,7 +1045,7 @@ export default function CartModal({
               {(payMethod === "qr" || payMethod === "cod") && (
                 <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
                   {payMethod === "qr"
-                    ? "📱 " + t("Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.")
+                    ? "📱 " + t("Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.")
                     : "💵 " + t("Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.")}
                 </p>
               )}

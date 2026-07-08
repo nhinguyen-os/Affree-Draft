@@ -1,5 +1,5 @@
 import type { Catalog, Offer, Product, RankedOffer, Store } from "./types";
-import { chainLabel, getStore } from "./stores";
+import { chainFromStoreId, chainLabel, getStore, storeCurrency } from "./stores";
 
 export function formatVnd(n: number): string {
   return new Intl.NumberFormat("vi-VN").format(Math.round(n)) + "₫";
@@ -156,7 +156,10 @@ export function rankOffersForProduct(
 }
 
 function fallbackStoreFromOffer(offer: Offer): Store {
-  const chain = offer.storeId.includes("-") ? offer.storeId.split("-")[0] : offer.storeId;
+  // Suy chain từ storeId khi chưa nạp được store thật (getStore trượt), theo quy tắc chung
+  // chainFromStoreId. Nhờ vậy chainLogo/chainLabel/storeCurrency (slug-hoá / SOURCE_META)
+  // vẫn khớp đúng nguồn → hiện đúng logo, tên chuỗi và TIỀN TỆ thay vì mã ID + đ mặc định.
+  const chain = chainFromStoreId(offer.storeId);
   return {
     id: offer.storeId,
     chain,
@@ -164,6 +167,7 @@ function fallbackStoreFromOffer(offer: Offer): Store {
     address: "Mua online",
     website: offer.productUrl || "",
     online: true,
+    currency: storeCurrency(offer.storeId),
   };
 }
 

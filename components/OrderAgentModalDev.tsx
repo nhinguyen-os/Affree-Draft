@@ -2202,10 +2202,20 @@ export default function OrderAgentModal({
         ? a.price - b.price
         : (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity)
     );
-    return arr;
-  }, [choiceList, repickSort]);
+    // Gộp các nơi bán HIỂN THỊ GIỐNG HỆT (cùng chuỗi + cùng tên) — vd 9 chi nhánh online
+    // "Long Monaco" đều hiện "Long Monaco · Long Monaco" → chỉ giữ 1 đại diện (ưu tiên nơi
+    // đang chọn). Nhờ đó showRepick chỉ bật khi thực sự có >1 nơi bán KHÁC nhau.
+    const seen = new Map<string, RankedOffer>();
+    for (const o of arr) {
+      const key = `${chainLabel(o.store.chain)}·${o.store.name}`.toLowerCase().trim();
+      if (!seen.has(key) || o.store.id === activeOffer.store.id) seen.set(key, o);
+    }
+    return [...seen.values()];
+  }, [choiceList, repickSort, activeOffer.store.id]);
 
-  const showRepick = shouldGeocode && storeChoices.length > 1;
+  // Hiện list "chọn lại nơi mua" bất cứ khi nào món có >1 nơi bán (không chỉ khi địa chỉ
+  // giao lệch vị trí định vị) — đồng bộ với giỏ hàng khi mua 1 sản phẩm.
+  const showRepick = storeChoices.length > 1;
 
   useEffect(() => {
     if (coopDeliveryDate && coopDeliveryDate < todayInput) {
@@ -3123,22 +3133,19 @@ export default function OrderAgentModal({
       >
         {/* Glass top highlight — specular reflection */}
         <div className="pointer-events-none absolute inset-x-0 top-0 h-20 rounded-t-3xl" style={{ background: "linear-gradient(170deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.06) 60%, rgba(255,255,255,0) 100%)" }} />
-        {/* Header */}
+        {/* Header — tiêu đề CHÍNH là tên sản phẩm · chuỗi, dài hơn khung → tự CHẠY marquee.
+            Dòng "Phục vụ bởi Affree Agentic AI - AAAI" đã chuyển xuống footer (chữ nhỏ). */}
         <div className="flex items-center justify-between border-b border-white/20 px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-bold text-slate-900">
-              {
-                phase === "done"
-                  ? isCoopReal
-                    ? t("Đã tạo giỏ Co.op")
-                    : t("Đã đặt hàng")
-                  : t("Phục vụ bởi Affree Agentic AI - AAAI")
-              }
-              {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
-            </h2 >
-            <p className="truncate text-xs text-slate-700">
-              {activeOffer.product.name} · {chain}
-            </p>
+          <div className="min-w-0 flex-1">
+            {phase === "done" ? (
+              <h2 className="truncate text-base font-bold text-slate-900">
+                {isCoopReal ? t("Đã tạo giỏ Co.op") : t("Đã đặt hàng")}
+              </h2>
+            ) : (
+              <MarqueeText className="text-base font-bold text-slate-900">
+                {`${activeOffer.product.name} · ${chain}`}
+              </MarqueeText>
+            )}
           </div >
           <button
             onClick={handleCloseModal}
@@ -3318,12 +3325,16 @@ export default function OrderAgentModal({
               {showRepick && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
                   <p className="text-xs text-amber-800">
-                    📍 {geoAddr ? t("Địa chỉ giao khác với vị trí định vị của bạn — ") : t("Định vị theo địa chỉ giao — ")}
-                    {geocoding
-                      ? t("đang định vị & tính khoảng cách theo địa chỉ giao…")
-                      : deliveryLoc
-                        ? t("khoảng cách dưới đây tính từ địa chỉ giao, gần nhất xếp trên. Chọn lại nơi mua:")
-                        : t("chưa xác định được toạ độ địa chỉ giao (khoảng cách tạm tính từ vị trí cũ). Chọn lại nơi mua:")}
+                    📍 {shouldGeocode ? (
+                      <>
+                        {geoAddr ? t("Địa chỉ giao khác với vị trí định vị của bạn — ") : t("Định vị theo địa chỉ giao — ")}
+                        {geocoding
+                          ? t("đang định vị & tính khoảng cách theo địa chỉ giao…")
+                          : deliveryLoc
+                            ? t("khoảng cách dưới đây tính từ địa chỉ giao, gần nhất xếp trên. Chọn lại nơi mua:")
+                            : t("chưa xác định được toạ độ địa chỉ giao (khoảng cách tạm tính từ vị trí cũ). Chọn lại nơi mua:")}
+                      </>
+                    ) : t("Món này có bán ở nhiều nơi — chọn lại nơi mua:")}
                   </p>
 
                   {/* Lọc: gần / rẻ */}
@@ -4232,6 +4243,10 @@ export default function OrderAgentModal({
                   {t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
                 </p>
               )}
+              {/* Dòng nhận diện AAAI — chuyển từ header xuống đây, chữ nhỏ. */}
+              <p className="mt-2 text-center text-[10px] text-slate-400">
+                {t("Phục vụ bởi Affree Agentic AI - AAAI")}
+              </p>
             </div>
           )
         }
