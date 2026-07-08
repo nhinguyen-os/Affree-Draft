@@ -1,3 +1,13 @@
+// Emoji cho từng category granular (thẻ sản phẩm, "Giá hời quanh đây"). Fallback "🛒".
+export const CAT_EMOJI: Record<string, string> = {
+  Sữa: "🥛",
+  "Gia vị - Dầu ăn": "🫗",
+  "Mẹ & Bé": "🍼",
+  "Hóa phẩm": "🧴",
+  "Gạo - Mì": "🍚",
+  "Trứng - Thịt": "🥚",
+};
+
 export const CATEGORY_GROUPS: { label: string; test: RegExp }[] = [
   { label: "Mẹ & bé", test: /\bbé\b|\bmẹ\b|bỉm|bĩm|\btã\b|dinh dưỡng cho mẹ/ },
   {

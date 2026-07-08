@@ -46,7 +46,7 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   highlands: { label: "Highlands Coffee", color: "#a4161a", home: "https://www.highlandscoffee.com.vn" },
   hoasenhome: { label: "Hoa Sen Home", color: "#00529c", home: "https://hoasenhome.vn" },
   premiumoutlets: { label: "Premium Outlets", color: "#6b7280", home: "https://www.premiumoutlets.com" },
-  costco: { label: "Costco", color: "#e31837", home: "https://www.costco.com", currency: "USD" },
+  costco: { label: "Costco", color: "#e31837", home: "https://www.costco.com" },
   other: { label: "Khác", color: "#3948e6", home: "", online: true },
   "Highlands Coffee": { label: "Highlands Coffee", color: "#656631ff", home: "", online: true },
   "Starbucks": { label: "Starbucks", color: "#07411fff", home: "", online: true },
@@ -256,28 +256,11 @@ export function getStore(id: string): Store | undefined {
 }
 
 /**
- * Suy chain gốc từ store_id khi chưa tra được store thật:
- *   "Walmart_00001" → "Walmart", "Costco_00003" → "Costco", "LongMonaco_00001" → "LongMonaco",
- *   "bhx-q1" → "bhx". Không khớp mẫu nào → trả nguyên store_id.
- * Dùng chung cho storeCurrency (đây) và fallbackStoreFromOffer (lib/util) để 1 quy tắc duy nhất.
- */
-export function chainFromStoreId(storeId: string): string {
-  const suffix = (storeId ?? "").match(/^(.*?)_\d+$/);
-  if (suffix) return suffix[1];
-  return (storeId ?? "").includes("-") ? storeId.split("-")[0] : storeId;
-}
-
-/**
- * Tiền tệ của một cửa hàng (theo store_id). Ưu tiên cột currency từ tab "stores".
- * Nếu store CHƯA nạp ở client (vd chi nhánh ngoài vùng — Walmart/Costco ở nước ngoài
- * không có trong Map Server quanh vị trí), suy chain từ store_id rồi lấy tiền tệ mặc định
- * của nguồn trong SOURCE_META (tra cả key hoa lẫn thường). Cuối cùng mới về "VND".
+ * Tiền tệ của một cửa hàng (theo store_id). Ưu tiên cột currency từ tab "stores",
+ * fallback theo tiền tệ mặc định của nguồn (SOURCE_META), cuối cùng "VND".
  */
 export function storeCurrency(id?: string): string {
   if (!id) return "VND";
   const s = getStore(id);
-  if (s?.currency) return s.currency.toUpperCase();
-  const chain = s?.chain ?? chainFromStoreId(id);
-  const cur = SOURCE_META[chain]?.currency ?? SOURCE_META[(chain ?? "").toLowerCase()]?.currency;
-  return (cur || "VND").toUpperCase();
+  return (s?.currency || (s ? SOURCE_META[s.chain]?.currency : "") || "VND").toUpperCase();
 }

@@ -26,12 +26,10 @@ function shortLabel(chain: Chain): string {
 
 /**
  * Logo thật của chuỗi; URL lấy từ sheet "Logo nguồn" (qua chainLogo).
- * Thiếu logo hoặc ảnh lỗi → hiện badge chữ màu.
- * MỌI logo hiện dưới dạng CHIP TRÒN ĐỒNG NHẤT (giống BHX): khung rounded-full + nền TRẮNG,
- * object-contain để logo hiện TRỌN không bị cắt mép. Logo vốn tròn/vuông (BHX) tự phủ kín
- * khung — không viền trắng; logo chữ nhật dài (vd Long Monaco) được nền trắng lấp phần trống
- * trên/dưới nên vẫn ra hình tròn, không còn là dải chữ nhật lơ lửng. KHÔNG thêm padding để
- * tránh "vòng lồng vòng" với logo vốn đã tròn.
+ * Thiếu logo hoặc ảnh lỗi → hiện badge chữ màu. KHÔNG bọc nền trắng/viền tròn ngoài:
+ * nhiều logo (vd BHX) tự nó đã tròn, thêm border tròn nữa thành "vòng lồng vòng".
+ * Vẫn overflow-hidden rounded-full để clip logo không tròn về khung tròn; object-contain
+ * để logo chữ nhật hiện TRỌN, không bị phóng to cắt mép.
  */
 export function ChainBadge({ chain }: { chain: Chain }) {
   const [failed, setFailed] = useState(false);
@@ -52,7 +50,7 @@ export function ChainBadge({ chain }: { chain: Chain }) {
   return (
     <span
       title={chainLabel(chain)}
-      className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full bg-white"
+      className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img

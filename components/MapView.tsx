@@ -23,6 +23,7 @@ import type { CskdCategory } from "@/lib/sheet-cskd";
 import { chainColor, chainLabel, storeCurrency } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { type Lang, tr } from "@/lib/i18n";
+import { ContactReveal } from "@/components/ContactReveal";
 
 // ── Routing types ──────────────────────────────────────────────
 type TransportType = "car" | "bike" | "pedestrian";
@@ -157,6 +158,7 @@ type MapMarker = {
   cheapest?: boolean;
   nearest?: boolean;
 };
+
 
 
 
@@ -714,12 +716,12 @@ export default function MapView({
           <div style={{ position: "fixed", left: portalPos.x, top: portalPos.anchor === "bottom" ? portalPos.y - 46 : portalPos.y + 20, transform: "translateX(-50%)" + (portalPos.anchor === "bottom" ? " translateY(-100%)" : ""), zIndex: 1200, pointerEvents: "auto" }}>
             {/* Arrow tip */}
             {portalPos.anchor === "bottom" && (
-              <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid #fff", filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.1))" }} />
+              <div style={{ position: "absolute", bottom: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderTop: "8px solid rgba(255,255,255,0.9)", filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.1))" }} />
             )}
             {portalPos.anchor === "top" && (
-              <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderBottom: "8px solid #fff", filter: "drop-shadow(0 -2px 2px rgba(0,0,0,0.1))" }} />
+              <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "8px solid transparent", borderRight: "8px solid transparent", borderBottom: "8px solid rgba(255,255,255,0.9)", filter: "drop-shadow(0 -2px 2px rgba(0,0,0,0.1))" }} />
             )}
-            <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)", padding: "10px 32px 10px 10px", width: 220, fontFamily: "system-ui,sans-serif", position: "relative", fontSize: 12 }}>
+            <div className="liquid-glass" style={{ borderRadius: 12, padding: "10px 32px 10px 10px", width: 190, fontFamily: "system-ui,sans-serif", position: "relative", fontSize: 12 }}>
               <button onClick={() => { setSelectedStore(null); setPortalPos(null); }} style={{ position: "absolute", top: 5, right: 5, width: 22, height: 22, borderRadius: 999, background: "#f1f5f9", border: "none", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", padding: 0 }}>×</button>
               {displayCategory.length > 22 ? (
                 <div style={{ fontSize: 12, fontWeight: 700, overflow: "hidden" }}>
@@ -730,6 +732,11 @@ export default function MapView({
                 </div>
               ) : (
                 <div style={{ fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayCategory}</div>
+              )}
+              {selectedStore.store.phone && (
+                <div style={{ marginTop: 3 }}>
+                  <ContactReveal phone={selectedStore.store.phone} lang={lang} source="map" />
+                </div>
               )}
               {/* Tên cửa hàng dài → CHẠY CHỮ (2 bản nối nhau, kéo -50% là khớp) thay vì cắt "…" */}
               {selectedStore.store.name.length > 24 ? (
@@ -747,16 +754,14 @@ export default function MapView({
                   {selectedStore.inStock ? formatMoney(selectedStore.price, storeCurrency(selectedStore.store.id)) : t("Hết hàng")}
                 </div>
               )}
-              <div style={{ marginTop: 6, display: "flex", gap: 5 }}>
+              <div style={{ marginTop: 6, display: "flex", gap: 8, justifyContent: "center" }}>
                 {onStorePick && (
-                  <button type="button" onClick={() => { onStorePick(selectedStore.store); setSelectedStore(null); setPortalPos(null); }} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#0f172a", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" /><path d="M3 6h18" /><path d="M16 10a4 4 0 0 1-8 0" /></svg>
-                    {t("Sản phẩm")}
+                  <button type="button" aria-label={t("Sản phẩm")} title={t("Sản phẩm")} onClick={() => { onStorePick(selectedStore.store); setSelectedStore(null); setPortalPos(null); }} style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "#059669", color: "#fff", border: "none", borderRadius: 7, padding: "7px", cursor: "pointer" }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" /></svg>
                   </button>
                 )}
-                <button type="button" onClick={() => openRouting(selectedStore.store)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 3, background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, padding: "5px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11" /></svg>
-                  {t("Chỉ đường")}
+                <button type="button" aria-label={t("Chỉ đường")} title={t("Chỉ đường")} onClick={() => openRouting(selectedStore.store)} style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "#d1fae5", color: "#047857", border: "none", borderRadius: 7, padding: "7px", cursor: "pointer" }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11" /></svg>
                 </button>
               </div>
             </div>
@@ -970,14 +975,13 @@ export default function MapView({
       {
         legendOpen ? (
           <div
+            className="liquid-glass"
             style={{
               position: "absolute",
               top: 12,
               left: 12,
               zIndex: 1000,
-              background: "rgba(255,255,255,0.95)",
               borderRadius: 10,
-              boxShadow: "0 2px 8px rgba(0,0,0,.18)",
               padding: "6px 24px 8px 10px",
               fontSize: 12,
               lineHeight: 1.5,

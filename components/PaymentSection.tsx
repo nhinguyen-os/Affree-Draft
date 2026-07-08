@@ -140,7 +140,7 @@ export default function PaymentSection({
   pay,
   lang = "vi",
   phone = "",
-  qrHintVi = "Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.",
+  qrHintVi = "Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.",
   className = "",
   methods = ["qr", "card", "cod"],
   flow = "agentic",

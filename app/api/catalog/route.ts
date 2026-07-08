@@ -254,10 +254,6 @@ function parseCsv(csv: string): Catalog {
 
   const productMap = new Map<string, Product>();
   const offers: Offer[] = [];
-  // Chuẩn hoá tên để so khớp: bỏ dấu câu/khoảng trắng thừa, thường hoá.
-  const normName = (s: string) => cleanName(s || "").toLowerCase();
-  // product_id bị NHIỀU sản phẩm khác tên dùng chung (lỗi nhập liệu trong sheet).
-  const collidedIds = new Set<string>();
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -265,19 +261,6 @@ function parseCsv(csv: string): Catalog {
     const storeId = (r[ci.storeId] ?? "").trim();
     if (!productId || !storeId) continue;
     if (hiddenIds.has(productId)) continue; // sản phẩm bị tắt hiển thị
-
-    // Chống trùng product_id: nếu id này đã có sản phẩm với TÊN KHÁC, dòng hiện tại là
-    // của một sản phẩm khác bị gán nhầm cùng id → BỎ QUA để offer không lẫn sang sản phẩm
-    // đầu tiên (vd id "chung00006" vừa là cà phê Nescafé/coop vừa là trà Phúc Long/bhx).
-    // Giữ sản phẩm xuất hiện ĐẦU tiên trong sheet.
-    const existing = productMap.get(productId);
-    if (existing) {
-      const rowName = (r[ci.name] ?? "").trim();
-      if (rowName && normName(rowName) !== normName(existing.name)) {
-        collidedIds.add(productId);
-        continue;
-      }
-    }
 
     if (!productMap.has(productId)) {
       const listedRaw = ci.listedPrice >= 0
@@ -329,9 +312,6 @@ function parseCsv(csv: string): Catalog {
     if (priceNum > 0 && priceNum < 1000 && isVnd) {
       priceNum = Math.round(priceNum * 1000);
     }
-    // Quy ước cột in_stock: CÒN HÀNG = TRUE, HẾT HÀNG = FALSE.
-    // Chỉ đúng "false" (không phân biệt hoa/thường) mới là hết hàng; mọi giá trị khác —
-    // kể cả ô TRỐNG, "true", "1" — đều hiểu là còn hàng (mặc định an toàn, không ẩn nhầm SP).
     const stockRaw = (r[ci.inStock] ?? "").trim().toLowerCase();
     // Variant: giá trị trục 1/2 gắn vào offer; tên trục gắn vào product (từ dòng bất kỳ có khai).
     const v1 = ci.variantValue1 >= 0 ? (r[ci.variantValue1] ?? "").trim() : "";
@@ -347,7 +327,7 @@ function parseCsv(csv: string): Catalog {
       productId,
       storeId,
       price: priceNum,
-      inStock: stockRaw !== "false",
+      inStock: !["0", "false", "het", "hết", "no", "out"].includes(stockRaw),
       productUrl: (r[ci.productUrl] ?? "").trim(),
       lastChecked: ((r[ci.lastChecked] ?? "").trim() || new Date().toISOString()),
       variant1: v1 || undefined,
@@ -356,12 +336,6 @@ function parseCsv(csv: string): Catalog {
     void (ci.chain as Chain | number); // chain suy ra từ store
   }
 
-  if (collidedIds.size) {
-    console.warn(
-      `[catalog] ${collidedIds.size} product_id bị nhiều sản phẩm khác tên dùng chung ` +
-        `(đã bỏ dòng lẫn, giữ sản phẩm xuất hiện đầu): ${[...collidedIds].join(", ")}`,
-    );
-  }
   return { products: [...productMap.values()], offers };
 }
 

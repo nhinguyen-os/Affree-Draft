@@ -13,22 +13,6 @@ export function langForCountry(cc?: string | null): Lang {
   return cc.trim().toLowerCase() === "vn" ? "vi" : "en";
 }
 
-/**
- * Đoán ngôn ngữ theo VỊ TRÍ THIẾT BỊ khi chưa có toạ độ GPS/địa chỉ (lúc mới mở trang).
- * Dùng MÚI GIỜ làm proxy vị trí: ở Việt Nam (Asia/Ho_Chi_Minh|Saigon) → vi, nơi khác → en.
- * Không đọc được múi giờ thì rơi về ngôn ngữ trình duyệt. Client-only (cần window).
- */
-export function guessLangFromDevice(): Lang {
-  if (typeof window === "undefined") return "vi";
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-    if (tz) return /Ho_Chi_Minh|Saigon/i.test(tz) ? "vi" : "en";
-    return (navigator.language || "").toLowerCase().startsWith("vi") ? "vi" : "en";
-  } catch {
-    return "vi";
-  }
-}
-
 /** Đọc mã quốc gia vị trí đã lưu (localStorage "gqd_loc") để các trang khác suy ngôn ngữ. */
 export function readSavedCountry(): string {
   if (typeof window === "undefined") return "";
@@ -353,8 +337,6 @@ const EN_DICT: Record<string, string> = {
     "distances below are from the delivery address, nearest first. Pick a store again:",
   "chưa xác định được toạ độ địa chỉ giao (khoảng cách tạm tính từ vị trí cũ). Chọn lại nơi mua:":
     "couldn't resolve the delivery address coordinates (distance estimated from old location). Pick a store again:",
-  "Món này có bán ở nhiều nơi — chọn lại nơi mua:":
-    "This item is sold at several places — pick a store again:",
   "Online": "Online",
   "Đang chọn": "Selected",
   "Khung giờ giao": "Delivery time slot",
@@ -732,7 +714,7 @@ const EN_DICT: Record<string, string> = {
   "Tên chủ thẻ": "Cardholder name",
   "Thanh toán {amount}": "Pay {amount}",
   "Nhập 1 lần — các cửa hàng sau tự dùng lại thẻ này.": "Enter once — later stores reuse this card automatically.",
-  "Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.": "The AAAI assistant will show a QR code for you to scan at each store when ordering.",
+  "Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.": "The assistant will show a QR code for you to scan at each store when ordering.",
   "Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.": "Cash on delivery (COD) — the delivery staff collects cash.",
   "Chọn thẻ": "Choose card",
   "Ẩn số thẻ": "Hide card number",
