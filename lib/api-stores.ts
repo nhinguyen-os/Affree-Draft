@@ -124,6 +124,7 @@ export async function fetchNearbyStores(options: {
           lat: typeof latVal === "number" ? latVal : parseFloat(latVal ?? ""),
           lng: typeof lngVal === "number" ? lngVal : parseFloat(lngVal ?? ""),
           website,
+          phone: place.phone || undefined,
           ...(loaiCskd ? { loaiCskd } : {}),
         });
       }

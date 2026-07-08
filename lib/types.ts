@@ -19,6 +19,8 @@ export interface Store {
   currency?: string;
   /** Loại CSKD (cơ sở kinh doanh) — mảng các giá trị dạng "CATEGORY > Subcategory". */
   loaiCskd?: string[];
+  /** Số điện thoại liên hệ của cửa hàng. */
+  phone?: string;
 }
 
 export interface Product {
