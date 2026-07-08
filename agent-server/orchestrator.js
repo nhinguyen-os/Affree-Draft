@@ -197,6 +197,8 @@ wss.on("connection", async (clientWs, req) => {
     "HEADLESS",
     "AGENT_GEO_LAT",
     "AGENT_GEO_LON",
+    "ACCOUNT_ORDER_WALMART_URL",
+    "ACCOUNT_ORDER_COOP_URL",
     "PROXY_SERVER",
     "PROXY_USERNAME",
     "PROXY_PASSWORD",
