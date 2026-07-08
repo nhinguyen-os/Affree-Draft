@@ -1446,7 +1446,7 @@ wss.on("connection", async (ws, req) => {
           "--start-maximized",
         ],
       };
-      console.log("[Agent Server] Walmart: mở Google Chrome thật ở chế độ headed.");
+      sendLog("[Agent Server] Walmart: mở Google Chrome thật ở chế độ headed.", "info");
     } else {
       options = {
         headless: process.env.HEADLESS !== "false",
@@ -1456,8 +1456,9 @@ wss.on("connection", async (ws, req) => {
           "--disable-blink-features=AutomationControlled",
         ],
       };
-
+      sendLog(`[Agent Server] Khởi tạo trình duyệt Chromium với chain ${requestedChain}`, "info");
       const proxyConfig = PROXY_CONFIG[requestedChain] && PROXY_CONFIG[requestedChain].server ? PROXY_CONFIG[requestedChain] : null;
+      sendLog(`[Agent Server] Proxy config: ${JSON.stringify(proxyConfig)}`, "info");
       if (proxyConfig) {
         options.proxy = proxyConfig;
         sendLog(`Sử dụng proxy cho chain ${requestedChain}: ${proxyConfig.server}`, "info");
