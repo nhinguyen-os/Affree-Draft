@@ -38,6 +38,14 @@ const DEFAULTS: OnlineConfig = {
   zaloOa: "https://zalo.me/740569612756449830",
 };
 
+/** Chuyển Google Drive /view link → direct image URL (lh3.googleusercontent) để <img> hiển thị được. */
+function normalizeDriveUrl(url: string): string {
+  if (!url) return url;
+  const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+  if (m) return `https://lh3.googleusercontent.com/d/${m[1]}`;
+  return url;
+}
+
 // CSV parser tối giản: xử lý ô có dấu ngoặc kép và xuống dòng trong ô.
 function splitCsv(csv: string): string[][] {
   const rows: string[][] = [];
@@ -87,7 +95,7 @@ export async function fetchOnlineConfig(revalidate = 300): Promise<OnlineConfig>
       if (["ZALO_OA", "ZALO", "OA"].includes(key)) { zaloOa = link; continue; }
       services.push({
         name,
-        logo: logoIdx >= 0 ? (rows[i][logoIdx] ?? "").trim() : "",
+        logo: logoIdx >= 0 ? normalizeDriveUrl((rows[i][logoIdx] ?? "").trim()) : "",
         link,
         desc: descIdx >= 0 ? (rows[i][descIdx] ?? "").trim() : "",
       });

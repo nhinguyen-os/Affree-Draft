@@ -110,15 +110,6 @@ function isWalmartOffer(offer: RankedOffer | null | undefined) {
   return hay.includes("walmart") || hay.includes("wal-mart");
 }
 
-const CAT_EMOJI: Record<string, string> = {
-  Sữa: "🥛",
-  "Gia vị - Dầu ăn": "🫗",
-  "Mẹ & Bé": "🍼",
-  "Hóa phẩm": "🧴",
-  "Gạo - Mì": "🍚",
-  "Trứng - Thịt": "🥚",
-};
-
 const PAGE_SIZE = 50;
 
 // Đổ bóng mép carousel kiểu "liquid glass" iOS/macOS 26-27: lớp phủ trắng mờ dần + làm mờ
@@ -170,7 +161,8 @@ function EdgeFadeRow({ className, children }: { className: string; children: Rea
     </div>
   );
 }
-import { CATEGORY_GROUPS, GROUP_TILE, DEFAULT_TILE_EMOJIS, DEFAULT_TILE_TINTS, categoryGroup, buildCategoryTiles, type ServiceTile } from "@/lib/categories";
+import { CATEGORY_GROUPS, GROUP_TILE, DEFAULT_TILE_EMOJIS, DEFAULT_TILE_TINTS, categoryGroup, buildCategoryTiles, CAT_EMOJI, type ServiceTile } from "@/lib/categories";
+import NearbyDeals from "@/components/NearbyDeals";
 import { isFoodSection, pickMealTitle } from "@/lib/timeSlot";
 
 
@@ -1385,6 +1377,27 @@ export default function Home() {
       apply();
     }
   }, [catalog, deepLinkDone]);
+
+  // Đồng bộ trang cửa hàng (overlay) ↔ URL ?storeid= để F5 KHÔNG mất trang: mở store →
+  // ghi ?storeid vào URL (replaceState, không thêm history), F5 thì handler deep-link ở trên
+  // tự mở lại. Đóng store → gỡ param. Chờ deepLinkDone để không ghi đè lúc handler đang chạy.
+  // Bỏ qua store ảo brand (__brand__…) vì không tra lại được qua /api/store-lookup.
+  useEffect(() => {
+    if (!deepLinkDone) return;
+    const url = new URL(window.location.href);
+    const cur = url.searchParams.get("storeid") || url.searchParams.get("storeId");
+    if (storeProducts && !storeProducts.id.startsWith("__brand__")) {
+      if (cur !== storeProducts.id) {
+        url.searchParams.delete("storeId");
+        url.searchParams.set("storeid", storeProducts.id);
+        window.history.replaceState(null, "", url);
+      }
+    } else if (cur) {
+      url.searchParams.delete("storeid");
+      url.searchParams.delete("storeId");
+      window.history.replaceState(null, "", url);
+    }
+  }, [storeProducts, deepLinkDone]);
 
   // state → document.title. Khi user mở trang chuỗi / nhãn / danh mục / sản phẩm,
   // tab trình duyệt hiển thị TÊN tương ứng (vd "Astrabean · Affree") thay vì title chung.
@@ -3821,179 +3834,19 @@ export default function Home() {
           {/* #8/#9: GIỮ khi tìm (gợi ý "Giá hời liên quan"); ẨN khi xem 1 danh mục (trang "Xem tất cả"). */}
           {
             !selected && !activeTep && !activeCat && !activeBrand && !activeChain && !quickFilter && (areaDeals.length > 0 || dealsRadiusKm != null) && (
-              <div className="mt-3 rounded-2xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 to-white p-3 shadow-sm sm:p-4">
-                <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <h2 className="text-sm font-semibold text-slate-800">
-                    <span className="animate-fire mr-0.5">🔥</span>{query.trim() ? t("Giá hời liên quan") : t("Giá hời quanh đây")}
-                  </h2>
-                  <span className="text-[11px] text-slate-400">
-                    {t("so giá nhiều nơi · bật vị trí để ưu tiên gần bạn")}
-                  </span>
-                </div>
-                {userLoc && (
-                  <div className="mb-2 flex items-center gap-1.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                    {/* Đồng bộ style với bộ filter "Bán kính" trên bản đồ. */}
-                    <span className="inline-flex shrink-0 items-center gap-1 pr-0.5 text-xs font-medium text-slate-500">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
-                        <circle cx="12" cy="10" r="3" />
-                      </svg>
-                      {t("Bán kính")}
-                    </span>
-                    {[0.05, 0.1, 0.15, 0.3, 0.5, 0.7, 1].map((r) => (
-                      <button
-                        key={r}
-                        type="button"
-                        onClick={() => setDealsRadiusKm((cur) => (cur === r ? null : r))}
-                        className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs transition ${dealsRadiusKm === r
-                          ? "border-emerald-600 bg-emerald-600 text-white"
-                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                          }`}
-                      >
-                        {r < 1 ? `${Math.round(r * 1000)}m` : `${r}km`}
-                      </button>
-                    ))}
-                    {dealsRadiusKm != null && (
-                      <button
-                        type="button"
-                        onClick={() => setDealsRadiusKm(null)}
-                        title={t("Hiện tất cả cửa hàng, không giới hạn bán kính")}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-600 transition hover:bg-rose-100"
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M18 6 6 18M6 6l12 12" />
-                        </svg>
-                        {t("Bỏ giới hạn")}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {/* Ghi chú tự nới bán kính: thiếu giá hời trong bán kính đã chọn → đã nới/mở toàn khu vực */}
-                {userLoc && dealsRadiusKm != null && dealsEffKm !== dealsRadiusKm && areaDeals.length > 0 && (
-                  <p className="mb-1.5 text-[11px] font-medium text-amber-700">
-                    {dealsEffKm == null
-                      ? t("Trong {r} chưa đủ giá hời — hiện toàn khu vực", { r: fmtRadius(dealsRadiusKm) })
-                      : t("Trong {r} chưa đủ giá hời — đã nới bán kính tới {r2}", { r: fmtRadius(dealsRadiusKm), r2: fmtRadius(dealsEffKm) })}
-                  </p>
-                )}
-                <div className="relative">
-                  {/* Đổ bóng kính 2 mép (liquid glass) — đồng bộ với các hàng cuộn khác. */}
-                  {dealArrows.left && <div className={GLASS_FADE_LEFT} />}
-                  {dealArrows.right && <div className={GLASS_FADE_RIGHT} />}
-                  {dealArrows.left && (
-                    <button
-                      type="button"
-                      aria-label={t("Cuộn về trước")}
-                      onClick={() => dealScrollRef.current?.scrollBy({ left: -(dealScrollRef.current?.clientWidth ?? 260), behavior: "smooth" })}
-                      className="absolute left-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
-                    >
-                      ‹
-                    </button>
-                  )}
-                  {areaDeals.length === 0 && dealsRadiusKm != null && (
-                    <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-amber-200 bg-amber-50/40 px-4 py-6 text-center">
-                      <span className="text-2xl">🔎</span>
-                      <p className="text-sm font-medium text-amber-800">
-                        {/* Có tự nới bán kính nên rơi vào đây = không còn giá hời ở BẤT KỲ bán kính nào */}
-                        {t("Chưa có giá hời nào quanh đây")}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setDealsRadiusKm(null)}
-                        className="rounded-full border border-slate-200 bg-amber-500 px-3 py-1text-xs font-semibold text-white shadow-sm transition hover:bg-amber-600"
-                      >
-                        {t("Bỏ giới hạn bán kính")}
-                      </button>
-                    </div>
-                  )}
-                  <div
-                    ref={dealScrollRef}
-                    onScroll={updateDealArrows}
-                    className={`flex gap-3 overflow-x-auto scroll-smooth px-0.5 py-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${areaDeals.length === 0 ? "hidden" : ""}`}
-                  >
-                    {areaDeals.map((d) => (
-                      <div
-                        key={d.product.id}
-                        className="group relative flex w-36 shrink-0 flex-col rounded-2xl bg-white p-2.5 text-left ring-1 ring-black/[0.06] shadow-[0_4px_14px_-6px_rgba(15,23,42,0.16),0_2px_5px_-3px_rgba(15,23,42,0.10)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_14px_30px_-10px_rgba(15,23,42,0.24),0_5px_12px_-4px_rgba(15,23,42,0.14)] sm:w-40"
-                      >
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => { e.stopPropagation(); setInfoProduct(d.product); }}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setInfoProduct(d.product); } }}
-                          aria-label={t("Xem thông tin & chứng nhận")}
-                          title={t("Xem thông tin & chứng nhận")}
-                          className="absolute right-1.5 top-1 z-10 cursor-pointer text-[10px] font-semibold leading-none text-slate-400 transition hover:text-slate-700"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>
-                        </span>
-                        <div className="mb-1.5 flex min-h-[20px] flex-wrap items-start gap-1">
-                          <span className="rounded-md bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white shadow-sm">
-                            -{Math.round(d.disc * 100)}%
-                          </span>
-                        </div>
-                        <div className="mb-1.5 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-white">
-                          <ProductThumb product={d.product} fill />
-                        </div>
-                        <div className="min-h-[2.25rem] text-xs font-medium leading-tight text-slate-700">
-                          {d.product.name}
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5">
-                          <span className="text-sm font-bold text-rose-600">{formatMoney(d.now, d.currency)}</span>
-                          <span className="text-[11px] text-slate-400 line-through">{formatMoney(d.was, d.currency)}</span>
-                        </div>
-                        <div className="mt-0.5 text-[11px] font-medium text-emerald-600">
-                          {t("Tiết kiệm {x}", { x: formatMoney(d.save, d.currency) })}
-                        </div>
-                        <div className="mt-1 min-h-[16px] text-[11px] text-slate-500">
-                          {d.storeName && <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>}
-                        </div>
-                        <div className="mt-0.5 min-h-[16px] line-clamp-1 text-[11px] font-medium text-emerald-600">
-                          {d.km != null && <>📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}</>}
-                        </div>
-                        {d.storeChain && chainMinOrder(d.storeChain) > 0 && (
-                          <div className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(d.storeChain), d.currency) })}</div>
-                        )}
-                        <div className="mt-auto pt-2 flex gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); addToCart(d.product); }}
-                            className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-amber-50 text-lg font-bold text-amber-600 hover:bg-amber-100"
-                          >
-                            +
-                            {cartQtyFor(d.product.id) > 0 && (
-                              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-amber-500 px-0.5 text-[10px] font-bold text-white">
-                                {cartQtyFor(d.product.id)}
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); openBuyAgent(d.product); }}
-                            className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-amber-500 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-600"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" />
-                              <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
-                            </svg>
-                            {t("Mua ngay")}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {dealArrows.right && (
-                    <button
-                      type="button"
-                      aria-label={t("Cuộn tiếp")}
-                      onClick={() => dealScrollRef.current?.scrollBy({ left: dealScrollRef.current?.clientWidth ?? 260, behavior: "smooth" })}
-                      className="absolute right-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-white text-lg text-slate-600 shadow-md ring-1 ring-slate-200 transition hover:bg-slate-50"
-                    >
-                      ›
-                    </button>
-                  )}
-                </div>
-              </div>
+              <NearbyDeals
+                rows={areaDeals}
+                radiusKm={dealsRadiusKm}
+                setRadiusKm={setDealsRadiusKm}
+                effKm={dealsEffKm}
+                userLoc={userLoc}
+                lang={lang}
+                query={query}
+                onInfo={(p) => setInfoProduct(p)}
+                onAdd={(p) => addToCart(p)}
+                onBuy={(p) => openBuyAgent(p)}
+                cartQtyFor={cartQtyFor}
+              />
             )
           }
 
@@ -6209,6 +6062,15 @@ export default function Home() {
                 addToCart(p, real ? ({ ...o, store: real, product: p, distanceKm: null } as RankedOffer) : undefined);
               }}
               cartQtyFor={(pid) => cartItems.filter((i) => i.product.id === pid).reduce((s, i) => s + i.qty, 0)}
+              // "Giá hời quanh đây" dùng chung <NearbyDeals/> — truyền data + handler từ Home
+              // xuống để trang cửa hàng KHÔNG có sản phẩm cũng hiện khung này (đỡ trống trải).
+              deals={areaDeals}
+              dealsRadiusKm={dealsRadiusKm}
+              setDealsRadiusKm={setDealsRadiusKm}
+              dealsEffKm={dealsEffKm}
+              onDealInfo={(p) => setInfoProduct(p)}
+              onDealAdd={(p) => addToCart(p)}
+              onDealBuy={(p) => openBuyAgent(p)}
             />
           );
         })()}

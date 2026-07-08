@@ -59,9 +59,9 @@ export function ModelInfo({ lang = "vi" }: { lang?: Lang }) {
           className="absolute left-0 top-full z-[2200] mt-1.5 w-[290px] max-w-[85vw] rounded-xl border border-white/50 bg-white/90 p-3 text-left shadow-xl backdrop-blur-xl"
           style={{ WebkitBackdropFilter: "blur(20px)" }}
         >
-          {SECTIONS.map((sec) => (
-            <div key={sec.label} className="mb-2.5 last:mb-0">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+          {SECTIONS.map((sec, i) => (
+            <div key={sec.label} className={i > 0 ? "mt-2.5 border-t border-slate-100 pt-2.5" : ""}>
+              <p className="mb-1.5 text-[11px] font-semibold text-emerald-600">
                 {t(sec.label)}
               </p>
               {sec.names.map((n) => (

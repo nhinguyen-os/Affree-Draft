@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, type Dispatch, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
+import { ZaloFollowButton } from "@/components/ZaloFollowButton";
 import type { Offer, Product, RankedOffer, Store } from "@/lib/types";
 import type { OnlineConfig, OnlineService } from "@/lib/sheet-online-config";
+import NearbyDeals, { type DealRow } from "@/components/NearbyDeals";
 import { getStore, storeCurrency } from "@/lib/stores";
 import { distanceKm } from "@/lib/util";
 import { ChainBadge } from "@/components/ChainBadge";
@@ -33,12 +35,21 @@ interface Props {
   onBuy: (offer: RankedOffer) => void;
   onAddToCart?: (product: Product, offer: Offer) => void;
   cartQtyFor?: (productId: string) => number;
+  /** "Giá hời quanh đây" (dùng chung <NearbyDeals/>) — data + handler từ Home, để trang
+   *  cửa hàng KHÔNG có sản phẩm cũng hiện khung này. */
+  deals?: DealRow[];
+  dealsRadiusKm?: number | null;
+  setDealsRadiusKm?: Dispatch<SetStateAction<number | null>>;
+  dealsEffKm?: number | null;
+  onDealInfo?: (product: Product) => void;
+  onDealAdd?: (product: Product) => void;
+  onDealBuy?: (product: Product) => void;
 }
 
 // 1 dòng sản phẩm trong trang: offer + product + cửa hàng THẬT bán offer đó (brand mode).
 type PageItem = { offer: Offer; product: Product; realStore: Store | null; dist: number | null };
 
-export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, servedBy, brandTag, behind = false, onClose, onBuy, onAddToCart, cartQtyFor }: Props) {
+export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, servedBy, brandTag, behind = false, onClose, onBuy, onAddToCart, cartQtyFor, deals, dealsRadiusKm, setDealsRadiusKm, dealsEffKm, onDealInfo, onDealAdd, onDealBuy }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
   // Lọc theo nhãn hàng (deep-link ?nhanhang=…). Bật mặc định khi có brandTag; bấm × để bỏ.
   const [brandFilterOn, setBrandFilterOn] = useState(!!brandTag);
@@ -58,7 +69,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
       .then((r) => (r.ok ? r.json() : null))
       .then((d: OnlineConfig | null) => { if (alive && d) setOnlineCfg(d); })
       .catch(() => {});
-    try { if (localStorage.getItem("affree_oa_followed") === "1") setContactRevealed(true); } catch {}
+    // Mặc định luôn ĐÓNG mắt (che số) — không tự mở lại kể cả khi user từng Quan tâm OA.
     return () => { alive = false; };
   }, []);
   // Che giữa số điện thoại: "0912345678" → "09xxxxxx78" (không lưu/bịa số nào).
@@ -71,12 +82,21 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
     if (contactRevealed) { setContactRevealed(false); return; }
     setShowOaGate(true); // chưa quan tâm → mời Quan tâm OA
   };
+  // Quan tâm giờ diễn ra NGAY TRÊN WEB qua widget Zalo (ZaloFollowButton) trong popup —
+  // không mở tab rời trang. Nút này chỉ xác nhận "đã quan tâm" → mở khoá số + đóng popup.
   const confirmFollowOa = () => {
     try { localStorage.setItem("affree_oa_followed", "1"); } catch {}
     setContactRevealed(true);
     setShowOaGate(false);
-    if (onlineCfg?.zaloOa) window.open(onlineCfg.zaloOa, "_blank", "noopener");
   };
+  // OA id (số) cho widget — tách từ link zalo.me/<oaid> trong cấu hình (không dùng regex).
+  const oaId = (() => {
+    let z = onlineCfg?.zaloOa || "";
+    const qi = z.indexOf("?"); if (qi >= 0) z = z.slice(0, qi);
+    const hi = z.indexOf("#"); if (hi >= 0) z = z.slice(0, hi);
+    const parts = z.split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : "";
+  })();
   // Emoji của 1 danh mục: ưu tiên sheet (tab "tệp") → GROUP_TILE → emoji mặc định theo index.
   const emojiFor = (name: string, idx: number) =>
     groupEmoji[name] || GROUP_TILE[name]?.emoji || DEFAULT_TILE_EMOJIS[idx % DEFAULT_TILE_EMOJIS.length];
@@ -168,6 +188,8 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   const activeSectionData = activeSection ? sections.find((s) => s.name === activeSection) : null;
   const activeSectionIdx = activeSection ? sections.findIndex((s) => s.name === activeSection) : -1;
   const activeEmoji = activeSectionData ? emojiFor(activeSectionData.name, activeSectionIdx) : "🛒";
+  // SĐT liên hệ: ưu tiên số của cửa hàng lấy từ map (store.phone), rồi mới tới cấu hình sheet.
+  const contactPhone = store.phone || onlineCfg?.contactPhone || "";
 
   return (
     <div className={`fixed inset-x-0 bottom-0 flex flex-col bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50 ${behind ? "z-[1050]" : "z-[2050]"}`} style={{ top: headerH || 64 }}>
@@ -192,6 +214,11 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     logo chuỗi để hiển thị, badge "•" trống đè lên tên brand. */}
                 {!store.id.startsWith("__brand__") && <ChainBadge chain={store.chain} />}
                 <h1 className="truncate text-base font-bold text-slate-900">{store.name}</h1>
+                {sections.length === 0 && (
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
+                    {t("Chưa có thông tin bán hàng online")}
+                  </span>
+                )}
               </div>
               <p className="mt-0.5 text-xs leading-snug text-slate-500">
                 {items.length} {t("sản phẩm")}
@@ -251,21 +278,18 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
           /* ── Main view: sections với horizontal scroll row ── */
           <div className="px-3 py-3">
             {sections.length === 0 ? (
-              <div className="mx-auto max-w-md space-y-3.5 pt-1">
+              <div className="space-y-3.5 pt-1">
                 {/* ── Trạng thái: chưa bán online + liên hệ (soft-gate Zalo OA) ── */}
-                <div className="rounded-2xl bg-white p-4 shadow-sm">
-                  <div className="flex items-center gap-2 text-slate-800">
-                    <span className="text-lg">🛍️</span>
-                    <h2 className="text-sm font-semibold">{t("Chưa có thông tin bán hàng online")}</h2>
-                  </div>
-                  <div className="mt-3 border-t border-slate-100 pt-3">
-                    <p className="mb-1.5 text-xs font-medium text-slate-500">{t("Mua sản phẩm — liên hệ")}</p>
-                    <div className="flex items-center gap-2">
-                      <span className="flex-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold tracking-wide text-slate-700">
-                        {onlineCfg?.contactPhone
-                          ? (contactRevealed ? onlineCfg.contactPhone : maskPhone(onlineCfg.contactPhone))
+                <div className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.06)] sm:p-5">
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-slate-500">🛍️ {t("Mua sản phẩm — liên hệ")}</p>
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold tracking-wide text-slate-700">
+                        {contactPhone
+                          ? (contactRevealed ? contactPhone : maskPhone(contactPhone))
                           : t("Đang cập nhật")}
                       </span>
+                      {contactPhone && (
                       <button
                         type="button"
                         onClick={onEyeClick}
@@ -279,41 +303,48 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68M6.6 6.6A13.3 13.3 0 0 0 2 12s3.5 7 10 7a9 9 0 0 0 5.4-1.6" /><path d="M14.12 14.12A3 3 0 1 1 9.88 9.88M2 2l20 20" /></svg>
                         )}
                       </button>
+                      )}
                     </div>
                   </div>
                 </div>
 
                 {/* ── Tạo trang bán hàng Online ── */}
-                <div className="rounded-2xl bg-white p-4 shadow-sm">
+                <div className="rounded-2xl border border-slate-200/70 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.06)] sm:p-5">
                   <h2 className="text-sm font-semibold text-slate-800">{t("Tạo trang bán hàng Online")}</h2>
                   {onlineCfg && onlineCfg.services.length > 0 ? (
-                    <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                    <div className="mt-3 flex gap-3.5 overflow-x-auto px-0.5 pb-2 pt-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                       {onlineCfg.services.map((s) => (
                         <button
                           key={s.name}
                           type="button"
                           onClick={() => { setRegService(s); setRegSent(false); }}
-                          className="flex flex-col items-center gap-1.5 rounded-xl border border-slate-200 p-3 text-center transition hover:border-emerald-300 hover:bg-emerald-50 active:scale-[0.98]"
+                          className="group flex w-32 shrink-0 flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md active:translate-y-0 active:scale-[0.98]"
                         >
-                          {s.logo ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={s.logo} alt={s.name} className="h-9 w-9 rounded-lg object-contain" />
-                          ) : (
-                            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-sm font-bold text-emerald-700">
-                              {s.name.slice(0, 2).toUpperCase()}
-                            </span>
-                          )}
-                          <span className="text-xs font-medium text-slate-700">{s.name}</span>
+                          <ServiceLogo name={s.name} logo={s.logo} />
+                          <span className="w-full truncate text-sm font-semibold text-slate-700 transition group-hover:text-emerald-700">{s.name}</span>
                         </button>
                       ))}
                     </div>
                   ) : (
                     <p className="mt-3 text-center text-xs text-slate-400">{t("Đang tải…")}</p>
                   )}
-                  <p className="mt-3 text-center text-[10px] text-slate-400">{t("Phục vụ bởi Affree Agentic AI — AAAI")}</p>
                 </div>
 
-                {/* GĐ2: <NearbyDeals/> (khung "Giá hời quanh đây" dùng chung) sẽ nhét vào đây */}
+                {/* Khung "Giá hời quanh đây" — DÙNG CHUNG component với trang chủ. */}
+                {onDealInfo && onDealAdd && onDealBuy && setDealsRadiusKm && (
+                  <NearbyDeals
+                    rows={deals ?? []}
+                    radiusKm={dealsRadiusKm ?? null}
+                    setRadiusKm={setDealsRadiusKm}
+                    effKm={dealsEffKm ?? null}
+                    userLoc={userLoc}
+                    lang={lang}
+                    onInfo={onDealInfo}
+                    onAdd={onDealAdd}
+                    onBuy={onDealBuy}
+                    cartQtyFor={(id) => cartQtyFor?.(id) ?? 0}
+                  />
+                )}
 
                 {/* Popup soft-gate: Quan tâm Zalo OA để xem liên hệ */}
                 {showOaGate && createPortal(
@@ -322,13 +353,16 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                       <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-2xl">💬</div>
                       <h3 className="text-sm font-semibold text-slate-800">{t("Quan tâm OA để xem liên hệ")}</h3>
                       <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{t("Quan tâm Zalo OA của công ty để xem thông tin liên hệ mua sản phẩm.")}</p>
+                      {/* Nút Quan tâm THẬT của Zalo — nhúng ngay trên web, không rời trang. */}
+                      <div className="mt-4 flex min-h-[40px] items-center justify-center">
+                        <ZaloFollowButton oaid={oaId} />
+                      </div>
                       <button
                         type="button"
                         onClick={confirmFollowOa}
-                        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 active:scale-[0.98]"
+                        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 active:scale-[0.98]"
                       >
-                        {t("Quan tâm Zalo OA")}
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17 17 7M8 7h9v9" /></svg>
+                        {t("Tôi đã quan tâm — xem số")}
                       </button>
                       <button type="button" onClick={() => setShowOaGate(false)} className="mt-2 w-full py-2 text-xs font-medium text-slate-400 hover:text-slate-600">{t("Để sau")}</button>
                     </div>
@@ -419,5 +453,30 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
       {/* Safe area spacer cho iPhone home indicator */}
       <div style={{ height: "env(safe-area-inset-bottom, 0px)" }} className="shrink-0 bg-gradient-to-br from-slate-50 via-sky-50 to-emerald-50" />
     </div>
+  );
+}
+
+/** Logo dịch vụ tạo web: thử ảnh (Google Drive cần referrerPolicy no-referrer); vỡ ảnh → chữ đầu. */
+function ServiceLogo({ name, logo }: { name: string; logo: string }) {
+  const [errored, setErrored] = useState(false);
+  if (logo && !errored) {
+    return (
+      <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white p-2 ring-1 ring-slate-100 shadow-sm">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={logo}
+          alt={name}
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          onError={() => setErrored(true)}
+          className="h-full w-full object-contain"
+        />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-emerald-50 text-xl font-bold text-emerald-700 ring-1 ring-emerald-100">
+      {name.slice(0, 2).toUpperCase()}
+    </span>
   );
 }

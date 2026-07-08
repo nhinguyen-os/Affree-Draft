@@ -12,6 +12,7 @@ import { ensureAccount } from "@/lib/auth";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { bumpMetric } from "@/lib/metrics";
 import { type Lang, tr } from "@/lib/i18n";
+import { ContactReveal } from "@/components/ContactReveal";
 import { acquireBodyScrollLock } from "@/lib/scroll-lock";
 import OrderInfoSection from "./OrderInfoSection";
 
@@ -781,6 +782,11 @@ export default function CartModal({
                           {formatMoney(group.total, group.currency)}
                         </span>
                       </p>
+                      {group.items[0]?.offer.store.phone && (
+                        <div className="mt-0.5">
+                          <ContactReveal phone={group.items[0].offer.store.phone} lang={lang} source="cart" />
+                        </div>
+                      )}
                     </div>
                   </div>
 
