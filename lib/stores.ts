@@ -55,6 +55,7 @@ export const SOURCE_META: Record<string, SourceMeta> = {
   "7-Eleven": { label: "7-Eleven", color: "#5d9416ff", home: "", online: true },
   "Premium Outlets": { label: "Premium Outlets", color: "#dbbe19ff", home: "", online: true },
   "Costco": { label: "Costco", color: "#e60d0dff", home: "", online: true },
+  "Beauty Republic": { label: "Beauty Republic", color: "#b78932", home: "", online: true, logo: "/logos/beautyrepublic.png" },
 };
 
 const DEFAULT_COLOR = "#3948e6";

@@ -307,6 +307,11 @@ export default function OrderAgentModal({
   const chain = chainLabel(activeOffer.store.chain);
   // Mỗi nguồn cần thông tin/đăng nhập khác nhau → form + các bước chạy theo đó.
   const cfg = useMemo(() => getOrderConfig(activeOffer.store.chain), [activeOffer.store.chain]);
+  // Vận chuyển (demo) — chỉ nguồn có needShipping (vd Shopee). Mặc định chọn gói đầu tiên.
+  const [shipId, setShipId] = useState<string>(() => getOrderConfig(activeOffer.store.chain).shippingOptions?.[0]?.id ?? "");
+  const shipOptions = cfg.shippingOptions ?? [];
+  const shipSel = shipOptions.find((s) => s.id === shipId) ?? shipOptions[0] ?? null;
+  const shipFee = cfg.needShipping && shipSel ? shipSel.fee : 0;
   const DEMO_MODE = true;
   const isCoopReal = process.env.NEXT_PUBLIC_COOP_REAL === "true" && activeOffer.store.chain === "coop";
   const isTXNNReal = !DEMO_MODE && activeOffer.store.chain === "tuoixanhnhanhngon";
@@ -583,6 +588,10 @@ export default function OrderAgentModal({
         s.push({ kind: "auto", label: t('Chọn khung giờ "{slot}"…', { slot: t(slot) }) });
       }
 
+      if (cfg.needShipping && shipSel) {
+        s.push({ kind: "auto", label: t('Chọn đơn vị vận chuyển "{ship}" ({eta})…', { ship: t(shipSel.label), eta: t(shipSel.eta) }) });
+      }
+
       // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
       // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
       if (demoPayMethod === "qr") {
@@ -611,6 +620,7 @@ export default function OrderAgentModal({
     address,
     qty,
     slot,
+    shipSel,
     demoPayMethod,
     cardConfirmed,
     cardLast4,
@@ -747,6 +757,8 @@ export default function OrderAgentModal({
   }, [phase, sessionId, current, stepIndex, activeOffer, onPlaced, note]);
 
   const total = activeOffer.price * qty;
+  // Tổng gồm phí vận chuyển (demo) khi nguồn cần chọn đơn vị giao (shipSel/shipFee ở trên).
+  const grandTotal = total + shipFee;
   const coopMinTotal = 200000;
   const coopBelowMinimum = isCoopReal && total < coopMinTotal;
   // Ràng buộc tối thiểu: số lượng từ cfg (mặc định 1); giá mua tối thiểu lấy từ sheet
@@ -2574,7 +2586,7 @@ export default function OrderAgentModal({
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
+                  <MarqueeText className="mt-0.5 text-xs text-slate-700">{`${chain} · ${activeOffer.store.name}`}</MarqueeText>
                   <div className="mt-1 flex items-center gap-2">
                     <span className="text-sm font-bold text-emerald-600">
                       {formatMoney(total, storeCurrency(activeOffer.store.id))}
@@ -2642,7 +2654,7 @@ export default function OrderAgentModal({
                 )}
                 <div className="min-w-[9rem] flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{activeOffer.product.name}</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-700">{chain} · {activeOffer.store.name}</p>
+                  <MarqueeText className="mt-0.5 text-xs text-slate-700">{`${chain} · ${activeOffer.store.name}`}</MarqueeText>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2">
                     <span className="text-base font-bold text-emerald-600">
                       {formatMoney(activeOffer.price * qty, storeCurrency(activeOffer.store.id))}
@@ -2724,24 +2736,6 @@ export default function OrderAgentModal({
                   </select>
                 </Field>
               )}
-
-              {/* Mỗi nguồn yêu cầu khác nhau */}
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <p className="text-xs font-semibold text-slate-800">
-                  {t("{chain} yêu cầu để đặt món này:", { chain })}
-                </p>
-                <ul className="mt-1 space-y-0.5">
-                  {cfg.requirements.map((r) => (
-                    <li key={r} className="flex items-start gap-1.5 text-xs text-slate-700">
-                      <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full bg-slate-400" />
-                      {t(r)}
-                    </li>
-                  ))}
-                </ul>
-                {cfg.note && (
-                  <p className="mt-1.5 text-[11px] text-slate-700">ℹ️ {t(cfg.note)}</p>
-                )}
-              </div>
 
               {cfg.needEmail && (
                 <Field label={t("Email (nhận hoá đơn)")}>
@@ -2860,6 +2854,36 @@ export default function OrderAgentModal({
                     })}
                   </div>
                 </div>
+              )}
+
+              {/* ── Vận chuyển — chỉ nguồn cần chọn đơn vị giao (vd Shopee). Phí/thời gian là DEMO. ── */}
+              {cfg.needShipping && shipOptions.length > 0 && (
+                <section className="rounded-2xl border border-slate-200 p-3">
+                  <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {t("Vận chuyển")}
+                  </h3>
+                  <div className="space-y-1.5">
+                    {shipOptions.map((s) => {
+                      const active = (shipSel?.id ?? "") === s.id;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setShipId(s.id)}
+                          className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition ${active ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                        >
+                          <span className="flex min-w-0 flex-col">
+                            <span className="text-sm font-medium text-slate-800">🚚 {t(s.label)}</span>
+                            <span className="text-[11px] text-slate-500">{t("Dự kiến")}: {t(s.eta)}</span>
+                          </span>
+                          <span className="shrink-0 text-sm font-semibold text-emerald-600">
+                            {s.fee > 0 ? formatMoney(s.fee, storeCurrency(activeOffer.store.id)) : t("Miễn phí")}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
               )}
 
               {/* ── Thanh toán — tabs ngang CÙNG CẤU TRÚC với form giỏ hàng ── */}
@@ -3738,10 +3762,27 @@ export default function OrderAgentModal({
         {
           phase === "form" && (
             <div className="border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-sm">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-800">{t("Tạm tính")}</span>
-                <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
-              </div>
+              {cfg.needShipping && shipSel ? (
+                <div className="mb-2 space-y-0.5">
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>{t("Tạm tính")}</span>
+                    <span>{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>🚚 {t("Phí vận chuyển")} ({t(shipSel.label)})</span>
+                    <span>{shipFee > 0 ? formatMoney(shipFee, storeCurrency(activeOffer.store.id)) : t("Miễn phí")}</span>
+                  </div>
+                  <div className="flex items-center justify-between pt-0.5">
+                    <span className="text-sm font-medium text-slate-800">{t("Tổng cộng")}</span>
+                    <span className="text-lg font-bold text-emerald-600">{formatMoney(grandTotal, storeCurrency(activeOffer.store.id))}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm font-medium text-slate-800">{t("Tạm tính")}</span>
+                  <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
+                </div>
+              )}
               <button
                 disabled={!canStart || (isCoopReal || isBHXReal ? coopBusy : false)}
                 onClick={() => {
