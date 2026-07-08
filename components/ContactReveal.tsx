@@ -3,13 +3,13 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { type Lang, tr } from "@/lib/i18n";
-import { useOaConfig, useOaFollowed, followOa } from "@/lib/oa";
+import { useOaConfig, followOa } from "@/lib/oa";
 import { ZaloFollowButton } from "@/components/ZaloFollowButton";
 
 function maskPhone(phone: string): string {
-  const c = (phone || "").trim();
-  if (c.length <= 4) return c;
-  return c.slice(0, 2) + "x".repeat(Math.max(2, c.length - 4)) + c.slice(-2);
+  const d = (phone || "").replace(/\D/g, "");
+  if (d.length < 6) return phone;
+  return d.slice(0, 2) + "x".repeat(d.length - 4) + d.slice(-2);
 }
 
 function EyeOpen() {
@@ -31,10 +31,10 @@ function EyeClosed() {
 }
 
 /**
- * Số liên hệ cửa hàng — che số + con mắt. Mở khoá bằng "Quan tâm Zalo OA":
- *  - Đã quan tâm (cờ localStorage) / OA không bắt buộc → hiện số.
- *  - Chưa → bấm mắt → popup: mời → màn "Đăng nhập Zalo" MÔ PHỎNG → Cho phép
- *    → tạo tài khoản Zalo giả (zalo_id) + mở link OA + lưu vào danh sách follower.
+ * Số liên hệ cửa hàng — che số + con mắt. Mặc định ĐÓNG mắt. Mở khoá bằng Quan tâm OA:
+ * popup (1 bước, đồng bộ giao diện với gate trang cửa hàng) có widget Quan tâm THẬT của
+ * Zalo (nhúng ngay trên web) + nút "Tôi đã quan tâm — xem số". Đã quan tâm rồi → bấm mắt
+ * hiện số luôn (không popup).
  */
 export function ContactReveal({
   phone,
@@ -48,28 +48,22 @@ export function ContactReveal({
   source?: string;
 }) {
   const t = (vi: string) => tr(lang, vi);
-  const followed = useOaFollowed();
-  const cfg = useOaConfig();
-  const [reveal, setReveal] = useState(false); // mặc định ĐÓNG mắt (che số), bấm mới mở
+  const cfg = useOaConfig(); // OA config (oa_id cho widget)
+  const [reveal, setReveal] = useState(false); // mặc định ĐÓNG mắt (che số)
   const [popup, setPopup] = useState(false);
-  const [step, setStep] = useState<"prompt" | "consent">("prompt");
 
-  const canSee = !cfg.require_follow || followed;
-  const shown = canSee && reveal;
+  const shown = reveal;
 
-  const openPopup = () => { setStep("prompt"); setPopup(true); };
-  const closePopup = () => { setPopup(false); setStep("prompt"); };
-
+  // Luôn mời Quan tâm mỗi lần mở mắt (i chang gate trang cửa hàng — KHÔNG bỏ qua theo cờ đã-follow).
   const onEye = () => {
-    if (!canSee) { openPopup(); return; }
-    setReveal((v) => !v);
+    if (reveal) { setReveal(false); return; }
+    setPopup(true);
   };
 
-  // Đã bấm Quan tâm (qua widget Zalo thật) → xác nhận: lưu follower + mở mắt + đóng popup.
   const confirmFollowed = () => {
     void followOa(source);
     setReveal(true);
-    closePopup();
+    setPopup(false);
   };
 
   return (
@@ -96,60 +90,27 @@ export function ContactReveal({
         {shown ? <EyeOpen /> : <EyeClosed />}
       </button>
 
+      {/* Popup soft-gate — ĐỒNG BỘ với gate trang cửa hàng (StoreProductsPage). */}
       {popup && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/45 p-4" onClick={closePopup}>
-          <div className="w-full max-w-[330px] overflow-hidden rounded-2xl bg-white text-center shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            {step === "prompt" ? (
-              <div className="p-5">
-                {cfg.oa_logo ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={cfg.oa_logo} alt={cfg.oa_name} className="mx-auto mb-3 h-14 w-14 rounded-full object-cover" />
-                ) : (
-                  <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-600">
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.5 2 2 5.9 2 10.7c0 2.7 1.5 5.1 3.8 6.7-.1.9-.6 2.3-1.3 3.4-.2.3.1.7.4.6 2-.6 3.5-1.4 4.3-2 .9.2 1.8.3 2.8.3 5.5 0 10-3.9 10-8.7S17.5 2 12 2Z" /></svg>
-                  </div>
-                )}
-                <p className="text-[15px] font-bold text-slate-800">{cfg.popup_title}</p>
-                <p className="mt-1.5 text-[12px] leading-relaxed text-slate-500">{cfg.popup_desc}</p>
-                <button
-                  type="button"
-                  onClick={() => setStep("consent")}
-                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.5 2 2 5.9 2 10.7c0 2.7 1.5 5.1 3.8 6.7-.1.9-.6 2.3-1.3 3.4-.2.3.1.7.4.6 2-.6 3.5-1.4 4.3-2 .9.2 1.8.3 2.8.3 5.5 0 10-3.9 10-8.7S17.5 2 12 2Z" /></svg>
-                  {t("Quan tâm Zalo OA")}
-                </button>
-                <button type="button" onClick={closePopup} className="mt-2 w-full rounded-xl px-4 py-2 text-[12px] font-medium text-slate-500 transition hover:bg-slate-100">
-                  {t("Để sau")}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div className="flex items-center gap-2 bg-blue-600 px-4 py-3 text-left text-white">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.5 2 2 5.9 2 10.7c0 2.7 1.5 5.1 3.8 6.7-.1.9-.6 2.3-1.3 3.4-.2.3.1.7.4.6 2-.6 3.5-1.4 4.3-2 .9.2 1.8.3 2.8.3 5.5 0 10-3.9 10-8.7S17.5 2 12 2Z" /></svg>
-                  <span className="text-[14px] font-bold">{cfg.oa_name}</span>
-                </div>
-                <div className="p-5 text-center">
-                  <p className="text-[12px] leading-relaxed text-slate-500">
-                    {t("Bấm Quan tâm để theo dõi OA, sau đó bấm \"Tôi đã quan tâm\" để xem số.")}
-                  </p>
-                  {/* Nút Quan tâm THẬT của Zalo (widget). data-oaid lấy từ cấu hình OA. */}
-                  <div className="mt-4 flex min-h-[40px] justify-center">
-                    <ZaloFollowButton oaid={cfg.oa_id} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={confirmFollowed}
-                    className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-center text-[13px] font-semibold text-white transition hover:bg-emerald-700"
-                  >
-                    {t("Tôi đã quan tâm — xem số")}
-                  </button>
-                  <button type="button" onClick={() => setStep("prompt")} className="mt-2 w-full rounded-xl px-4 py-2 text-center text-[12px] font-medium text-slate-500 transition hover:bg-slate-100">
-                    {t("Quay lại")}
-                  </button>
-                </div>
-              </div>
-            )}
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 p-6" onClick={() => setPopup(false)}>
+          <div className="w-full max-w-xs rounded-2xl bg-white p-5 text-center shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-2xl">💬</div>
+            <h3 className="text-sm font-semibold text-slate-800">{t("Quan tâm OA để xem liên hệ")}</h3>
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{t("Quan tâm Zalo OA của công ty để xem thông tin liên hệ mua sản phẩm.")}</p>
+            {/* Nút Quan tâm THẬT của Zalo — nhúng ngay trên web, không rời trang. */}
+            <div className="mt-4 flex min-h-[40px] items-center justify-center">
+              <ZaloFollowButton oaid={cfg.oa_id} />
+            </div>
+            <button
+              type="button"
+              onClick={confirmFollowed}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 active:scale-[0.98]"
+            >
+              {t("Tôi đã quan tâm — xem số")}
+            </button>
+            <button type="button" onClick={() => setPopup(false)} className="mt-2 w-full py-2 text-xs font-medium text-slate-400 hover:text-slate-600">
+              {t("Để sau")}
+            </button>
           </div>
         </div>,
         document.body

@@ -89,7 +89,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
     setContactRevealed(true);
     setShowOaGate(false);
   };
-  // OA id (số) cho widget — tách từ link zalo.me/<oaid> trong cấu hình (không dùng regex).
+  // OA id (số) cho widget — tách từ link zalo.me + oaid trong cấu hình (không dùng regex).
   const oaId = (() => {
     let z = onlineCfg?.zaloOa || "";
     const qi = z.indexOf("?"); if (qi >= 0) z = z.slice(0, qi);
