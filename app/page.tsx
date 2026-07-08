@@ -5633,6 +5633,8 @@ export default function Home() {
               lang={lang}
               alternatives={allOffers.filter((o) => o.product.id === buyOffer.product.id)}
               geoAddr={userAddr}
+              geoLat={userLoc?.lat}
+              geoLng={userLoc?.lng}
               defaultName={coopCartPrefill?.name}
               defaultPhone={coopCartPrefill?.phone}
               defaultAddress={coopCartPrefill?.address || userAddr}

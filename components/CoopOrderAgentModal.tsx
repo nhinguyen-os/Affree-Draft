@@ -214,7 +214,12 @@ function applyKnownCoopLocationCodes(parts: CoopAddressParts): CoopAddressParts 
 }
 
 function parseCoopAddressParts(fullAddress: string): CoopAddressParts {
-  const parts = fullAddress.split(",").map((item) => item.trim()).filter(Boolean);
+  const rawParts = fullAddress.split(",").map((item) => item.trim()).filter(Boolean);
+  const parts = rawParts.filter((item, index) => {
+    if (index !== rawParts.length - 1) return true;
+    const normalized = normalizeCoopText(item);
+    return normalized !== "viet nam" && normalized !== "vietnam";
+  });
   const provinceName = normalizeCoopProvince(parts.at(-1) || HCM_PROVINCE.name);
   let districtName = parts.length >= 4 ? parts.at(-2) || "" : "";
   let wardName = parts.length >= 3 ? normalizeCoopWard(parts.at(-3) || "") : "";
