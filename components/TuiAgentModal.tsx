@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import QRCode from "react-qr-code";
 import { formatMoney } from "@/lib/util";
 import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
-import { chainLogo } from "@/lib/stores";
+import { ChainBadge } from "./ChainBadge";
+import { MarqueeText } from "./MarqueeText";
 import { getOrderConfig } from "@/lib/orderConfig";
 import { phoneRule } from "@/lib/phone";
 import { type Lang, tr } from "@/lib/i18n";
@@ -17,7 +18,7 @@ import PaymentSection, { CardInputs, usePaymentState } from "./PaymentSection";
  * BẢN GIẢ LẬP (mock) — màn agentic đặt CẢ TÚI: liệt kê các món gom theo NGUỒN ĐÍCH
  * (chuỗi/nguồn thật sự bán món đó — bhx/THXL/coop/spe…) rồi đặt 1 lượt tại từng nguồn.
  * Form ĐỒNG BỘ với form giỏ hàng (CartModal): Thông tin chung (OrderInfoSection) +
- * section từng nguồn kiểu giỏ + Thanh toán chọn QR/Thẻ/COD (PaymentSection); trợ lý
+ * section từng nguồn kiểu giỏ + Thanh toán chọn QR/Thẻ/COD (PaymentSection); trợ lý AAAI
  * chỉ dừng ở bước thanh toán (quét QR từng nguồn / nhập thẻ 1 lần).
  */
 export interface TuiAgentLine {
@@ -103,7 +104,7 @@ export default function TuiAgentModal({
   const rule = useMemo(() => phoneRule("VND"), []);
   const phoneValid = rule.test(phone);
   const infoReady = !!name.trim() && phoneValid && !!address.trim();
-  // Giống giỏ: đủ thông tin giao + đã CHỌN phương thức (QR/thẻ thao tác ở bước trợ lý).
+  // Giống giỏ: đủ thông tin giao + đã CHỌN phương thức (QR/thẻ thao tác ở bước trợ lý AAAI).
   const canStart = infoReady && pay.method !== null;
   const orderHint = !infoReady
     ? t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")
@@ -116,7 +117,7 @@ export default function TuiAgentModal({
   useEffect(() => acquireBodyScrollLock(), []);
   useEffect(() => { saveProfile({ name, phone, address }); }, [name, phone, address]);
 
-  // Các bước trợ lý: mỗi nguồn 1 bước "đặt" + 1 bước thanh toán (QR dừng từng nguồn,
+  // Các bước trợ lý AAAI: mỗi nguồn 1 bước "đặt" + 1 bước thanh toán (QR dừng từng nguồn,
   // thẻ dừng 1 lần, COD tự chạy) — giống kế hoạch từng cửa hàng của giỏ.
   const steps = useMemo(() => {
     const s: Step[] = [];
@@ -160,10 +161,10 @@ export default function TuiAgentModal({
 
   const total = comboPrice || lines.reduce((s, l) => s + l.price * l.qty, 0);
 
-  // Bấm "Để trợ lý đặt cả túi" — giống startAgent của giỏ.
+  // Bấm "Để trợ lý AAAI đặt cả túi" — giống startAgent của giỏ.
   const startAgent = () => {
     flushProfile({ name, phone, address });
-    // Thẻ đã điền ĐỦ ở form → coi như xác nhận luôn, trợ lý tự thanh toán không dừng hỏi.
+    // Thẻ đã điền ĐỦ ở form → coi như xác nhận luôn, trợ lý AAAI tự thanh toán không dừng hỏi.
     setCardConfirmed(pay.method === "card" && pay.cardReady);
     // Thẻ MỚI hợp lệ → lưu lại (localStorage, không CVV) cho lần mua sau chọn nhanh.
     pay.commitCard();
@@ -198,13 +199,14 @@ export default function TuiAgentModal({
         <div className="pointer-events-none absolute inset-x-0 top-0 h-20 rounded-t-3xl" style={{ background: "linear-gradient(170deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.06) 60%, rgba(255,255,255,0) 100%)" }} />
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/20 px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-bold text-slate-900">
-              {phase === "done" ? t("Đã đặt cả túi") : t("Phục vụ bởi Affree Agentic AI - AAAI")}
-            </h2>
-            <p className="truncate text-xs text-slate-700">
-              🛍️ {tuiName} · {lines.length} {t("món")} · {groups.length} {t("nguồn")}
-            </p>
+          <div className="min-w-0 flex-1">
+            {phase === "done" ? (
+              <h2 className="truncate text-base font-bold text-slate-900">{t("Đã đặt cả túi")}</h2>
+            ) : (
+              <MarqueeText className="text-base font-bold text-slate-900">
+                {`🛍️ ${tuiName} · ${lines.length} ${t("món")} · ${groups.length} ${t("nguồn")}`}
+              </MarqueeText>
+            )}
           </div>
           <button onClick={onClose} className="shrink-0 rounded-full p-1.5 text-slate-500 hover:bg-white/40" aria-label={t("Đóng")}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -213,7 +215,7 @@ export default function TuiAgentModal({
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
           <div className="mb-4 rounded-lg border border-amber-300/40 bg-amber-100/30 px-3 py-2 text-xs text-amber-900">
-            ⚙️ {t("Bản mô phỏng — chưa kết nối web thật. Trợ lý đặt cả túi tại từng nguồn đích.")}
+            ⚙️ {t("Bản mô phỏng — chưa kết nối web thật. Trợ lý AAAI đặt cả túi tại từng nguồn đích.")}
           </div>
 
           {/* PHASE 1: form — Thông tin chung + từng nguồn + Thanh toán (đồng bộ giỏ hàng) */}
@@ -234,18 +236,9 @@ export default function TuiAgentModal({
               {groups.map((g) => (
                 <section key={g.source} className="rounded-2xl border border-slate-200 p-3">
                   <div className="mb-2.5 flex items-center gap-2">
-                    <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-100 text-xs font-bold text-emerald-700 ring-1 ring-slate-200">
-                      {g.source.slice(0, 2).toUpperCase()}
-                      {g.chain && chainLogo(g.chain) && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={chainLogo(g.chain)}
-                          alt={g.source}
-                          className="absolute inset-0 h-full w-full bg-white object-contain p-0.5"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                        />
-                      )}
-                    </span>
+                    {g.chain
+                      ? <ChainBadge chain={g.chain} size={32} />
+                      : <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700 ring-1 ring-slate-200">{g.source.slice(0, 2).toUpperCase()}</span>}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-slate-800">{g.source}</p>
                       <p className="text-xs text-slate-500">
@@ -328,15 +321,15 @@ export default function TuiAgentModal({
                 pay={pay}
                 lang={lang}
                 phone={phone}
-                qrHintVi="Trợ lý sẽ hiện mã QR để bạn quét tại từng nguồn khi đặt."
+                qrHintVi="Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt."
               />
               <p className="px-1 text-[11px] text-slate-500">
-                {t("Túi gom món từ {n} nguồn → trợ lý đặt trực tiếp tại từng nguồn đích, giao theo từng nguồn.", { n: groups.length })}
+                {t("Túi gom món từ {n} nguồn → trợ lý AAAI đặt trực tiếp tại từng nguồn đích, giao theo từng nguồn.", { n: groups.length })}
               </p>
             </div>
           )}
 
-          {/* PHASE 2: trợ lý chạy — dừng ở bước thanh toán (QR từng nguồn / thẻ 1 lần) */}
+          {/* PHASE 2: trợ lý AAAI chạy — dừng ở bước thanh toán (QR từng nguồn / thẻ 1 lần) */}
           {phase === "running" && (
             <div className="space-y-2 py-1">
               {steps.map((st, i) => {
@@ -354,7 +347,7 @@ export default function TuiAgentModal({
                       <span className={done ? "text-slate-500" : active ? "font-medium text-slate-800" : "text-slate-400"}>{label}</span>
                     </div>
 
-                    {/* Thanh toán QR — quét mã của nguồn này rồi xác nhận (giống bước trợ lý của giỏ) */}
+                    {/* Thanh toán QR — quét mã của nguồn này rồi xác nhận (giống bước trợ lý AAAI của giỏ) */}
                     {pausedHere && st.pause === "pay-qr" && (
                       <div className="mt-1.5 pl-7">
                         <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-2.5">
@@ -406,7 +399,7 @@ export default function TuiAgentModal({
               </div>
               <h3 className="mt-3 text-lg font-bold text-slate-900">{t("Đã đặt cả túi thành công!")}</h3>
               <p className="mt-1 text-sm text-slate-500">
-                {t("Trợ lý đã đặt {n} món từ {m} nguồn. Mã đơn:", { n: lines.length, m: groups.length })}
+                {t("Trợ lý AAAI đã đặt {n} món từ {m} nguồn. Mã đơn:", { n: lines.length, m: groups.length })}
               </p>
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
@@ -446,11 +439,14 @@ export default function TuiAgentModal({
               onClick={startAgent}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-150 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
             >
-              {t("Để trợ lý đặt cả túi →")}
+              {t("Để trợ lý AAAI đặt cả túi →")}
             </button>
             {orderHint && (
               <p className="mt-1.5 text-center text-xs text-slate-400">{orderHint}</p>
             )}
+            <p className="mt-1.5 text-center text-[10px] text-slate-400">
+              {t("Phục vụ bởi Affree Agentic AI - AAAI")}
+            </p>
           </div>
         )}
       </div>

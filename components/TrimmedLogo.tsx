@@ -17,6 +17,7 @@ export function TrimmedLogo({
   alt,
   className,
   onResult,
+  onError,
   keyOutWhite,
   padPx,
 }: {
@@ -25,6 +26,8 @@ export function TrimmedLogo({
   className?: string;
   /** Gọi khi đã trim xong, truyền màu nền chủ đạo (nếu có) và aspect = w/h của ảnh sau trim. */
   onResult?: (info: { fillColor?: string; aspect?: number }) => void;
+  /** Gọi khi ảnh HIỂN THỊ lỗi (URL gốc 404…) — để caller fallback (vd badge chữ). */
+  onError?: () => void;
   /**
    * Bật để flood-fill các pixel near-white liền mép thành transparent.
    * Dùng khi card có BG override khác trắng (vd Beauty Republic gold card)
@@ -217,5 +220,5 @@ export function TrimmedLogo({
   }, [src]);
 
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={finalSrc} alt={alt} className={className} />;
+  return <img src={finalSrc} alt={alt} className={className} onError={onError} />;
 }

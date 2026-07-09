@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { CartItem, Catalog, Chain, Product, ProductGroup, RankedOffer, Store, Tui } from "@/lib/types";
 import type { CskdCategory } from "@/lib/sheet-cskd";
-import { chainColor, chainLabel, chainMinOrder, findChainBySlug, getStore, getStores, physicalStoresOfChain, setDynamicMinOrders, setDynamicSourceLogos, setDynamicSourceNames, setDynamicStores, storeCurrency } from "@/lib/stores";
+import { chainColor, chainLabel, chainMinOrder, findChainBySlug, getStore, getStores, physicalStoresOfChain, setDynamicMinOrders, setDynamicSourceLogos, setDynamicSourceNames, setDynamicStores, setStoreCurrencies, storeCurrency } from "@/lib/stores";
 import { TrimmedLogo } from "@/components/TrimmedLogo";
 import { MarqueeText } from "@/components/MarqueeText";
 import {
@@ -24,7 +24,7 @@ import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
 import { getSavedCart, saveCart } from "@/lib/cart";
 import { fetchMe, logout, type AuthUser } from "@/lib/auth";
-import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
+import { APP_VERSION as APP_VERSION_STATIC, VERSION_HISTORY as VERSION_HISTORY_STATIC, ROADMAP as ROADMAP_STATIC, type VersionEntry, type RoadmapSection } from "@/lib/version";
 import { type Lang, langForCountry, tr } from "@/lib/i18n";
 import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
 import { ChainBadge } from "@/components/ChainBadge";
@@ -373,7 +373,9 @@ const ProductThumb = memo(function ProductThumb({
         className={
           fill
             ? "h-full w-full rounded-lg object-contain"
-            : `shrink-0 rounded-lg ${contain ? "object-contain" : "border border-slate-100 object-cover"}`
+            // object-contain (KHÔNG cắt ảnh) + nền slate-50 để khung vẫn "phủ đầy" gọn gàng
+            // thay vì object-cover (phóng to cắt mất mép ảnh sản phẩm).
+            : `shrink-0 rounded-lg object-contain ${contain ? "" : "border border-slate-100 bg-slate-50"}`
         }
       />
     );
@@ -565,6 +567,11 @@ export default function Home() {
   const [rawStores, setRawStores] = useState<Store[] | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [source, setSource] = useState<string>("");
+  // Nội dung popup "i Version" — mặc định là bản tĩnh (lib/version.ts), sau đó fetch từ
+  // Google Sheet (/api/version) để team cấu hình được mà không cần sửa code.
+  const [appVersion, setAppVersion] = useState<string>(APP_VERSION_STATIC);
+  const [versionHistory, setVersionHistory] = useState<VersionEntry[]>(VERSION_HISTORY_STATIC);
+  const [roadmap, setRoadmap] = useState<RoadmapSection[]>(ROADMAP_STATIC);
   // Tăng mỗi khi nạp xong cửa hàng từ sheet → ép tính lại marker/khoảng cách.
   const [storesReady, setStoresReady] = useState(0);
   const [userLoc, setUserLoc] = useState<Loc>(null);
@@ -876,8 +883,12 @@ export default function Home() {
     setMusicOrder([{ id: item.id, name: item.name, image: item.image, price: item.price, qty: 1 }]);
   }
 
-  // Ghi nhận mua nhạc: mỗi dòng = 1 lượt mua tại Khúc Chạm Plaza.
+  // Sinh mã đơn chung cho 1 lần đặt (định dạng "AFF-######-###") — để lịch sử gom theo đơn.
+  const makeOrderCode = () => "AFF-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100);
+
+  // Ghi nhận mua nhạc: mỗi dòng = 1 lượt mua tại Khúc Chạm Plaza (cùng 1 mã đơn).
   async function recordMusicBuy(lines: MusicOrderLine[]) {
+    const code = makeOrderCode();
     for (const l of lines) {
       await addPurchase({
         productId: l.id,
@@ -887,6 +898,7 @@ export default function Home() {
         chain: "khuccham",
         qty: l.qty ?? 1,
         unitPrice: l.price,
+        orderCode: code,
         buyerAddr: userAddr || undefined,
         buyerPhone: authUser?.phone || getProfile().phone || undefined,
       });
@@ -950,6 +962,7 @@ export default function Home() {
   // Ghi nhận mua cả túi: mỗi món thành 1 lượt mua (giống recordBuy) tại nguồn rẻ nhất sẵn có.
   async function recordTuiBuy(tui: import("@/lib/types").Tui) {
     if (!catalog) return;
+    const code = makeOrderCode();
     for (const it of tui.items) {
       const p = catalog.products.find((x) => x.id === it.productId);
       if (!p) continue;
@@ -963,6 +976,7 @@ export default function Home() {
         chain: best?.store.chain ?? it.chain,
         qty: 1,
         unitPrice: best?.price ?? it.gia,
+        orderCode: code,
         buyerLat: userLoc?.lat,
         buyerLng: userLoc?.lng,
         buyerAddr: userAddr || undefined,
@@ -1042,25 +1056,26 @@ export default function Home() {
     });
   }
 
-  // Ngôn ngữ giao diện. User TỰ chọn (lưu vào localStorage 'gqd:lang') được ưu tiên trên
-  // mọi auto-detect. Nếu user CHƯA chọn → suy theo quốc gia của vị trí: VN/chưa biết → vi,
-  // Mỹ/Canada (và nước khác) → en. User đổi lựa chọn qua toggle VI/EN trên header.
+  // Ngôn ngữ giao diện LUÔN CHẠY THEO VỊ TRÍ HIỆN TẠI: ở VN (hoặc chưa biết) → vi,
+  // nơi khác (Mỹ/Canada…) → en. Toggle VI/EN trên header chỉ là ghi đè TẠM trong phiên
+  // (không lưu localStorage) — F5 hoặc đổi vị trí là quay lại đúng ngôn ngữ theo nơi đó.
+  // (Trước đây lựa chọn thủ công lưu 'gqd:lang' ghim mãi, khiến ngôn ngữ không nhảy theo
+  //  vị trí — đã bỏ để đồng nhất với các trang con vốn suy ngôn ngữ thuần theo vị trí.)
   const [userLang, setUserLang] = useState<Lang | null>(null);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const saved = localStorage.getItem("gqd:lang");
-    if (saved === "vi" || saved === "en") setUserLang(saved);
-  }, []);
-  const lang: Lang = userLang ?? langForCountry(country);
+  // Đang mở trang 1 cửa hàng vật lý ở nước ngoài → ngôn ngữ theo QUỐC GIA CỦA CỬA HÀNG đó
+  // (đọc thẳng từ địa chỉ store, vd "…, Toronto, ON, Canada" → ca → en). Vào qua deep-link
+  // ?storeid=… không cập nhật `country` của user, nên phải suy từ store để không kẹt tiếng
+  // Việt khi xem cửa hàng nước ngoài. Store online / nhãn ảo (không địa chỉ) → undefined →
+  // rơi về country của vị trí user.
+  const openStoreCC = storeProducts ? storeCountryCode(storeProducts) : undefined;
+  const lang: Lang = userLang ?? langForCountry(openStoreCC ?? country);
   const setLang = useCallback((l: Lang) => {
     setUserLang(l);
-    try { localStorage.setItem("gqd:lang", l); } catch { }
   }, []);
-  // Đổi vị trí = tín hiệu cho ngôn ngữ chạy theo nơi mới → xoá lựa chọn thủ công đã ghim,
+  // Đổi vị trí = tín hiệu cho ngôn ngữ chạy theo nơi mới → xoá ghi đè tạm (nếu có),
   // để langForCountry(country) tự áp lại (VN → vi, Mỹ… → en).
   const resetLangToAuto = useCallback(() => {
     setUserLang(null);
-    try { localStorage.removeItem("gqd:lang"); } catch { }
   }, []);
   // Hàm dịch ngắn gọn: t("chuỗi VN", { biến }). Thiếu bản dịch → giữ tiếng Việt.
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
@@ -1141,11 +1156,13 @@ export default function Home() {
         setCountry(saved.country || "");
         setRegion(saved.region || "");
         setGeoState("ok");
-        // Vị trí lưu từ trước có thể thiếu `region` (tính năng phân định vùng thêm sau) →
-        // suy lại region từ toạ độ để chip vùng hiện đúng mà không cần định vị lại.
-        if (!saved.region) {
+        // Vị trí lưu từ trước có thể thiếu `region`/`country` (các tính năng này thêm sau) →
+        // suy lại từ toạ độ để chip vùng + NGÔN NGỮ (VN→vi, nước ngoài→en) đúng ngay mà không
+        // cần định vị lại. Thiếu country là lý do vị trí nước ngoài cũ vẫn kẹt tiếng Việt.
+        if (!saved.region || !saved.country) {
           reverseGeocode(saved.loc.lat, saved.loc.lng).then((r) => {
-            if (r.region) setRegion(r.region);
+            if (!saved.region && r.region) setRegion(r.region);
+            if (!saved.country && r.cc) setCountry(r.cc);
           });
         }
       }
@@ -1180,17 +1197,18 @@ export default function Home() {
   //   2. Song song luôn fetch bản mới → thay state + ghi đè cache cho lần sau.
   // Dùng Cache API thay localStorage vì payload vượt quota 5MB của localStorage.
   useEffect(() => {
-    if (_catalogCache) { setDynamicMinOrders(_catalogCache.minOrders ?? null); setDynamicSourceLogos(_catalogCache.sourceLogos ?? null); setDynamicSourceNames(_catalogCache.sourceNames ?? null); setRawCatalog(_catalogCache); return; }
+    if (_catalogCache) { setDynamicMinOrders(_catalogCache.minOrders ?? null); setDynamicSourceLogos(_catalogCache.sourceLogos ?? null); setDynamicSourceNames(_catalogCache.sourceNames ?? null); setStoreCurrencies(_catalogCache.storeCurrencies ?? null, _catalogCache.chainCurrencies ?? null); setRawCatalog(_catalogCache); return; }
     let alive = true;
     let painted = false; // đã vẽ được gì đó (từ cache) chưa — quyết định cách xử lý lỗi mạng
     type CatalogPayload = Catalog & { source?: string };
     const apply = (d: CatalogPayload, fromBrowserCache: boolean) => {
       if (!alive) return;
-      const cat = { products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles, minOrders: d.minOrders, sourceLogos: d.sourceLogos, sourceNames: d.sourceNames };
+      const cat = { products: d.products, offers: d.offers, groups: d.groups, danhMucGroups: d.danhMucGroups, priorities: d.priorities, sponsors: d.sponsors, tui: d.tui, mealTitles: d.mealTitles, minOrders: d.minOrders, sourceLogos: d.sourceLogos, sourceNames: d.sourceNames, storeCurrencies: d.storeCurrencies, chainCurrencies: d.chainCurrencies };
       if (!fromBrowserCache) _catalogCache = cat; // bản mạng mới đáng tin để cache in-memory
       setDynamicMinOrders(d.minOrders ?? null);
       setDynamicSourceLogos(d.sourceLogos ?? null);
       setDynamicSourceNames(d.sourceNames ?? null);
+      setStoreCurrencies(d.storeCurrencies ?? null, d.chainCurrencies ?? null);
       setRawCatalog(cat);
       setSource(d.source ?? "");
       painted = true;
@@ -1455,6 +1473,21 @@ export default function Home() {
     if (hostSub && pathname === "/" && (url === `/${hostSub}` || shortUrl === `/${hostSub}`)) return;
     if (pathname !== url && pathname !== shortUrl) router.replace(url, { scroll: false });
   }, [urlSynced, selected, activeTep, activeBrand, activeCat, activeChain, pathname, router]);
+
+  // Nạp nội dung "i Version" từ Google Sheet (/api/version). Lỗi → giữ nguyên bản tĩnh.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/version", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { appVersion?: string; history?: VersionEntry[]; roadmap?: RoadmapSection[] }) => {
+        if (!alive) return;
+        if (d.appVersion) setAppVersion(d.appVersion);
+        if (d.history?.length) setVersionHistory(d.history);
+        if (Array.isArray(d.roadmap)) setRoadmap(d.roadmap);
+      })
+      .catch(() => { });
+    return () => { alive = false; };
+  }, []);
 
   // Nạp cửa hàng vật lý + toạ độ từ tab "stores" (Google Sheet). Lỗi → giữ STORES tĩnh.
   useEffect(() => {
@@ -1740,14 +1773,14 @@ export default function Home() {
   }, [catalog]);
 
   const priceStats = useMemo(() => {
-    const m = new Map<string, { min: number; max: number; stores: number; variants: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string; minChain: string; soleChain: string }>();
+    const m = new Map<string, { min: number; max: number; stores: number; variants: number; outOfStock: boolean; currency: string; soleSource: string; soleUrl: string; minChain: string; soleChain: string; soleStoreId: string }>();
     if (!catalog) return m;
     for (const p of catalog.products) {
       const priced = (offersByProductId.get(p.id) ?? []).filter((o) => o.price > 0);
       const inStock = priced.filter((o) => o.inStock);
       if (!inStock.length) {
         // Có giá nhưng tất cả điểm bán đều hết hàng → đánh dấu "hết hàng" (khác "chưa có giá").
-        m.set(p.id, { min: 0, max: 0, stores: 0, variants: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "", minChain: "", soleChain: "" });
+        m.set(p.id, { min: 0, max: 0, stores: 0, variants: 0, outOfStock: priced.length > 0, currency: storeCurrency(priced[0]?.storeId), soleSource: "", soleUrl: "", minChain: "", soleChain: "", soleStoreId: "" });
         continue;
       }
       const prices = inStock.map((o) => o.price);
@@ -1780,6 +1813,8 @@ export default function Home() {
         minChain: getStore(inStock.reduce((a, b) => a.price <= b.price ? a : b).storeId)?.chain ?? inStock[0].storeId,
         // Chain key (không phải label) của nguồn sole — dùng để tra chainMinOrder.
         soleChain: sole ? (getStore(sole.storeId)?.chain ?? sole.storeId) : "",
+        // store_id offer sole — để mở trang cửa hàng khi bấm tên nguồn (lấy toạ độ/địa chỉ).
+        soleStoreId: sole?.storeId ?? "",
       });
     }
     return m;
@@ -1898,7 +1933,7 @@ export default function Home() {
   // → thử nấc to hơn cho tới khi đủ MIN_DEALS_IN_RADIUS; hết nấc → null = toàn khu vực).
   const { rows: areaDeals, effKm: dealsEffKm } = useMemo(() => {
     const empty = [] as {
-      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; km: number | null;
+      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; storeId?: string; km: number | null;
     }[];
     if (!catalog) return { rows: empty, effKm: dealsRadiusKm };
     const storeById = new Map(getStores().map((s) => [s.id, s]));
@@ -1969,6 +2004,7 @@ export default function Home() {
         currency: s.currency,
         storeName: dealStoreName,
         storeChain: dealStore?.chain ?? dealChain,
+        storeId: dealStore?.id,
         km: dealKm,
       });
     }
@@ -2521,7 +2557,7 @@ export default function Home() {
   }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady, cskdTaxonomy, cskdStores, cskdByChain]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
-  async function recordBuy(o: RankedOffer, note?: string) {
+  async function recordBuy(o: RankedOffer, note?: string, orderCode?: string) {
     setToast(t("Đã ghi nhận mua {product} tại {store}", { product: o.product.name, store: o.store.name }));
     setTimeout(() => setToast(""), 3500);
     await addPurchase({
@@ -2532,6 +2568,7 @@ export default function Home() {
       chain: o.store.chain,
       qty: 1,
       unitPrice: o.price,
+      orderCode: orderCode || makeOrderCode(),
       buyerLat: userLoc?.lat,
       buyerLng: userLoc?.lng,
       buyerAddr: userAddr || undefined,
@@ -2607,6 +2644,39 @@ export default function Home() {
     if (!st || !cardHasInlineVariants(p)) return st;
     const off = cardVariantOffer(p);
     return off ? { ...st, min: off.price, max: off.price } : st;
+  };
+  // Mở trang cửa hàng khi bấm TÊN NGUỒN trên card (giống "Giá hời"): dùng chain mode
+  // (__chain__) vì offer trong catalog gắn store_id kiểu chuỗi khác id GIS — lọc theo chuỗi
+  // gom mọi sản phẩm cùng nguồn về 1 trang. Giữ tên + toạ độ nguồn để hiện header đẹp.
+  const openStoreFromStat = (st: { soleChain?: string; soleSource?: string; soleStoreId?: string }) => {
+    if (!st?.soleChain) return;
+    const gis = st.soleStoreId ? getStore(st.soleStoreId) : undefined;
+    setStoreProducts({
+      id: `__chain__${st.soleChain}`,
+      name: st.soleSource || chainLabel(st.soleChain as Chain),
+      chain: st.soleChain as Chain,
+      lat: gis?.lat, lng: gis?.lng, address: gis?.address,
+    } as Store);
+  };
+  // Dòng "nguồn bán" trên card: 1 nơi bán → nút bấm được (mở trang cửa hàng); nhiều nơi → "Có N nơi bán".
+  const renderSource = (st: { stores: number; soleSource: string; soleUrl: string; soleChain: string; soleStoreId?: string }) => {
+    if (st.stores === 1 && (st.soleSource || st.soleUrl)) {
+      const label = st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "");
+      if (st.soleChain) {
+        return (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); openStoreFromStat(st); }}
+            title={t("Xem tất cả sản phẩm của {store}", { store: label })}
+            className="max-w-full truncate text-left font-medium text-emerald-700 transition hover:text-emerald-800 hover:underline"
+          >
+            {label}
+          </button>
+        );
+      }
+      return <>{label}</>;
+    }
+    return <>{t("Có {n} nơi bán", { n: st.stores })}</>;
   };
   // Render biến thể cho card: mỗi trục hiện TÊN trục (variant_name) rồi xổ các giá trị (chip).
   // Trục nào không có giá trị (vd chỉ có biến thể 1, không có biến thể 2) → ẩn cả hàng.
@@ -2709,6 +2779,7 @@ export default function Home() {
         chain: buyStore?.chain ?? off?.storeId ?? "other",
         qty: buyQty,
         unitPrice,
+        orderCode: makeOrderCode(),
         buyerName: name,
         buyerPhone: phone,
         buyerAddr: buyAddr.trim() || userAddr || undefined,
@@ -2887,7 +2958,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5 whitespace-nowrap text-lg font-bold tracking-tight">
                     Affree
                     <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                      v{APP_VERSION}
+                      v{appVersion}
                     </span>
                     <span className="inline-flex shrink-0 items-center gap-px rounded-full border border-slate-200 bg-white px-1 py-0.5 text-[10px] font-semibold">
                       <span className={`rounded-full px-1 ${lang === "vi" ? "bg-emerald-500 text-white" : "text-slate-400"}`}>VI</span>
@@ -3022,7 +3093,7 @@ export default function Home() {
                     title={t("Phiên bản & tính năng sắp tới")}
                     className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
                   >
-                    v{APP_VERSION}
+                    v{appVersion}
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <circle cx="12" cy="12" r="10" />
                       <path d="M12 16v-4" />
@@ -3250,7 +3321,7 @@ export default function Home() {
                       </span>
                     )}
                     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                      {t("Phiên bản")} {APP_VERSION}
+                      {t("Phiên bản")} {appVersion}
                     </span>
                   </p>
                   <p className="text-xs text-slate-500">{t("Kết nối mua bán - Không thu phí")} · {t("Tìm gì cũng có - Giá hời quanh đây")}</p>
@@ -3265,19 +3336,19 @@ export default function Home() {
               </button>
             </div>
 
-            {VERSION_HISTORY[0] && (
+            {versionHistory[0] && (
               <>
                 <p className="mt-3 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
                   <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
                     {t("Mới")}
                   </span>
-                  {t("Có gì trong bản {v}", { v: VERSION_HISTORY[0].version })}
-                  {VERSION_HISTORY[0].date && (
-                    <span className="text-xs font-normal text-slate-400">· {VERSION_HISTORY[0].date}</span>
+                  {t("Có gì trong bản {v}", { v: versionHistory[0].version })}
+                  {versionHistory[0].date && (
+                    <span className="text-xs font-normal text-slate-400">· {versionHistory[0].date}</span>
                   )}
                 </p>
                 <div className="mb-1 flex flex-col gap-3">
-                  {VERSION_HISTORY[0].children.map((sub, idx) => {
+                  {versionHistory[0].children.map((sub, idx) => {
                     // Sub MỚI NHẤT (idx 0) luôn xổ; sub cũ hơn thu gọn, bấm "Xem chi tiết" mới mở.
                     if (idx === 0) {
                       return (
@@ -3336,7 +3407,7 @@ export default function Home() {
               </>
             )}
 
-            {VERSION_HISTORY.length > 1 && (
+            {versionHistory.length > 1 && (
               <>
                 <p className="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
                   <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-600">
@@ -3345,7 +3416,7 @@ export default function Home() {
                   {t("Phiên bản trước")}
                 </p>
                 <div className="flex flex-col gap-1.5">
-                  {VERSION_HISTORY.slice(1).map((v) => {
+                  {versionHistory.slice(1).map((v) => {
                     const isOpen = expandedVer === v.version;
                     return (
                       <div key={v.version} className="rounded-xl border border-slate-200 bg-white">
@@ -3403,12 +3474,14 @@ export default function Home() {
             </p>
 
             <div className="flex flex-col gap-3">
-              {ROADMAP.map((sec) => (
+              {roadmap.map((sec) => (
                 <div key={sec.group} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <p className="mb-1.5 text-sm font-semibold text-slate-800">
-                    <span className="mr-1.5">{sec.emoji}</span>
-                    {sec.group}
-                  </p>
+                  {(sec.group || sec.emoji) && (
+                    <p className="mb-1.5 text-sm font-semibold text-slate-800">
+                      {sec.emoji && <span className="mr-1.5">{sec.emoji}</span>}
+                      {sec.group}
+                    </p>
+                  )}
                   <ul className="flex flex-col gap-1.5">
                     {sec.items.map((it, i) => (
                       <li key={i} className="flex gap-2 text-xs leading-snug text-slate-600">
@@ -3846,6 +3919,15 @@ export default function Home() {
                 onAdd={(p) => addToCart(p)}
                 onBuy={(p) => openBuyAgent(p)}
                 cartQtyFor={cartQtyFor}
+                onStore={(d) => {
+                const gis = d.storeId ? getStore(d.storeId) : undefined;
+                if (d.storeChain) {
+                  // Mở trang theo CHUỖI (offer trong catalog gắn store_id kiểu chuỗi, khác id GIS)
+                  setStoreProducts({ id: `__chain__${d.storeChain}`, name: d.storeName || chainLabel(d.storeChain as Chain), chain: d.storeChain as Chain, lat: gis?.lat, lng: gis?.lng, address: gis?.address } as Store);
+                } else if (gis) {
+                  setStoreProducts(gis);
+                }
+              }}
               />
             )
           }
@@ -4094,7 +4176,7 @@ export default function Home() {
                                             })()}
                                           </span>
                                           <span className="mt-0.5 truncate text-xs text-slate-500">
-                                            {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
+                                            {renderSource(st)}
                                           </span>
                                           {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                         </>
@@ -4186,7 +4268,7 @@ export default function Home() {
                                   </span>
                                   <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                    {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
+                                    {renderSource(st)}
                                   </span>
                                   {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                 </>
@@ -4481,7 +4563,7 @@ export default function Home() {
                                       </span>
                                       <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-slate-500">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" /></svg>
-                                        {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
+                                        {renderSource(st)}
                                       </span>
                                     </>
                                   ) : st && st.outOfStock ? (
@@ -4577,7 +4659,7 @@ export default function Home() {
                                         })()}
                                       </span>
                                       <span className="mt-0.5 truncate text-xs text-slate-500">
-                                        {st.stores === 1 && (st.soleSource || st.soleUrl) ? (st.soleSource || st.soleUrl.replace(/^https?:\/\/(www\.)?/, "")) : t("Có {n} nơi bán", { n: st.stores })}
+                                        {renderSource(st)}
                                       </span>
                                       {st.soleChain && chainMinOrder(st.soleChain) > 0 && (<span className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(st.soleChain), st.currency) })}</span>)}
                                     </>
@@ -5366,6 +5448,18 @@ export default function Home() {
           <CartModal
             items={cartItems}
             lang={lang}
+            geoAddr={userAddr}
+            alternatives={cartItems.length === 1 && catalog ? rankOffersForProduct(catalog, cartItems[0].product, userLoc) : []}
+            onSwitchStore={(productId, fromStoreId, offer) => {
+              // Giỏ 1 sản phẩm: đổi cửa hàng = thay offer, giữ nguyên số lượng.
+              setCartItems((prev) =>
+                prev.map((i) =>
+                  i.product.id === productId && i.offer.store.id === fromStoreId
+                    ? { ...i, offer }
+                    : i,
+                ),
+              );
+            }}
             onClose={() => {
               setCartOpen(false);
               // Đóng modal xong mới dọn các cửa hàng đã đặt khỏi giỏ (đã hoãn từ onOrdered).
@@ -5473,7 +5567,7 @@ export default function Home() {
             defaultQty={cartQtyFor(buyOffer.product.id) || 1}
             onClose={() => setBuyOffer(null)}
             onPlaced={(code, chosen) => {
-              recordBuy(chosen);
+              recordBuy(chosen, undefined, code);
               setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -5505,7 +5599,7 @@ export default function Home() {
                 setCoopCartPrefill(null);
               }}
               onPlaced={(code, chosen) => {
-                recordBuy(chosen);
+                recordBuy(chosen, undefined, code);
                 if (coopCartStoreId === chosen.store.id) {
                   setOrderedStoreIds((ids) => Array.from(new Set([...ids, chosen.store.id])));
                 }
@@ -5526,7 +5620,7 @@ export default function Home() {
               defaultQty={cartQtyFor(buyOffer.product.id) || 1}
               onClose={() => setBuyOffer(null)}
               onPlaced={(code, chosen) => {
-                recordBuy(chosen);
+                recordBuy(chosen, undefined, code);
                 setToast(t("Đã đặt {product} tại {store} · {code}", { product: chosen.product.name, store: chosen.store.name, code }));
                 setTimeout(() => setToast(""), 4000);
               }}
@@ -5544,7 +5638,7 @@ export default function Home() {
             defaultAddress={userAddr}
             onClose={() => setTxnnLiveOpen(false)}
             onPlaced={(code, chosen) => {
-              recordBuy(chosen);
+              recordBuy(chosen, undefined, code);
               setToast(t("TXNN đã hoàn tất · {code}", { code }));
               setTimeout(() => setToast(""), 4000);
             }}
@@ -6019,7 +6113,13 @@ export default function Home() {
       {
         storeProducts && (rawCatalog || catalog) && (() => {
           const isBrandMode = storeProducts.id.startsWith("__brand__");
-          const sourceCat = isBrandMode ? (rawCatalog || catalog!) : catalog!;
+          // Chain mode (bấm tên cửa hàng ở "Giá hời quanh đây"): offer trong catalog gắn theo
+          // store_id kiểu chuỗi ("coop-q1", "bhx-…") KHÁC id GIS của cửa hàng đang mở → lọc theo
+          // CHUỖI thay vì id, gom nhiều điểm bán về 1 card/sản phẩm (dùng chung dedup brand mode).
+          const isChainMode = storeProducts.id.startsWith("__chain__");
+          const chainKey = isChainMode ? storeProducts.id.slice("__chain__".length) : "";
+          const chainOf = (sid: string) => getStore(sid)?.chain ?? sid.split("-")[0];
+          const sourceCat = (isBrandMode || isChainMode) ? (rawCatalog || catalog!) : catalog!;
           const brandLower = isBrandMode ? storeProducts.id.slice("__brand__".length) : "";
           const productMap = new Map(sourceCat.products.map((p) => [p.id, p]));
           // Emoji danh mục lấy từ SHEET (tab "tệp" → catalog.groups) để header section trang
@@ -6035,6 +6135,8 @@ export default function Home() {
               const p = productMap.get(o.productId);
               return p && (p.brand || "").toLowerCase().trim() === brandLower;
             })
+            : isChainMode
+            ? sourceCat.offers.filter((o) => chainOf(o.storeId) === chainKey)
             : sourceCat.offers.filter((o) => o.storeId === storeProducts.id);
           return (
             <StoreProductsPage
@@ -6058,7 +6160,8 @@ export default function Home() {
                 // getStore có thể trượt với store_id kiểu sheet (vd "bhx-bhx-223-…") vì client chỉ
                 // nạp cửa hàng quanh vị trí. Non-brand mode: offer thuộc đúng cửa hàng đang mở →
                 // fallback về `storeProducts` (đã có tên chi nhánh đầy đủ) để giỏ hàng ghi đúng tên.
-                const real = getStore(o.storeId) ?? (storeProducts.id.startsWith("__brand__") ? null : storeProducts);
+                const isSynthetic = storeProducts.id.startsWith("__brand__") || storeProducts.id.startsWith("__chain__");
+                const real = getStore(o.storeId) ?? (isSynthetic ? null : storeProducts);
                 addToCart(p, real ? ({ ...o, store: real, product: p, distanceKm: null } as RankedOffer) : undefined);
               }}
               cartQtyFor={(pid) => cartItems.filter((i) => i.product.id === pid).reduce((s, i) => s + i.qty, 0)}
@@ -6071,6 +6174,15 @@ export default function Home() {
               onDealInfo={(p) => setInfoProduct(p)}
               onDealAdd={(p) => addToCart(p)}
               onDealBuy={(p) => openBuyAgent(p)}
+              onDealStore={(d) => {
+                const gis = d.storeId ? getStore(d.storeId) : undefined;
+                if (d.storeChain) {
+                  // Mở trang theo CHUỖI (offer trong catalog gắn store_id kiểu chuỗi, khác id GIS)
+                  setStoreProducts({ id: `__chain__${d.storeChain}`, name: d.storeName || chainLabel(d.storeChain as Chain), chain: d.storeChain as Chain, lat: gis?.lat, lng: gis?.lng, address: gis?.address } as Store);
+                } else if (gis) {
+                  setStoreProducts(gis);
+                }
+              }}
             />
           );
         })()}
@@ -6118,7 +6230,7 @@ export default function Home() {
                           <div className="min-w-0 flex-1">
                             <p className="line-clamp-2 text-sm font-medium leading-snug text-slate-800">{p?.name || it.name}</p>
                             {(p?.brand || p?.unit || it.chain) && <p className="truncate text-[11px] text-slate-400">{[p?.brand, p?.unit ? t(p.unit) : null, it.chain ? chainLabel(it.chain) : null].filter(Boolean).join(" · ")}</p>}
-                            {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia)}</p>}
+                            {gia > 0 && <p className="mt-0.5 text-sm font-bold text-rose-600">{formatMoney(gia, priceStats.get(it.productId)?.currency)}</p>}
                           </div>
                         </div>
                         {p?.info && (

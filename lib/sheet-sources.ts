@@ -33,6 +33,25 @@ function splitCsv(csv: string): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
 }
 
+/**
+ * Chuẩn hoá link Google Drive → URL ảnh trực tiếp (lh3.googleusercontent.com/d/<id>=s256).
+ * Nhận "file/d/<id>", "open?id=<id>", "uc?id=<id>". Link THƯ MỤC → "" (không phải 1 ảnh).
+ * URL/base64 khác giữ nguyên. (Đồng bộ với normalizeDriveUrl bên sheet-groups.)
+ * ⚠️ File Drive phải được chia sẻ "Bất kỳ ai có link" thì lh3 mới trả ảnh (không thì ra HTML).
+ * ⚠️ PHẢI kèm hậu tố size (=s256): lh3 .../d/<id> TRẦN (không size) khi fetch phía server
+ *   (proxy-img dò màu) trả HTML 0-byte thay vì ảnh → TrimmedLogo không dò được fillColor,
+ *   badge không phủ đều. Thêm =s256 → cả trình duyệt lẫn server đều nhận đúng image/png.
+ */
+function normalizeDriveUrl(url: string): string {
+  if (!url) return url;
+  if (/drive\.google\.com\/(drive\/|.*\/folders\/)/.test(url)) return "";
+  const mFile = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+  if (mFile) return `https://lh3.googleusercontent.com/d/${mFile[1]}=s256`;
+  const mId = url.match(/drive\.google\.com\/[^?]*\?[^#]*\bid=([^&#]+)/);
+  if (mId) return `https://lh3.googleusercontent.com/d/${mId[1]}=s256`;
+  return url;
+}
+
 /** Slug hoá để match chain bất kể hoa/thường, dấu cách, dấu tiếng Việt (giống chainSlugify). */
 function slug(s: string): string {
   return (s ?? "")
@@ -72,7 +91,7 @@ export async function fetchSources(revalidate = 60): Promise<SourceMaps> {
       const chain = (rows[i][chainIdx] ?? "").trim();
       if (!chain) continue;
       const name = nameIdx >= 0 ? (rows[i][nameIdx] ?? "").trim() : "";
-      const logo = logoIdx >= 0 ? (rows[i][logoIdx] ?? "").trim() : "";
+      const logo = logoIdx >= 0 ? normalizeDriveUrl((rows[i][logoIdx] ?? "").trim()) : "";
       const keys = [slug(chain), slug(name)].filter(Boolean);
       if (logo && /^(https?:\/\/|data:image\/)/i.test(logo)) {
         for (const k of keys) if (!(k in logos)) logos[k] = logo;

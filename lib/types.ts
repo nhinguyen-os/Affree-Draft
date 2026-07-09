@@ -162,6 +162,10 @@ export interface Catalog {
   sourceLogos?: Record<string, string>;
   /** Tên hiển thị theo chain (tab "Logo nguồn" cột ten_nguon). key thường-hoá → tên. */
   sourceNames?: Record<string, string>;
+  /** Tiền tệ theo store_id (tab "Cửa hàng" cột Currency). key = store_id → mã tiền (USD…). */
+  storeCurrencies?: Record<string, string>;
+  /** Tiền tệ theo chain (suy từ tab "Cửa hàng"). key = chain → mã tiền. Fallback khi offer là nguồn online. */
+  chainCurrencies?: Record<string, string>;
 }
 
 /**
@@ -185,6 +189,7 @@ export interface PurchaseRecord {
   unitPrice: number;
   total: number;
   boughtAt: string; // ISO
+  orderCode?: string; // mã đơn chung cho các món đặt cùng 1 lần (vd "AFF-117468-128") — để gom lịch sử theo đơn
   buyerLat?: number; // vị trí người mua lúc ghi nhận (nếu đã định vị)
   buyerLng?: number;
   buyerAddr?: string; // địa chỉ reverse-geocode của người mua

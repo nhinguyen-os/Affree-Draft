@@ -143,8 +143,20 @@ export function parsePills(csv: string): WidgetPill[] {
 export function buildWidget(settingsCsv: string, pillsCsv: string): KhucChamWidget {
   const s = parseWidgetSettings(settingsCsv);
   const rawPills = parsePills(pillsCsv);
+  // Chuẩn hoá link Google Drive (file/d/<id> hoặc ?id=<id>) → lh3.googleusercontent.com/d/<id>.
+  // (File Drive phải chia sẻ "Bất kỳ ai có link" thì mới ra ảnh.) Link folder → "" → dùng mặc định.
+  const normDrive = (u: string): string => {
+    if (/drive\.google\.com\/(drive\/|.*\/folders\/)/.test(u)) return "";
+    const mFile = u.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+    // Kèm =s0 (giữ size gốc): lh3 .../d/<id> TRẦN trả HTML 0-byte khi fetch phía server → thêm size mới ra ảnh.
+    if (mFile) return `https://lh3.googleusercontent.com/d/${mFile[1]}=s0`;
+    const mId = u.match(/drive\.google\.com\/[^?]*\?[^#]*\bid=([^&#]+)/);
+    if (mId) return `https://lh3.googleusercontent.com/d/${mId[1]}=s0`;
+    return u;
+  };
   // Logo chỉ nhận khi là URL/đường dẫn hợp lệ (http… hoặc /…); placeholder/ghi chú → bỏ, dùng mặc định.
-  const logo = s.logo && /^(https?:\/\/|\/)/.test(s.logo.trim()) ? s.logo.trim() : DEFAULT_WIDGET.logo;
+  const logoRaw = normDrive((s.logo || "").trim());
+  const logo = logoRaw && /^(https?:\/\/|\/)/.test(logoRaw) ? logoRaw : DEFAULT_WIDGET.logo;
   // Pill "nghe" không có videoId (sheet thiếu cột link) → fallback về DEFAULT_WIDGET pill cùng label.
   const pills = (rawPills.length ? rawPills : DEFAULT_WIDGET.pills).map((p) => {
     if (p.type === "nghe" && !p.videoId) {

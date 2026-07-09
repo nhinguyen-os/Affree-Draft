@@ -14,7 +14,7 @@ import type { OrderRequiredInput, PublicOrderSessionState } from "@/lib/order-ag
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
- * Mô phỏng "trợ lý ảo" tự thao tác đặt hàng trên web cửa hàng, và DỪNG LẠI
+ * Mô phỏng "trợ lý AAAI ảo" tự thao tác đặt hàng trên web cửa hàng, và DỪNG LẠI
  * ở những bước chỉ con người làm được: nhập OTP, xác minh CAPTCHA, và bấm
  * xác nhận đặt hàng cuối cùng. Mục đích: cho thấy CƠ CHẾ pause → user nhập →
  * resume trước khi làm thật.
@@ -367,7 +367,7 @@ export default function OrderAgentModal({
     saveProfile({ name, phone, address });
   }, [name, phone, address]);
 
-  // Trạng thái chạy của trợ lý
+  // Trạng thái chạy của trợ lý AAAI
   const [stepIndex, setStepIndex] = useState(0);
   const placedRef = useRef(false);
   const [otp, setOtp] = useState("");
@@ -677,8 +677,8 @@ export default function OrderAgentModal({
       { code: "COD", name: t("COD (tiền mặt khi nhận)"), description: t("Thanh toán khi nhận hàng") },
       { code: "QR", name: t("QR chuyển khoản"), description: t("Affree sẽ hiển thị mã QR khi nguồn bán trả về") },
       { code: "MOMO_ZALOPAY", name: t("MoMo/ZaloPay"), description: t("Ví điện tử") },
-      { code: "ATM_CARD", name: t("Thẻ ATM nội địa"), description: t("Nhập thông tin thẻ trước khi trợ lý chuyển tiếp") },
-      { code: "CREDIT_CARD", name: t("Thẻ Visa/Master/JCB"), description: t("Nhập thông tin thẻ trước khi trợ lý chuyển tiếp") },
+      { code: "ATM_CARD", name: t("Thẻ ATM nội địa"), description: t("Nhập thông tin thẻ trước khi trợ lý AAAI chuyển tiếp") },
+      { code: "CREDIT_CARD", name: t("Thẻ Visa/Master/JCB"), description: t("Nhập thông tin thẻ trước khi trợ lý AAAI chuyển tiếp") },
     ];
   const paymentChoices: PaymentChoice[] =
     isCoopReal && coopPaymentMethods.length > 0
@@ -2238,8 +2238,8 @@ export default function OrderAgentModal({
       </div>
       <p className="mt-1 text-xs leading-5 text-slate-500">
         {isCoopReal
-          ? t("{chain} hỗ trợ: {payments}. Chọn trước tại Affree, trợ lý sẽ chuyển đúng phương thức sang Co.op.", { chain, payments: cfg.payments.join(" · ") })
-          : t("{chain} hỗ trợ: {payments}. Chọn trước tại Affree để trợ lý chuẩn bị đúng bước thanh toán.", { chain, payments: cfg.payments.join(" · ") })}
+          ? t("{chain} hỗ trợ: {payments}. Chọn trước tại Affree, trợ lý AAAI sẽ chuyển đúng phương thức sang Co.op.", { chain, payments: cfg.payments.join(" · ") })
+          : t("{chain} hỗ trợ: {payments}. Chọn trước tại Affree để trợ lý AAAI chuẩn bị đúng bước thanh toán.", { chain, payments: cfg.payments.join(" · ") })}
       </p>
     </button>
   );
@@ -2485,7 +2485,7 @@ export default function OrderAgentModal({
               <div className="space-y-3">
                 {!hasCoopBrowser && (
                   <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs leading-5 text-amber-900">
-                    {t("Giao diện theo prototype: bạn kiểm tra thông tin tại Affree, trợ lý vẫn dùng luồng Co.op thật ở bước đặt hàng.")}
+                    {t("Giao diện theo prototype: bạn kiểm tra thông tin tại Affree, trợ lý AAAI vẫn dùng luồng Co.op thật ở bước đặt hàng.")}
                   </div>
                 )}
 
@@ -2809,7 +2809,7 @@ export default function OrderAgentModal({
                       onClick={() => void startCoopFromPrototype()}
                       className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {coopBusy || coopAddressBusy ? t("Đang chuẩn bị Co.op…") : t("Để trợ lý đặt giúp →")}
+                      {coopBusy || coopAddressBusy ? t("Đang chuẩn bị Co.op…") : t("Để trợ lý AAAI đặt giúp →")}
                     </button>
                     {!coopPrototypeCanStart && (
                       <p className="text-center text-xs text-slate-400">
@@ -2882,7 +2882,7 @@ export default function OrderAgentModal({
                 {phase === "running" && coopStep === "review" && (
                   <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
                     <p className="mb-3 text-xs font-medium leading-5 text-emerald-800">
-                      {t("Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}
+                      {t("Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý AAAI mới đặt.")}
                     </p>
                     <div className="space-y-2 rounded-xl bg-white px-3 py-3 text-sm">
                       <Row k={t("Món")} v={`${activeOffer.product.name} ×${qty}`} />
@@ -3134,7 +3134,7 @@ export default function OrderAgentModal({
                     : t("Đã đặt hàng")
                   : t("Phục vụ bởi Affree Agentic AI - AAAI")
               }
-              {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
+              {/* tên cũ: "Đặt hàng bằng trợ lý AAAI ảo" */}
             </h2 >
             <p className="truncate text-xs text-slate-700">
               {activeOffer.product.name} · {chain}
@@ -3152,7 +3152,7 @@ export default function OrderAgentModal({
         </div >
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
-          {/* Banner: trợ lý thật, có human-gated checkpoints */}
+          {/* Banner: trợ lý AAAI thật, có human-gated checkpoints */}
           {/* Banner: bản mô phỏng */}
           <div
             className={`mb-4 rounded-lg border px-3 py-2 text-xs ${isTXNNReal
@@ -3164,10 +3164,10 @@ export default function OrderAgentModal({
           >
             {
               isTXNNReal
-                ? "🤝 " + t("Trợ lý đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
+                ? "🤝 " + t("Trợ lý AAAI đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
                 : isCoopReal
                   ? t("Co.op đang dùng luồng thật: dùng token cache hoặc đăng nhập bằng mật khẩu, rồi thêm sản phẩm vào giỏ Co.op.")
-                  : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
+                  : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý AAAI tự thao tác và dừng lại khi cần bạn.")}
           </div>
 
           {/* PHASE 1: form thông tin cần có */}
@@ -3467,7 +3467,7 @@ export default function OrderAgentModal({
                     onClick={createSession}
                     className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {submitting ? t("Đang tạo phiên đặt hàng…") : t("Để trợ lý đặt giúp →")}
+                    {submitting ? t("Đang tạo phiên đặt hàng…") : t("Để trợ lý AAAI đặt giúp →")}
                   </button>)
               }
               {
@@ -3497,7 +3497,7 @@ export default function OrderAgentModal({
                       ? t("Đang kết nối Co.op…")
                       : isCoopReal
                         ? t("Đăng nhập Co.op và thêm vào giỏ →")
-                        : t("Để trợ lý đặt giúp →")}
+                        : t("Để trợ lý AAAI đặt giúp →")}
                   </button>)
               }
               {
@@ -3513,7 +3513,7 @@ export default function OrderAgentModal({
           )
           }
 
-          {/* PHASE 2: trợ lý chạy */}
+          {/* PHASE 2: trợ lý AAAI chạy */}
           {phase === "running" && isCoopReal && (
             <div className="space-y-3">
               <ol className="space-y-2.5">
@@ -3721,7 +3721,7 @@ export default function OrderAgentModal({
 
                         {/* Khối tương tác khi tới bước cần người */}
                         {isCurrent && s.kind === "login" && (
-                          <PauseBox tone="blue" hint={t("🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý AAAI KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
                             <button
                               onClick={() => {
                                 if (usesServerTimeline) {
@@ -3738,7 +3738,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "otp" && (
-                          <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý AAAI không tự đọc được OTP — bạn nhập mã giúp.")}>
                             {!usesServerTimeline && !simOtp ? (
                               <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
                                 <Spinner />
@@ -3813,7 +3813,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "captcha" && (
-                          <PauseBox tone="amber" hint={t("🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
+                          <PauseBox tone="amber" hint={t("🤖 Trợ lý AAAI không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
                             <button
                               onClick={() => {
                                 if (usesServerTimeline) {
@@ -3849,7 +3849,7 @@ export default function OrderAgentModal({
                                 </label>
                               </div>
                               <p className="text-[11px] text-slate-400">
-                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
+                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý AAAI vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
                               </p>
                             </div>
 
@@ -3926,7 +3926,7 @@ export default function OrderAgentModal({
                                   className="mx-auto max-h-72 w-auto rounded-lg border border-slate-200 bg-white"
                                 />
                                 <p className="mt-2 text-center text-xs text-slate-500">
-                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.")}
+                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý AAAI xác minh.")}
                                 </p>
                               </div>
                             ) : (
@@ -3966,7 +3966,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "confirm" && (
-                          <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}>
+                          <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý AAAI mới đặt.")}>
                             <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
                               <Row k={t("Tên người đặt")} v={name} />
                               <Row k={t("Số điện thoại")} v={phone} />
@@ -4014,7 +4014,7 @@ export default function OrderAgentModal({
               <p className="mt-1 text-sm text-slate-500">
                 {isCoopReal
                   ? t("Affree đã login bằng luồng thật và tạo giỏ trong tài khoản {chain}. Mã giỏ:", { chain })
-                  : t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
+                  : t("Trợ lý AAAI đã đặt đơn trên {chain}. Mã đơn:", { chain })}
               </p>
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
@@ -4203,7 +4203,7 @@ export default function OrderAgentModal({
           }
         </div >
 
-        {/* Footer sticky — Tạm tính + nút "Để trợ lý đặt giúp" luôn hiển thị (kể cả khi
+        {/* Footer sticky — Tạm tính + nút "Để trợ lý AAAI đặt giúp" luôn hiển thị (kể cả khi
             content trong popup dài tràn). Trước đây nút nằm trong vùng scroll → user
             phải cuộn xuống mới thấy, dễ tưởng popup bị cắt. */}
         {
@@ -4225,7 +4225,7 @@ export default function OrderAgentModal({
                 }}
                 className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-emerald-600 py-3 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.25)] transition-all duration-150 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
               >
-                {t("Để trợ lý đặt giúp →")}
+                {t("Để trợ lý AAAI đặt giúp →")}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
