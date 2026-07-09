@@ -1922,7 +1922,7 @@ export default function Home() {
   // → thử nấc to hơn cho tới khi đủ MIN_DEALS_IN_RADIUS; hết nấc → null = toàn khu vực).
   const { rows: areaDeals, effKm: dealsEffKm } = useMemo(() => {
     const empty = [] as {
-      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; km: number | null;
+      product: Product; now: number; was: number; save: number; disc: number; currency: string; storeName: string; storeChain: string; km: number | null; store?: Store;
     }[];
     if (!catalog) return { rows: empty, effKm: dealsRadiusKm };
     const storeById = new Map(getStores().map((s) => [s.id, s]));
@@ -1994,6 +1994,9 @@ export default function Home() {
         storeName: dealStoreName,
         storeChain: dealStore?.chain ?? dealChain,
         km: dealKm,
+        // Cửa hàng cụ thể của giá rẻ nhất (nếu map được) — để bấm tên cửa hàng mở trang
+        // sản phẩm của chính cửa hàng đó; nguồn online không có store vật lý → dùng chuỗi.
+        store: dealStore,
       });
     }
     // Lọc theo bán kính (đồng bộ với map) + TỰ NỚI khi thiếu deal. km=null luôn giữ.
@@ -2044,6 +2047,14 @@ export default function Home() {
     return { rows: balanced, effKm };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog, priceStats, userLoc, storesReady, matches, deferredQuery, dealsRadiusKm]);
+
+  // Bấm TÊN CỬA HÀNG trên thẻ "Giá hời quanh đây" → mở trang sản phẩm của đúng cửa hàng
+  // đó (StoreProductsPage, giống trang mở từ bản đồ). Nguồn online không có cửa hàng vật lý
+  // → mở trang CHUỖI (activeChain) để vẫn xem được toàn bộ sản phẩm của nguồn đó.
+  function openDealStore(d: { store?: Store; storeChain: string }) {
+    if (d.store) { setStoreProducts(d.store); return; }
+    if (d.storeChain) setActiveChain(d.storeChain);
+  }
 
   // Dãy chip lọc theo NGÀNH HÀNG (cột "category" trong sheet, vd "Gia vị", "Nước lau sàn"…).
   // Nếu đã chọn TỆP ở trên → chỉ hiện ngành hàng THUỘC tệp đó; chưa chọn tệp → hiện tất cả.
@@ -3981,7 +3992,19 @@ export default function Home() {
                           {t("Tiết kiệm {x}", { x: formatMoney(d.save, d.currency) })}
                         </div>
                         <div className="mt-1 min-h-[16px] text-[11px] text-slate-500">
-                          {d.storeName && <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>}
+                          {d.storeName && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => { e.stopPropagation(); openDealStore(d); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); openDealStore(d); } }}
+                              title={t("Xem sản phẩm của {store}", { store: d.storeName })}
+                              aria-label={t("Xem sản phẩm của {store}", { store: d.storeName })}
+                              className="block cursor-pointer rounded text-slate-500 transition hover:text-emerald-600 hover:underline"
+                            >
+                              <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>
+                            </span>
+                          )}
                         </div>
                         <div className="mt-0.5 min-h-[16px] line-clamp-1 text-[11px] font-medium text-emerald-600">
                           {d.km != null && <>📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}</>}

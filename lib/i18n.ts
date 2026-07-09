@@ -550,6 +550,7 @@ const EN_DICT: Record<string, string> = {
   "Chứng nhận {n}": "{n} certifications",
   "Xem thông tin & chứng nhận": "View info & certifications",
   "Xem ảnh lớn": "View larger image",
+  "Xem sản phẩm của {store}": "View {store}'s products",
 
   // Phiên bản modal
   "Phiên bản": "Version",
