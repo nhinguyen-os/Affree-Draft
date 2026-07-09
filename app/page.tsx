@@ -24,7 +24,7 @@ import type { PriceAlert } from "@/lib/types";
 import { getViewCounts, recordView } from "@/lib/recent";
 import { getSavedCart, saveCart } from "@/lib/cart";
 import { fetchMe, logout, type AuthUser } from "@/lib/auth";
-import { APP_VERSION, VERSION_HISTORY, ROADMAP } from "@/lib/version";
+import { useVersionInfo } from "@/lib/use-version";
 import { type Lang, guessLangFromDevice, langForCountry, tr } from "@/lib/i18n";
 import { findBrandBySlug, findCategoryBySlug, findGroupBySlug, findProductBySlug, slugify } from "@/lib/slug";
 import { ChainBadge } from "@/components/ChainBadge";
@@ -553,6 +553,7 @@ function getHostSub(): string {
 }
 
 export default function Home() {
+  const verInfo = useVersionInfo(); // Phiên bản + roadmap từ sheet (fallback nội dung hardcode)
   const [modelDev, setModelDev] = useState(
     process.env.NEXT_PUBLIC_MODAL_DEV === 'true' || false,
   );
@@ -2925,7 +2926,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5 whitespace-nowrap text-lg font-bold tracking-tight">
                     Affree
                     <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                      v{APP_VERSION}
+                      v{verInfo.appVersion}
                     </span>
                     <span className="inline-flex shrink-0 items-center gap-px rounded-full border border-slate-200 bg-white px-1 py-0.5 text-[10px] font-semibold">
                       <span className={`rounded-full px-1 ${lang === "vi" ? "bg-emerald-500 text-white" : "text-slate-400"}`}>VI</span>
@@ -3060,7 +3061,7 @@ export default function Home() {
                     title={t("Phiên bản & tính năng sắp tới")}
                     className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
                   >
-                    v{APP_VERSION}
+                    v{verInfo.appVersion}
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <circle cx="12" cy="12" r="10" />
                       <path d="M12 16v-4" />
@@ -3288,7 +3289,7 @@ export default function Home() {
                       </span>
                     )}
                     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                      {t("Phiên bản")} {APP_VERSION}
+                      {t("Phiên bản")} {verInfo.appVersion}
                     </span>
                   </p>
                   <p className="text-xs text-slate-500">{t("Kết nối mua bán - Không thu phí")} · {t("Tìm gì cũng có - Giá hời quanh đây")}</p>
@@ -3303,19 +3304,19 @@ export default function Home() {
               </button>
             </div>
 
-            {VERSION_HISTORY[0] && (
+            {verInfo.history[0] && (
               <>
                 <p className="mt-3 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
                   <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">
                     {t("Mới")}
                   </span>
-                  {t("Có gì trong bản {v}", { v: VERSION_HISTORY[0].version })}
-                  {VERSION_HISTORY[0].date && (
-                    <span className="text-xs font-normal text-slate-400">· {VERSION_HISTORY[0].date}</span>
+                  {t("Có gì trong bản {v}", { v: verInfo.history[0].version })}
+                  {verInfo.history[0].date && (
+                    <span className="text-xs font-normal text-slate-400">· {verInfo.history[0].date}</span>
                   )}
                 </p>
                 <div className="mb-1 flex flex-col gap-3">
-                  {VERSION_HISTORY[0].children.map((sub, idx) => {
+                  {verInfo.history[0].children.map((sub, idx) => {
                     // Sub MỚI NHẤT (idx 0) luôn xổ; sub cũ hơn thu gọn, bấm "Xem chi tiết" mới mở.
                     if (idx === 0) {
                       return (
@@ -3374,7 +3375,7 @@ export default function Home() {
               </>
             )}
 
-            {VERSION_HISTORY.length > 1 && (
+            {verInfo.history.length > 1 && (
               <>
                 <p className="mt-4 mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
                   <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-600">
@@ -3383,7 +3384,7 @@ export default function Home() {
                   {t("Phiên bản trước")}
                 </p>
                 <div className="flex flex-col gap-1.5">
-                  {VERSION_HISTORY.slice(1).map((v) => {
+                  {verInfo.history.slice(1).map((v) => {
                     const isOpen = expandedVer === v.version;
                     return (
                       <div key={v.version} className="rounded-xl border border-slate-200 bg-white">
@@ -3441,7 +3442,7 @@ export default function Home() {
             </p>
 
             <div className="flex flex-col gap-3">
-              {ROADMAP.map((sec) => (
+              {verInfo.roadmap.map((sec) => (
                 <div key={sec.group} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
                   <p className="mb-1.5 text-sm font-semibold text-slate-800">
                     <span className="mr-1.5">{sec.emoji}</span>

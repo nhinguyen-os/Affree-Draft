@@ -301,3 +301,17 @@ export const ROADMAP: RoadmapSection[] = [
     ],
   },
 ];
+
+/** Gói dữ liệu Phiên bản dùng chung server/client. */
+export interface VersionInfo {
+  appVersion: string;
+  history: VersionEntry[];
+  roadmap: RoadmapSection[];
+}
+
+/** Fallback = đúng nội dung hardcode ở trên — dùng làm giá trị ban đầu ở client và khi sheet lỗi. */
+export const VERSION_FALLBACK: VersionInfo = {
+  appVersion: APP_VERSION,
+  history: VERSION_HISTORY,
+  roadmap: ROADMAP,
+};
