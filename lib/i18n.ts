@@ -714,6 +714,8 @@ const EN_DICT: Record<string, string> = {
   "Địa chỉ": "Address",
   "Thời gian": "Time",
   "Mã đơn": "Order ID",
+  "Giờ giao": "Delivery time",
+  "Tổng tiền": "Total",
   "Kết nối mua bán · Không thu phí · Giá hời quanh đây": "Connecting buyers & sellers · No fees · Great deals nearby",
   "Vận hành bởi": "Operated by",
   "Affree là nền tảng so sánh giá và kết nối mua bán, không trực tiếp kinh doanh hàng hóa.": "Affree is a price-comparison and buy–sell connection platform; it does not directly sell goods.",

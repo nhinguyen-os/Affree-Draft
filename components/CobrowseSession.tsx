@@ -337,6 +337,13 @@ export default function CobrowseSession({
             {status[i] === "placed" && codes[st.key] && (
               <span className="order-code">{t("Mã đơn")}: <b>{codes[st.key]}</b></span>
             )}
+            {/* Ghi nhận thêm giờ giao + tổng tiền của cửa hàng ngay trong khối xác nhận. */}
+            {status[i] === "placed" && st.fields.some((f) => f.slot) && (
+              <span className="order-code">{t("Giờ giao")}: <b>{t(slotOf(i))}</b></span>
+            )}
+            {status[i] === "placed" && (
+              <span className="order-code">{t("Tổng tiền")}: <b>{money(storeTotal(i), st.currency)}</b></span>
+            )}
           </div>
         )}
       </div>
