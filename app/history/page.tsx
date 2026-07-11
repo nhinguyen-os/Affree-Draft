@@ -64,7 +64,8 @@ function splitOrdersByStore(orders: Order[]): Order[] {
   for (const o of orders) {
     const blocks = groupByStore(o.items);
     if (blocks.length <= 1) {
-      out.push(o);
+      // Đơn 1 cửa hàng: vẫn ưu tiên MÃ RIÊNG của cửa hàng (storeOrderCode) làm mã hiển thị.
+      out.push(blocks.length === 1 ? { ...o, code: blocks[0].code || o.code } : o);
       continue;
     }
     for (const b of blocks) {
