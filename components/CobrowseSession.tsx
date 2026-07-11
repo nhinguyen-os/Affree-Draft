@@ -321,6 +321,9 @@ export default function CobrowseSession({
         {withBadge && (
           <div className={`store-status ${status[i] === "placed" ? "st-done" : status[i] === "idle" ? "st-idle" : "st-live"}`}>
             {statusText(status[i])}
+            {status[i] === "placed" && codes[st.key] && (
+              <span className="order-code">{t("Mã đơn")}: <b>{codes[st.key]}</b></span>
+            )}
           </div>
         )}
       </div>
@@ -931,7 +934,9 @@ function Style() {
 .cbz .item .pnm{flex:1}
 .cbz .item .price{font-family:var(--mono);font-weight:600;color:var(--red);white-space:nowrap}
 .cbz .item .qty{color:var(--ink-soft)}
-.cbz .store-status{margin-top:8px;font-size:11px;font-weight:600;border-radius:6px;padding:5px 8px;display:inline-flex;align-items:center;gap:6px}
+.cbz .store-status{margin-top:8px;font-size:11px;font-weight:600;border-radius:6px;padding:5px 8px;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cbz .store-status .order-code{font-weight:500;border-left:1px solid rgba(30,122,51,.25);padding-left:6px}
+.cbz .store-status .order-code b{font-family:var(--mono);font-weight:700}
 .cbz .st-idle{background:#EFF3F1;color:var(--ink-soft)}
 .cbz .st-live{background:#E3F4EF;color:var(--brand-deep)}
 .cbz .st-done{background:#E7F6EA;color:#1E7A33}

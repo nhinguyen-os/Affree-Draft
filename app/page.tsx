@@ -730,7 +730,7 @@ export default function Home() {
   // Màn đặt đơn co-browse 2 cột (dùng chung Mua ngay + Giỏ hàng). offersByKey giữ offer gốc
   // theo store.key để ghi lịch sử khi mỗi cửa hàng được "đặt".
   const [cobrowse, setCobrowse] = useState<
-    { buyer: { name: string; phone: string; address: string }; stores: CobrowseStore[]; offersByKey: Record<string, RankedOffer>; pay?: "qr" | "card" | "cod" | null; cardLabel?: string | null } | null
+    { buyer: { name: string; phone: string; address: string }; stores: CobrowseStore[]; offersByKey: Record<string, RankedOffer>; pay?: "qr" | "card" | "cod" | null; cardLabel?: string | null; orderCode: string } | null
   >(null);
   const [coopCartStoreId, setCoopCartStoreId] = useState<string | null>(null);
   const [coopCartPrefill, setCoopCartPrefill] = useState<{
@@ -2621,7 +2621,7 @@ export default function Home() {
   }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady, cskdTaxonomy, cskdStores, cskdByChain]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
-  async function recordBuy(o: RankedOffer, note?: string, orderCode?: string) {
+  async function recordBuy(o: RankedOffer, note?: string, orderCode?: string, storeOrderCode?: string) {
     setToast(t("Đã ghi nhận mua {product} tại {store}", { product: o.product.name, store: o.store.name }));
     setTimeout(() => setToast(""), 3500);
     await addPurchase({
@@ -2633,6 +2633,7 @@ export default function Home() {
       qty: 1,
       unitPrice: o.price,
       orderCode: orderCode || makeOrderCode(),
+      storeOrderCode: storeOrderCode || undefined,
       buyerLat: userLoc?.lat,
       buyerLng: userLoc?.lng,
       buyerAddr: userAddr || undefined,
@@ -5581,6 +5582,7 @@ export default function Home() {
                 offersByKey,
                 pay: context.payMethod,
                 cardLabel: context.cardLabel,
+                orderCode: makeOrderCode(),
               });
               setCartOpen(false);
               return true;
@@ -5615,7 +5617,8 @@ export default function Home() {
             }}
             onPlaced={(store, code) => {
               const o = cobrowse.offersByKey[store.key];
-              if (o) recordBuy(o, undefined, code);
+              // Mã CHUNG của lần mua (gom lịch sử) + mã RIÊNG của cửa hàng vừa đặt.
+              if (o) recordBuy(o, undefined, cobrowse.orderCode, code);
               setOrderedStoreIds((ids) => Array.from(new Set([...ids, store.key])));
             }}
           />
@@ -5753,6 +5756,7 @@ export default function Home() {
                   offersByKey: { [offer.store.id]: offer },
                   pay: payMethod,
                   cardLabel,
+                  orderCode: makeOrderCode(),
                 });
                 setBuyOffer(null);
               }}
