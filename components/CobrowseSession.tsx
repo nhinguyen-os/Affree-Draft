@@ -72,6 +72,11 @@ const SUGGESTIONS: { emoji: string; name: string; price: number }[] = [
 ];
 // Mã khuyến mãi DEMO.
 const PROMOS: Record<string, number> = { AFFREE10: 0.1, SALE20: 0.2 };
+// Danh sách mã để xổ ra cho user chọn (kèm % giảm).
+const PROMO_OPTIONS = Object.entries(PROMOS).map(([code, rate]) => ({
+  code,
+  pct: Math.round(rate * 100),
+}));
 
 export default function CobrowseSession({
   lang = "vi",
@@ -117,7 +122,6 @@ export default function CobrowseSession({
   const [promos, setPromos] = useState<(string | null)[]>(() => stores.map(() => null));
   // Bot tự chọn ĐÚNG phương thức user đã chọn ở form (mặc định QR nếu chưa có).
   const [pays, setPays] = useState<PayMethod[]>(() => stores.map(() => defaultPay ?? "qr"));
-  const [promoInput, setPromoInput] = useState<Record<number, string>>({});
   const [codes, setCodes] = useState<Record<string, string>>({});
 
   useEffect(() => () => timers.current.forEach(clearInterval), []);
@@ -230,10 +234,6 @@ export default function CobrowseSession({
         return [...c, { emoji: sug.emoji, image: sug.image, name: sug.name, qty: 1, unitPrice: sug.price }];
       }),
     );
-  }
-  function applyPromo(i: number) {
-    const code = (promoInput[i] || "").trim().toUpperCase();
-    setPromos((prev) => prev.map((p, pi) => (pi === i ? (PROMOS[code] ? code : null) : p)));
   }
 
   function placeOrder(i: number) {
@@ -506,7 +506,6 @@ export default function CobrowseSession({
               cart={carts[active]}
               pay={pays[active]}
               promo={promos[active]}
-              promoInput={promoInput[active] || ""}
               subtotal={subtotal(active)}
               discount={Math.round(subtotal(active) * discountRate(active))}
               total={storeTotal(active)}
@@ -517,8 +516,11 @@ export default function CobrowseSession({
               onLogin={() => confirmLogin(active)}
               onQty={(idx, d) => changeQty(active, idx, d)}
               onAdd={(sug) => addLine(active, sug)}
-              onPromoInput={(v) => setPromoInput((p) => ({ ...p, [active]: v }))}
-              onApplyPromo={() => applyPromo(active)}
+              onSelectPromo={(code) =>
+                setPromos((prev) =>
+                  prev.map((p, pi) => (pi === active ? (code && PROMOS[code] ? code : null) : p)),
+                )
+              }
               cardLabel={cardLabel}
               code={codes[stores[active].key]}
               onSetPay={(m) => setPays((prev) => prev.map((x, k) => (k === active ? m : x)))}
@@ -569,8 +571,8 @@ export default function CobrowseSession({
 
 // ─── Trang cửa hàng mô phỏng (TƯƠNG TÁC) ───────────────────────
 function StoreBrowser({
-  st, idx, status, mode, typed, cust, cart, pay, promo, promoInput, subtotal, discount, total, allowSuggest,
-  cardLabel, code, money, t, onSetMode, onLogin, onQty, onAdd, onPromoInput, onApplyPromo, onSetPay, onPlace, onNext, nextName,
+  st, idx, status, mode, typed, cust, cart, pay, promo, subtotal, discount, total, allowSuggest,
+  cardLabel, code, money, t, onSetMode, onLogin, onQty, onAdd, onSelectPromo, onSetPay, onPlace, onNext, nextName,
 }: {
   st: CobrowseStore;
   idx: number;
@@ -581,7 +583,6 @@ function StoreBrowser({
   cart: Line[];
   pay: PayMethod;
   promo: string | null;
-  promoInput: string;
   subtotal: number;
   discount: number;
   total: number;
@@ -594,8 +595,7 @@ function StoreBrowser({
   onLogin: () => void;
   onQty: (idx: number, delta: number) => void;
   onAdd: (sug: CobrowseSuggestion) => void;
-  onPromoInput: (v: string) => void;
-  onApplyPromo: () => void;
+  onSelectPromo: (code: string) => void;
   onSetPay: (m: PayMethod) => void;
   onPlace: () => void;
   onNext: () => void;
@@ -758,15 +758,21 @@ function StoreBrowser({
                 </div>
               )}
 
-              {/* Mã khuyến mãi */}
+              {/* Mã khuyến mãi — xổ danh sách để chọn */}
               <div className="promo">
-                <input
-                  value={promoInput}
+                <select
+                  className="promo-select"
+                  value={promo || ""}
                   disabled={!editable}
-                  onChange={(e) => onPromoInput(e.target.value.toUpperCase())}
-                  placeholder={t("Mã KM: AFFREE10 / SALE20")}
-                />
-                <button disabled={!editable} onClick={onApplyPromo}>{t("Áp dụng")}</button>
+                  onChange={(e) => onSelectPromo(e.target.value)}
+                >
+                  <option value="">{t("Chọn mã khuyến mãi…")}</option>
+                  {PROMO_OPTIONS.map((o) => (
+                    <option key={o.code} value={o.code}>
+                      {t("{code} — giảm {pct}%", { code: o.code, pct: o.pct })}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="sum-line"><span>{t("Tạm tính")}</span><span>{money(subtotal, st.currency)}</span></div>
@@ -941,7 +947,6 @@ function Style() {
 .cbz .skin-bhx{background:#F4F6F5}
 .cbz .skin-bhx .order-btn{background:#00A651 !important}
 .cbz .skin-bhx .payauto-tabs button.on{border-color:#00A651;background:#E9F8EF;color:#007A33}
-.cbz .skin-bhx .promo button{background:#00A651}
 .cbz .skin-bhx .qtybox button{border-color:#BFE3CC;color:#007A33}
 .cbz .skin-bhx .f input.filled{border-color:#9ADBB4;background:#F0FBF4}
 /* Co.op Online: banner gradient xanh dương + logo + breadcrumb + footer đậm */
@@ -957,7 +962,6 @@ function Style() {
 .cbz .skin-coop{background:#fff}
 .cbz .skin-coop .order-btn{background:#1E56C8 !important;text-transform:uppercase;letter-spacing:.4px}
 .cbz .skin-coop .payauto-tabs button.on{border-color:#1E56C8;background:#EDF3FE;color:#0F2F7F}
-.cbz .skin-coop .promo button{background:#1E56C8}
 .cbz .skin-coop .qtybox button{border-color:#C9D7F2;color:#0F2F7F}
 .cbz .skin-coop .f input.filled{border-color:#B9CDF0;background:#F3F7FE}
 .cbz .sk-coop-foot{background:#0F2F7F;color:#CDD7F0;display:flex;gap:14px;justify-content:space-between;padding:12px 16px;font-size:10px;font-weight:800;flex-wrap:wrap;letter-spacing:.4px}
@@ -1002,9 +1006,9 @@ function Style() {
 .cbz .suggest-search:focus{outline:none;border-color:var(--brand)}
 .cbz .suggest-empty{font-size:11.5px;color:var(--ink-soft);padding:8px 4px;text-align:center}
 .cbz .promo{display:flex;gap:6px;margin:8px 0 10px}
-.cbz .promo input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:12px;background:#fff}
-.cbz .promo button{border:none;background:var(--amber);color:#fff;border-radius:7px;padding:0 12px;font-size:12px;font-weight:700}
-.cbz .promo button:disabled{opacity:.5;cursor:default}
+.cbz .promo .promo-select{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:12px;background:#fff;color:var(--ink);cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 9px center;padding-right:28px}
+.cbz .promo .promo-select:focus{outline:none;border-color:var(--brand)}
+.cbz .promo .promo-select:disabled{opacity:.5;cursor:default}
 .cbz .sum-line{display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;color:var(--ink-soft)}
 .cbz .sum-line.total{border-top:1px dashed var(--line);margin-top:6px;padding-top:9px;color:var(--ink);font-weight:700}
 .cbz .sum-line.total .v{font-family:var(--mono);color:var(--red);font-size:16px}

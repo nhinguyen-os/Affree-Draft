@@ -348,6 +348,8 @@ const EN_DICT: Record<string, string> = {
   "{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.":
     "{chain} supports: {payments}. Affree only places COD orders — no card info collected.",
   "Tạm tính": "Subtotal",
+  "Chọn mã khuyến mãi…": "Choose a promo code…",
+  "{code} — giảm {pct}%": "{code} — {pct}% off",
   "Để trợ lý AAAI đặt giúp →": "Let the assistant order →",
   "Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.":
     "Enter your name, phone number and address to start.",
