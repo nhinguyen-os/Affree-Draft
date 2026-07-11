@@ -263,9 +263,22 @@ export default function CobrowseSession({
     );
   }
 
-  // Cửa hàng đang chờ thanh toán QR Ở AFFREE (tài khoản Affree + QR): quét xong,
-  // bấm "Tôi đã thanh toán" mới chốt đơn.
+  // Cửa hàng đang chờ thanh toán QR Ở AFFREE (tài khoản Affree + QR): hệ thống
+  // TỰ NHẬN BIẾT tiền vào (mô phỏng) rồi tự chốt đơn — không cần user bấm xác nhận.
   const [qrFor, setQrFor] = useState<number | null>(null);
+  const [qrPaid, setQrPaid] = useState(false);
+  useEffect(() => {
+    if (qrFor === null) return;
+    setQrPaid(false);
+    // Mô phỏng: ~5s sau khi hiện QR thì "nhận được tiền", ~1.5s sau tự chốt đơn.
+    const tDetect = setTimeout(() => setQrPaid(true), 5000);
+    const tClose = setTimeout(() => {
+      setQrFor(null);
+      placeOrder(qrFor);
+    }, 6500);
+    return () => { clearTimeout(tDetect); clearTimeout(tClose); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrFor]);
   function handlePlace(i: number) {
     if (modes[i] === "affree" && pays[i] === "qr") {
       setQrFor(i);
@@ -580,10 +593,12 @@ export default function CobrowseSession({
               <QRCode value={`AFFREE-PAY|${stores[qrFor].key}|${storeTotal(qrFor)}`} size={168} />
             </div>
             <p className="qr-note">🛡 {t("Bạn thanh toán qua QR của Affree; Affree chuyển khoản cho cửa hàng. Không lưu thông tin thanh toán.")}</p>
-            <button className="cbz-gate-cta" onClick={() => { const i = qrFor; setQrFor(null); placeOrder(i); }}>
-              ✓ {t("Tôi đã thanh toán")}
-            </button>
-            <button className="qr-later" onClick={() => setQrFor(null)}>{t("Để sau")}</button>
+            {qrPaid ? (
+              <div className="qr-status ok">✓ {t("Đã nhận thanh toán — đang chốt đơn…")}</div>
+            ) : (
+              <div className="qr-status"><span className="spin" /> {t("Đang chờ chuyển khoản… Hệ thống tự ghi nhận ngay khi nhận được tiền — không cần bấm gì.")}</div>
+            )}
+            {!qrPaid && <button className="qr-later" onClick={() => setQrFor(null)}>{t("Để sau")}</button>}
           </div>
         </div>
       )}
@@ -1072,6 +1087,10 @@ function Style() {
 .cbz-qr .qr-box{display:flex;justify-content:center;padding:14px;border:1px solid var(--line);border-radius:12px;background:#fff;margin-bottom:10px}
 .cbz-qr .qr-note{font-size:11px;color:var(--ink-soft);line-height:1.5;text-align:left;margin-bottom:12px}
 .cbz-qr .qr-later{margin-top:8px;border:none;background:none;color:var(--ink-soft);font-size:12px;font-weight:600;text-decoration:underline}
+.cbz-qr .qr-status{display:flex;align-items:center;justify-content:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);background:#F4F6F5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;line-height:1.45;text-align:left}
+.cbz-qr .qr-status.ok{color:#1E7A33;background:#E7F6EA;border-color:#BFE3CC}
+.cbz-qr .qr-status .spin{width:14px;height:14px;flex:none;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:cbzspin .8s linear infinite}
+@keyframes cbzspin{to{transform:rotate(360deg)}}
 .cbz .order-btn{width:100%;border:none;border-radius:9px;padding:13px;font-size:14px;font-weight:800;color:#fff;margin-top:12px;transition:filter .15s,opacity .15s}
 .cbz .order-btn:disabled{opacity:.45;cursor:default}
 .cbz .order-btn:not(:disabled):hover{filter:brightness(1.08)}
