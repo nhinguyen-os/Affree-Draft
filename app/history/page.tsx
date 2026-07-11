@@ -57,6 +57,31 @@ function groupByStore(items: PurchaseRecord[]): StoreBlock[] {
   return [...byStore.values()];
 }
 
+// Tách mỗi đơn tổng thành từng ĐƠN CON theo cửa hàng: mỗi mã đơn (storeOrderCode)
+// đứng riêng 1 mục trong danh sách — đơn đặt 2 cửa hàng sẽ hiện thành 2 dòng.
+function splitOrdersByStore(orders: Order[]): Order[] {
+  const out: Order[] = [];
+  for (const o of orders) {
+    const blocks = groupByStore(o.items);
+    if (blocks.length <= 1) {
+      out.push(o);
+      continue;
+    }
+    for (const b of blocks) {
+      out.push({
+        ...o,
+        key: `${o.key}:${b.storeId}`,
+        code: b.code || o.code,
+        items: b.items,
+        total: b.total,
+        currency: b.currency,
+        boughtAt: b.items.reduce((m, i) => (i.boughtAt < m ? i.boughtAt : m), b.items[0].boughtAt),
+      });
+    }
+  }
+  return out;
+}
+
 function groupOrders(records: PurchaseRecord[]): Order[] {
   const byKey = new Map<string, Order>();
   for (const r of records) {
@@ -97,7 +122,7 @@ export default function HistoryPage() {
     setLang(langForCountry(readSavedCountry()));
   }, []);
 
-  const orders = useMemo(() => groupOrders(items), [items]);
+  const orders = useMemo(() => splitOrdersByStore(groupOrders(items)), [items]);
   const total = useMemo(() => items.reduce((s, x) => s + x.total, 0), [items]);
   const fmtTime = (iso: string) => new Date(iso).toLocaleString(lang === "en" ? "en-US" : "vi-VN");
   // Tên các nguồn (chuỗi·cửa hàng) khác nhau trong 1 đơn — để hiện dưới mã đơn.
@@ -147,9 +172,8 @@ export default function HistoryPage() {
                             <span className="font-normal text-slate-500"> {t("+{n} món khác", { n: o.items.length - 1 })}</span>
                           )}
                         </div>
-                        <div className="mt-0.5 truncate text-xs text-slate-500">
-                          {stores.length > 1 ? t("{n} cửa hàng · {m} mã đơn", { n: stores.length, m: stores.length }) : stores[0]}
-                        </div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500">{stores[0]}</div>
+                        <div className="truncate font-mono text-[11px] font-semibold tracking-wide text-emerald-600">{codeOf(o)}</div>
                         <div className="text-xs text-slate-400">{fmtTime(o.boughtAt)}</div>
                       </div>
                       <div className="shrink-0 text-right">
