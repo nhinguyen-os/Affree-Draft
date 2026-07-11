@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import { formatMoney } from "@/lib/util";
+import { getProfile, saveProfile } from "@/lib/profile";
 import { type Lang, tr } from "@/lib/i18n";
 
 /**
@@ -113,9 +114,16 @@ export default function CobrowseSession({
   const [step, setStep] = useState<Step>(startStep);
   const [defaultMode, setDefaultMode] = useState<AccountMode>("affree");
 
-  const [name, setName] = useState(buyer.name);
-  const [phone, setPhone] = useState(buyer.phone);
-  const [address, setAddress] = useState(buyer.address);
+  // Prop trống → tự điền lại từ hồ sơ đã lưu (localStorage) của lần nhập trước.
+  const [name, setName] = useState(() => buyer.name || getProfile().name);
+  const [phone, setPhone] = useState(() => buyer.phone || getProfile().phone);
+  const [address, setAddress] = useState(() => buyer.address || getProfile().address);
+  // Gõ/sửa thông tin ở đây cũng LƯU hồ sơ để mọi form khác tự điền lại.
+  const skipFirstProfileSave = useRef(true);
+  useEffect(() => {
+    if (skipFirstProfileSave.current) { skipFirstProfileSave.current = false; return; }
+    saveProfile({ name, phone, address });
+  }, [name, phone, address]);
   const cust = { name, phone, address };
 
   const [active, setActive] = useState(-1);
