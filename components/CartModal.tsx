@@ -8,7 +8,7 @@ import { ChainBadge } from "./ChainBadge";
 import { MarqueeText } from "./MarqueeText";
 import { geocode } from "@/lib/geocode";
 import { distanceKm, formatMoney } from "@/lib/util";
-import { flushProfile, getProfile } from "@/lib/profile";
+import { flushProfile, getProfile, saveProfile } from "@/lib/profile";
 import { getSavedCard, saveCard, fetchAccountCard, type SavedCard } from "@/lib/cards";
 import { addPurchase } from "@/lib/purchases";
 import { ensureAccount } from "@/lib/auth";
@@ -137,6 +137,17 @@ export default function CartModal({
   const [name, setName] = useState(saved.name);
   const [phone, setPhone] = useState(saved.phone);
   const [address, setAddress] = useState(saved.address);
+  // Cứ gõ là lưu — không cần đặt xong đơn. Trước đây giỏ chỉ lưu khi bấm đặt hàng
+  // (flushProfile trong startAgent) → đóng giỏ giữa chừng là mất, lần sau phải gõ lại.
+  // Nay lưu như Mua ngay (OrderAgentModal): localStorage tức thì + đẩy Sheet (debounce).
+  const profileFirstRender = useRef(true);
+  useEffect(() => {
+    if (profileFirstRender.current) {
+      profileFirstRender.current = false;
+      return;
+    }
+    saveProfile({ name, phone, address });
+  }, [name, phone, address]);
   // Khung giờ giao RIÊNG theo từng nguồn (storeId → slot) — mỗi nguồn giao một khung khác nhau được.
   const [storeSlots, setStoreSlots] = useState<Record<string, string>>({});
   const slotOf = (storeId: string) => storeSlots[storeId] ?? SLOTS[0];
