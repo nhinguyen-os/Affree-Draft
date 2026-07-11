@@ -25,7 +25,7 @@ const STORES: CobrowseStore[] = [
       { label: "Tên người nhận", src: "name" },
       { label: "Số điện thoại", src: "phone", sensitive: true },
       { label: "Địa chỉ giao hàng", src: "address", sensitive: true },
-      { label: "Khung giờ giao", fixed: SLOT },
+      { label: "Khung giờ giao", fixed: SLOT, slot: true },
     ],
   },
   {
@@ -37,7 +37,7 @@ const STORES: CobrowseStore[] = [
       { label: "Tên người nhận", src: "name" },
       { label: "Số điện thoại", src: "phone", sensitive: true },
       { label: "Cửa hàng nhận", fixed: "BHX 223 Nguyễn Trọng Tuyển" },
-      { label: "Thời gian nhận", fixed: SLOT },
+      { label: "Thời gian nhận", fixed: SLOT, slot: true },
     ],
   },
   {
@@ -49,7 +49,7 @@ const STORES: CobrowseStore[] = [
       { label: "Tên người nhận", src: "name" },
       { label: "Số điện thoại", src: "phone", sensitive: true },
       { label: "Địa chỉ giao hàng", src: "address", sensitive: true },
-      { label: "Khung giờ giao", fixed: SLOT },
+      { label: "Khung giờ giao", fixed: SLOT, slot: true },
     ],
   },
 ];

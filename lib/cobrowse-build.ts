@@ -77,7 +77,7 @@ function deliveryFields(slot?: string): CobrowseField[] {
     { label: "Tên người nhận", src: "name" },
     { label: "Số điện thoại", src: "phone", sensitive: true },
     { label: "Địa chỉ giao hàng", src: "address", sensitive: true },
-    { label: "Khung giờ giao", fixed: slot || "Trong hôm nay (2–4 giờ)" },
+    { label: "Khung giờ giao", fixed: slot || "Trong hôm nay (2–4 giờ)", slot: true },
   ];
 }
 

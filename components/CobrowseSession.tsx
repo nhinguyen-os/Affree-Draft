@@ -24,6 +24,8 @@ export type CobrowseField = {
   src?: "name" | "phone" | "address";
   fixed?: string;
   sensitive?: boolean;
+  /** Trường khung giờ giao — hiện dropdown cho user tự chọn (mỗi cửa hàng chọn riêng). */
+  slot?: boolean;
 };
 
 export type CobrowseProduct = {
@@ -69,6 +71,13 @@ const SUGGESTIONS: { emoji: string; name: string; price: number }[] = [
   { emoji: "🧻", name: "Giấy vệ sinh (lốc 10)", price: 52000 },
   { emoji: "🧼", name: "Nước rửa tay 500ml", price: 39000 },
   { emoji: "😷", name: "Khẩu trang (hộp 50)", price: 45000 },
+];
+// Khung giờ giao — danh sách chọn (đồng bộ với giỏ hàng / TuiAgentModal).
+const SLOTS = [
+  "Trong hôm nay (2–4 giờ)",
+  "Tối nay (18:00–21:00)",
+  "Sáng mai (8:00–11:00)",
+  "Chiều mai (14:00–17:00)",
 ];
 // Mã khuyến mãi DEMO.
 const PROMOS: Record<string, number> = { AFFREE10: 0.1, SALE20: 0.2 };
@@ -123,6 +132,13 @@ export default function CobrowseSession({
   // Bot tự chọn ĐÚNG phương thức user đã chọn ở form (mặc định QR nếu chưa có).
   const [pays, setPays] = useState<PayMethod[]>(() => stores.map(() => defaultPay ?? "qr"));
   const [codes, setCodes] = useState<Record<string, string>>({});
+  // Khung giờ giao RIÊNG theo từng cửa hàng (mỗi cửa hàng chọn một khung khác nhau được).
+  const [slots, setSlots] = useState<Record<number, string>>({});
+  const slotOf = (i: number) => {
+    const f = stores[i]?.fields.find((x) => x.slot);
+    const def = f?.fixed && SLOTS.includes(f.fixed) ? f.fixed : SLOTS[0];
+    return slots[i] ?? def;
+  };
 
   useEffect(() => () => timers.current.forEach(clearInterval), []);
 
@@ -135,7 +151,8 @@ export default function CobrowseSession({
   const storeTotal = (i: number) => Math.round(subtotal(i) * (1 - discountRate(i))) + (stores[i].ship || 0);
   const grandTotal = stores.reduce((s, _st, i) => s + storeTotal(i), 0);
 
-  function fieldValue(f: CobrowseField): string {
+  function fieldValue(f: CobrowseField, i: number): string {
+    if (f.slot) return slotOf(i);
     if (f.fixed) return f.fixed;
     if (f.src === "name") return name;
     if (f.src === "phone") return phone;
@@ -186,7 +203,7 @@ export default function CobrowseSession({
   // Bot tự điền thông tin + tự chọn thanh toán (mặc định QR chuyển khoản).
   function runBot(i: number) {
     const st = stores[i];
-    const seq = st.fields.map((f, fi) => ({ fi, val: fieldValue(f) }));
+    const seq = st.fields.map((f, fi) => ({ fi, val: fieldValue(f, i) }));
     let k = 0;
     function nextField() {
       if (k >= seq.length) {
@@ -506,6 +523,8 @@ export default function CobrowseSession({
               cart={carts[active]}
               pay={pays[active]}
               promo={promos[active]}
+              slotValue={slotOf(active)}
+              onSetSlot={(v) => setSlots((prev) => ({ ...prev, [active]: v }))}
               subtotal={subtotal(active)}
               discount={Math.round(subtotal(active) * discountRate(active))}
               total={storeTotal(active)}
@@ -571,8 +590,8 @@ export default function CobrowseSession({
 
 // ─── Trang cửa hàng mô phỏng (TƯƠNG TÁC) ───────────────────────
 function StoreBrowser({
-  st, idx, status, mode, typed, cust, cart, pay, promo, subtotal, discount, total, allowSuggest,
-  cardLabel, code, money, t, onSetMode, onLogin, onQty, onAdd, onSelectPromo, onSetPay, onPlace, onNext, nextName,
+  st, idx, status, mode, typed, cust, cart, pay, promo, slotValue, subtotal, discount, total, allowSuggest,
+  cardLabel, code, money, t, onSetMode, onLogin, onQty, onAdd, onSelectPromo, onSetSlot, onSetPay, onPlace, onNext, nextName,
 }: {
   st: CobrowseStore;
   idx: number;
@@ -583,6 +602,7 @@ function StoreBrowser({
   cart: Line[];
   pay: PayMethod;
   promo: string | null;
+  slotValue: string;
   subtotal: number;
   discount: number;
   total: number;
@@ -596,6 +616,7 @@ function StoreBrowser({
   onQty: (idx: number, delta: number) => void;
   onAdd: (sug: CobrowseSuggestion) => void;
   onSelectPromo: (code: string) => void;
+  onSetSlot: (v: string) => void;
   onSetPay: (m: PayMethod) => void;
   onPlace: () => void;
   onNext: () => void;
@@ -700,13 +721,25 @@ function StoreBrowser({
               <h3>{t("Thông tin nhận hàng")}</h3>
               {st.fields.map((f, fi) => {
                 const key = `${idx}-${fi}`;
-                const full = f.fixed || (f.src ? cust[f.src] : "");
+                const full = f.slot ? slotValue : (f.fixed || (f.src ? cust[f.src] : ""));
                 const val = reviewing ? full : (typed[key] ?? "");
                 const filling = status === "filling" && typed[key] !== undefined && val.length < full.length;
+                // Khung giờ giao: tới lượt user (review) → cho chọn bằng dropdown.
+                if (f.slot && status === "review") {
+                  const opts = SLOTS.includes(slotValue) ? SLOTS : [slotValue, ...SLOTS];
+                  return (
+                    <div className="f" key={fi}>
+                      <label>{f.label}</label>
+                      <select className="slot-select" value={slotValue} onChange={(e) => onSetSlot(e.target.value)}>
+                        {opts.map((s) => <option key={s} value={s}>{t(s)}</option>)}
+                      </select>
+                    </div>
+                  );
+                }
                 return (
                   <div className="f" key={fi}>
                     <label>{f.label}</label>
-                    <input readOnly value={val} className={reviewing ? "filled" : filling ? "filling" : ""} />
+                    <input readOnly value={f.slot && reviewing ? t(val) : val} className={reviewing ? "filled" : filling ? "filling" : ""} />
                     {f.sensitive && <span className="sens" title={t("Che trong nhật ký phiên")}>🛡</span>}
                   </div>
                 );
@@ -976,6 +1009,8 @@ function Style() {
 .cbz .f input{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 10px;font-size:13px;background:#fff}
 .cbz .f input.filling{border-color:var(--amber);background:var(--amber-soft)}
 .cbz .f input.filled{border-color:#BFE3CC;background:#F4FBF6}
+.cbz .f .slot-select{width:100%;border:1px solid var(--brand);border-radius:7px;padding:8px 10px;font-size:13px;background:#F4FBF6;color:var(--ink);cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 9px center;padding-right:28px}
+.cbz .f .slot-select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 2px rgba(14,124,107,.15)}
 .cbz .f .sens{position:absolute;right:8px;top:29px;font-size:10px;color:var(--brand);background:#E7F1EF;border-radius:4px;padding:1px 5px;font-weight:700}
 .cbz .login-wrap{padding:22px 18px;display:flex;justify-content:center}
 .cbz .login-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;max-width:380px;width:100%}
