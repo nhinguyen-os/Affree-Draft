@@ -41,18 +41,19 @@ function codeOf(o: Order): string {
 
 // Tách các món trong 1 đơn theo CỬA HÀNG (đơn nhiều nguồn) → mỗi cửa hàng 1 khối:
 // mã đơn riêng (storeOrderCode, fallback orderCode), danh sách SP, thành tiền của cửa hàng đó.
-type StoreBlock = { storeId: string; storeName: string; chain: Chain; currency: string; code: string; items: PurchaseRecord[]; total: number };
+type StoreBlock = { storeId: string; storeName: string; chain: Chain; currency: string; code: string; slot?: string; items: PurchaseRecord[]; total: number };
 function groupByStore(items: PurchaseRecord[]): StoreBlock[] {
   const byStore = new Map<string, StoreBlock>();
   for (const it of items) {
     let s = byStore.get(it.storeId);
     if (!s) {
-      s = { storeId: it.storeId, storeName: it.storeName, chain: it.chain, currency: chainCurrency(it.chain), code: it.storeOrderCode || it.orderCode || "", items: [], total: 0 };
+      s = { storeId: it.storeId, storeName: it.storeName, chain: it.chain, currency: chainCurrency(it.chain), code: it.storeOrderCode || it.orderCode || "", slot: it.slot, items: [], total: 0 };
       byStore.set(it.storeId, s);
     }
     s.items.push(it);
     s.total += it.total;
     if (!s.code) s.code = it.storeOrderCode || it.orderCode || "";
+    if (!s.slot && it.slot) s.slot = it.slot;
   }
   return [...byStore.values()];
 }
@@ -159,6 +160,8 @@ export default function HistoryPage() {
               {orders.map((o) => {
                 const stores = storesOf(o);
                 const nItems = o.items.reduce((s, i) => s + i.qty, 0);
+                // Khung giờ giao của đơn (sau khi tách, các món trong mục đều cùng cửa hàng).
+                const slot = o.items.find((i) => i.slot)?.slot;
                 return (
                   <li key={o.key}>
                     <button
@@ -175,6 +178,7 @@ export default function HistoryPage() {
                         </div>
                         <div className="mt-0.5 truncate text-xs text-slate-500">{stores[0]}</div>
                         <div className="truncate font-mono text-[11px] font-semibold tracking-wide text-emerald-600">{codeOf(o)}</div>
+                        {slot && <div className="truncate text-xs text-slate-500">🕐 {t("Giao")}: {t(slot)}</div>}
                         <div className="text-xs text-slate-400">{fmtTime(o.boughtAt)}</div>
                       </div>
                       <div className="shrink-0 text-right">
@@ -239,6 +243,12 @@ export default function HistoryPage() {
                         </li>
                       ))}
                     </ul>
+                    {s.slot && (
+                      <div className="mt-1.5 flex items-center justify-between border-t border-slate-200/70 pt-1.5 text-sm">
+                        <span className="text-slate-500">{t("Khung giờ giao")}</span>
+                        <span className="font-medium text-slate-800">🕐 {t(s.slot)}</span>
+                      </div>
+                    )}
                     <div className="mt-1.5 flex items-center justify-between border-t border-slate-200/70 pt-1.5 text-sm">
                       <span className="text-slate-500">{t("Thành tiền")}</span>
                       <span className="font-bold text-slate-800">{formatMoney(s.total, s.currency)}</span>

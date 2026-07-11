@@ -2621,7 +2621,7 @@ export default function Home() {
   }, [selected, offers, cheapest, nearestStoreId, radiusKm, userLoc, country, storesReady, cskdTaxonomy, cskdStores, cskdByChain]);
 
   // Bấm "Vào mua hàng" → mở web cửa hàng đồng thời ghi nhận 1 lượt mua.
-  async function recordBuy(o: RankedOffer, note?: string, orderCode?: string, storeOrderCode?: string) {
+  async function recordBuy(o: RankedOffer, note?: string, orderCode?: string, storeOrderCode?: string, slot?: string) {
     setToast(t("Đã ghi nhận mua {product} tại {store}", { product: o.product.name, store: o.store.name }));
     setTimeout(() => setToast(""), 3500);
     await addPurchase({
@@ -2634,6 +2634,7 @@ export default function Home() {
       unitPrice: o.price,
       orderCode: orderCode || makeOrderCode(),
       storeOrderCode: storeOrderCode || undefined,
+      slot: slot || undefined,
       buyerLat: userLoc?.lat,
       buyerLng: userLoc?.lng,
       buyerAddr: userAddr || undefined,
@@ -5615,10 +5616,10 @@ export default function Home() {
                 setOrderedStoreIds([]);
               }
             }}
-            onPlaced={(store, code) => {
+            onPlaced={(store, code, slot) => {
               const o = cobrowse.offersByKey[store.key];
-              // Mã CHUNG của lần mua (gom lịch sử) + mã RIÊNG của cửa hàng vừa đặt.
-              if (o) recordBuy(o, undefined, cobrowse.orderCode, code);
+              // Mã CHUNG của lần mua (gom lịch sử) + mã RIÊNG + khung giờ giao của cửa hàng vừa đặt.
+              if (o) recordBuy(o, undefined, cobrowse.orderCode, code, slot);
               setOrderedStoreIds((ids) => Array.from(new Set([...ids, store.key])));
             }}
           />

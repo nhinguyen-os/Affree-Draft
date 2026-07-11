@@ -107,7 +107,7 @@ export default function CobrowseSession({
   /** Thẻ nhập/lưu ở Affree (đã che số, vd "Visa ****4242") — tài khoản Affree + thẻ: trợ lý đưa thẻ này qua web. */
   cardLabel?: string;
   onClose: () => void;
-  onPlaced?: (store: CobrowseStore, code: string) => void;
+  onPlaced?: (store: CobrowseStore, code: string, slot?: string) => void;
 }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
 
@@ -268,6 +268,7 @@ export default function CobrowseSession({
     onPlaced?.(
       { ...stores[i], products: carts[i].map((l) => ({ ...l, lineTotal: l.unitPrice * l.qty })), total: storeTotal(i) },
       code,
+      stores[i].fields.some((f) => f.slot) ? slotOf(i) : undefined,
     );
   }
 

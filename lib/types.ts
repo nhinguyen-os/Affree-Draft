@@ -199,6 +199,7 @@ export interface PurchaseRecord {
   boughtAt: string; // ISO
   orderCode?: string; // mã đơn CHUNG 1 lần mua (vd "AFF-117468-128") — gom lịch sử: 1 lần mua = 1 dòng
   storeOrderCode?: string; // mã đơn RIÊNG từng cửa hàng (đơn nhiều nguồn → mỗi cửa hàng 1 mã); thiếu → dùng orderCode
+  slot?: string; // khung giờ giao/nhận của cửa hàng này (vd "Sáng mai (8:00–11:00)")
   buyerLat?: number; // vị trí người mua lúc ghi nhận (nếu đã định vị)
   buyerLng?: number;
   buyerAddr?: string; // địa chỉ reverse-geocode của người mua

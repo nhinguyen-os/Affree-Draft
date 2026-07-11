@@ -419,6 +419,7 @@ export default function CartModal({
             unitPrice: item.offer.price,
             orderCode: code,
             storeOrderCode: codes[group.storeId],
+            slot: group.needSlot ? slotOf(group.storeId) : undefined,
             buyerName: name,
             buyerPhone: phone,
             buyerAddr: address,
