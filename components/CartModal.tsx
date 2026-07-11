@@ -3,8 +3,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "react-qr-code";
 import type { CartItem, RankedOffer } from "@/lib/types";
-import { chainLabel, chainLogo, chainMinOrder } from "@/lib/stores";
-import { formatMoney } from "@/lib/util";
+import { chainLabel, chainMinOrder, storeCurrency } from "@/lib/stores";
+import { ChainBadge } from "./ChainBadge";
+import { MarqueeText } from "./MarqueeText";
+import { geocode } from "@/lib/geocode";
+import { distanceKm, formatMoney } from "@/lib/util";
 import { flushProfile, getProfile } from "@/lib/profile";
 import { getSavedCard, saveCard, fetchAccountCard, type SavedCard } from "@/lib/cards";
 import { addPurchase } from "@/lib/purchases";
@@ -96,13 +99,22 @@ export default function CartModal({
   onRemove,
   onOrderWithAgent,
   onOrdered,
+  onSwitchStore,
+  alternatives = [],
+  geoAddr,
   lang = "vi",
 }: {
   items: CartItem[];
   onClose: () => void;
   onUpdateQty: (productId: string, storeId: string, qty: number) => void;
   onRemove: (productId: string, storeId: string) => void;
-  /** Trả true nếu đã tự xử lý (mở form khác) → cart không chạy mô phỏng trợ lý. */
+  /** Đổi cửa hàng cho món (giỏ 1 sản phẩm) — giữ số lượng, thay offer. */
+  onSwitchStore?: (productId: string, fromStoreId: string, offer: RankedOffer) => void;
+  /** Các offer cùng món ở cửa hàng khác (dùng cho đề xuất "Chọn lại nơi mua" khi giỏ có 1 sản phẩm). */
+  alternatives?: RankedOffer[];
+  /** Địa chỉ đã định vị (để so với địa chỉ giao → tính lại khoảng cách). */
+  geoAddr?: string;
+  /** Trả true nếu đã tự xử lý (mở form khác) → cart không chạy mô phỏng trợ lý AAAI. */
   onOrderWithAgent?: (
     offers: RankedOffer[],
     context: {
@@ -132,7 +144,7 @@ export default function CartModal({
   // Mã đơn hiện ở màn thành công (đồng bộ định dạng với Mua ngay / Mua cả túi).
   const [orderCode, setOrderCode] = useState("");
 
-  // Nhiều trợ lý chạy SONG SONG — agentKis[i] = bước hiện tại của cửa hàng thứ i.
+  // Nhiều trợ lý AAAI chạy SONG SONG — agentKis[i] = bước hiện tại của cửa hàng thứ i.
   const [agentKis, setAgentKis] = useState<number[]>([]);
   // Thẻ nhập 1 lần cho mọi cửa hàng — xác nhận ở cửa hàng đầu, các cửa hàng sau tự dùng lại.
   const [cardConfirmed, setCardConfirmed] = useState(false);
@@ -153,6 +165,8 @@ export default function CartModal({
     return () => { alive = false; };
   }, []);
   const [useNewCard, setUseNewCard] = useState(false);
+  // Tick "Lưu thẻ để mua nhanh lần sau" — ĐỒNG BỘ với form Mua ngay (OrderAgentModal).
+  const [cardSaved, setCardSaved] = useState(true);
   // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) gửi tới SĐT → nhập đúng mới hiện.
   const [otpCode, setOtpCode] = useState<string | null>(null); // null = chưa yêu cầu xem
   const [otpInput, setOtpInput] = useState("");
@@ -187,7 +201,7 @@ export default function CartModal({
         storeName: chainLabel(store.chain) || store.name,
         storeDetail: store.name || "",
         chain: store.chain,
-        currency: store.currency || "VND",
+        currency: storeCurrency(store.id),
         items: storeItems,
         needEmail: cfg.needEmail,
         needStorePick: cfg.needStorePick,
@@ -226,10 +240,70 @@ export default function CartModal({
 
   const grandTotal = storeGroups.reduce((s, g) => s + g.total, 0);
 
+  // ── Đề xuất "Chọn lại nơi mua" — CHỈ khi giỏ có ĐÚNG 1 sản phẩm (ĐỒNG BỘ với form Mua ngay).
+  // Cho đổi sang cửa hàng khác CÙNG CHUỖI của cùng món; đã có địa chỉ giao thì tính lại km theo đó.
+  const singleItem = items.length === 1 ? items[0] : null;
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const addressReady = address.trim().length >= 6;
+  const addressChanged = !!geoAddr && addressReady && norm(address) !== norm(geoAddr);
+  const shouldGeocode = addressReady && (!geoAddr || addressChanged);
+  const [deliveryLoc, setDeliveryLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const [geocoding, setGeocoding] = useState(false);
+  useEffect(() => {
+    if (!singleItem || !shouldGeocode) { setDeliveryLoc(null); return; }
+    let alive = true;
+    setGeocoding(true);
+    const timer = setTimeout(async () => {
+      const loc = await safeGeocode(address);
+      if (!alive) return;
+      setDeliveryLoc(loc);
+      setGeocoding(false);
+    }, 900);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [address, shouldGeocode, singleItem]);
+  const [repickSort, setRepickSort] = useState<"near" | "cheap">("near");
+  const activeStoreId = singleItem?.offer.store.id;
+  const activeChain = singleItem?.offer.store.chain;
+  const choiceList = useMemo(() => {
+    if (!singleItem) return [] as RankedOffer[];
+    const list = alternatives.filter(
+      (o) => o.store.chain === activeChain && (o.inStock || o.store.id === activeStoreId),
+    );
+    if (!deliveryLoc) return list;
+    return list.map((o) => {
+      const s = o.store;
+      const km = s.lat != null && s.lng != null ? distanceKm(deliveryLoc, { lat: s.lat, lng: s.lng }) : null;
+      return { ...o, distanceKm: km } as RankedOffer;
+    });
+  }, [alternatives, activeStoreId, activeChain, deliveryLoc, singleItem]);
+  const cheapestId = useMemo(() => {
+    let best: RankedOffer | null = null;
+    for (const o of choiceList) if (!best || o.price < best.price) best = o;
+    return best?.store.id;
+  }, [choiceList]);
+  const nearestId = useMemo(() => {
+    let best: RankedOffer | null = null;
+    for (const o of choiceList) {
+      if (o.distanceKm == null) continue;
+      if (!best || o.distanceKm < (best.distanceKm ?? Infinity)) best = o;
+    }
+    return best?.store.id;
+  }, [choiceList]);
+  const storeChoices = useMemo(() => {
+    const arr = [...choiceList];
+    arr.sort((a, b) =>
+      repickSort === "cheap" ? a.price - b.price : (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity),
+    );
+    return arr;
+  }, [choiceList, repickSort]);
+  // Giỏ 1 sản phẩm: LUÔN gợi ý nơi mua khác khi có >1 cửa hàng (không đợi địa chỉ giao lệch
+  // vị trí định vị như Mua ngay). Vẫn geocode để tính lại km khi user nhập địa chỉ giao khác.
+  const showRepick = !!singleItem && storeChoices.length > 1;
+
   // Đang dùng thẻ ĐÃ LƯU (mặc định khi có) hay nhập thẻ mới.
   const usingSavedCard = !!savedCard && !useNewCard;
   // Thẻ hợp lệ — thẻ đã lưu coi như sẵn sàng (CVV không lưu, mô phỏng bỏ qua);
-  // thẻ mới thì điền ngay Ở GIỎ (điền đủ → trợ lý tự thanh toán, bỏ trống → hỏi ở bước đặt).
+  // thẻ mới thì điền ngay Ở GIỎ (điền đủ → trợ lý AAAI tự thanh toán, bỏ trống → hỏi ở bước đặt).
   const newCardReady =
     cardNumber.replace(/\s/g, "").length >= 12 &&
     cardName.trim().length > 0 &&
@@ -265,7 +339,7 @@ export default function CartModal({
       setOtpError(true);
     }
   };
-  // Hàng chip "Chấp nhận: VISA MASTERCARD…" — dùng ở giỏ lẫn bước trợ lý cho đồng nhất.
+  // Hàng chip "Chấp nhận: VISA MASTERCARD…" — dùng ở giỏ lẫn bước trợ lý AAAI cho đồng nhất.
   const brandChipsRow = (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="text-[10px] text-slate-400">{t("Chấp nhận")}:</span>
@@ -283,7 +357,7 @@ export default function CartModal({
       ))}
     </div>
   );
-  // Giỏ chỉ cần: đủ thông tin giao + đã CHỌN phương thức (QR/thẻ thao tác ở bước trợ lý).
+  // Giỏ chỉ cần: đủ thông tin giao + đã CHỌN phương thức (QR/thẻ thao tác ở bước trợ lý AAAI).
   const paymentReady = payMethod !== null;
   const orderHint =
     !phone.trim() || !address.trim()
@@ -299,7 +373,7 @@ export default function CartModal({
     }));
   }
 
-  // Kế hoạch các bước trợ lý cho TỪNG cửa hàng.
+  // Kế hoạch các bước trợ lý AAAI cho TỪNG cửa hàng.
   // Affree đặt hộ bằng tài khoản Affree trên nguồn — khách KHÔNG dừng ở bước đăng nhập/OTP,
   // chỉ còn pause ở thanh toán (QR/thẻ).
   type AgentStep = { label: string; pause?: "pay-qr" | "pay-card"; ok?: boolean };
@@ -318,9 +392,11 @@ export default function CartModal({
     return { group: g, steps };
   }), [storeGroups, phone, storeSlots, payMethod, t]);
 
-  // Ghi nhận đơn (localStorage + Sheet) rồi sang màn thành công — gọi khi trợ lý xong hết cửa hàng.
+  // Ghi nhận đơn (localStorage + Sheet) rồi sang màn thành công — gọi khi trợ lý AAAI xong hết cửa hàng.
   async function finalizeOrder() {
     const next: Record<string, "ok" | "err"> = {};
+    // Sinh mã đơn TRƯỚC vòng lặp để mọi món trong lần đặt này cùng 1 mã → lịch sử gom theo đơn.
+    const code = "AFF-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100);
     for (const group of storeGroups) {
       try {
         for (const item of group.items) {
@@ -332,6 +408,7 @@ export default function CartModal({
             chain: group.chain,
             qty: item.qty,
             unitPrice: item.offer.price,
+            orderCode: code,
             buyerName: name,
             buyerPhone: phone,
             buyerAddr: address,
@@ -347,20 +424,20 @@ export default function CartModal({
       }
     }
     setResults(next);
-    setOrderCode("AFF-" + String(Date.now()).slice(-6) + "-" + Math.floor(Math.random() * 900 + 100));
+    setOrderCode(code);
     setPhase("done");
     const okStoreIds = Object.entries(next).filter(([, v]) => v === "ok").map(([id]) => id);
     if (okStoreIds.length) onOrdered?.(okStoreIds);
   }
 
-  // Bấm "Để trợ lý đặt giúp" → khởi động mô phỏng trợ lý (thay vì đặt tức thì).
+  // Bấm "Để trợ lý AAAI đặt giúp" → khởi động mô phỏng trợ lý AAAI (thay vì đặt tức thì).
   function startAgent() {
     flushProfile({ name, phone, address });
     setAgentKis(storeGroups.map(() => 0));
-    // Thẻ đã điền ĐỦ ở giỏ → coi như xác nhận luôn, trợ lý tự thanh toán không dừng hỏi.
+    // Thẻ đã điền ĐỦ ở giỏ → coi như xác nhận luôn, trợ lý AAAI tự thanh toán không dừng hỏi.
     setCardConfirmed(payMethod === "card" && cardReady);
     // Thẻ MỚI hợp lệ → lưu lại (localStorage, không CVV) cho lần mua sau chọn nhanh.
-    if (payMethod === "card" && !usingSavedCard && newCardReady) {
+    if (payMethod === "card" && !usingSavedCard && newCardReady && cardSaved) {
       saveCard({ number: cardNumber, name: cardName, exp: cardExp, brand: detectCardBrand(cardNumber) });
     }
     // Thanh toán thẻ → tạo tài khoản NGẦM theo SĐT + lưu thẻ ĐÃ CHE (4 số cuối + hãng + hạn).
@@ -411,7 +488,7 @@ export default function CartModal({
       // xác nhận khi nhận được tiền (khách không cần bấm) → chờ lâu hơn cho khách kịp CK.
       const paused = cur.pause === "pay-card" && !cardConfirmed;
       if (paused) return; // dừng chờ user nhập thẻ — xác nhận xong sẽ tự hẹn lại
-      // Lệch nhịp nhẹ giữa các cửa hàng cho cảm giác nhiều trợ lý chạy song song.
+      // Lệch nhịp nhẹ giữa các cửa hàng cho cảm giác nhiều trợ lý AAAI chạy song song.
       const delay = cur.pause === "pay-qr" ? 2800 + i * 200 : (cur.ok ? 550 : 850) + i * 180;
       const timer = setTimeout(() => {
         stepTimersRef.current.delete(i);
@@ -483,11 +560,10 @@ export default function CartModal({
         <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-bold text-slate-900">
-              {phase === "done" ? t("Đã ghi nhận đơn hàng") : t("Phục vụ bởi Affree Agentic AI - AAAI")}
+              {phase === "done"
+                ? t("Đã ghi nhận đơn hàng")
+                : <>{t("Giỏ hàng")} · {totalItems} {t("sản phẩm")}</>}
             </h2>
-            <p className="truncate text-xs text-slate-500">
-              {t("Giỏ hàng")} · {totalItems} {t("sản phẩm")}
-            </p>
           </div>
           <button
             onClick={onClose}
@@ -508,7 +584,7 @@ export default function CartModal({
               </div>
               <h3 className="mt-3 text-lg font-bold text-slate-900">{t("Đã ghi nhận đơn hàng!")}</h3>
               <p className="mt-1 text-sm text-slate-500">
-                {t("Trợ lý đã đặt {n} món từ {m} nguồn. Mã đơn:", { n: totalItems, m: new Set(storeGroups.map((g) => g.chain)).size })}
+                {t("Trợ lý AAAI đã đặt {n} món từ {m} nguồn. Mã đơn:", { n: totalItems, m: new Set(storeGroups.map((g) => g.chain)).size })}
               </p>
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
@@ -542,12 +618,12 @@ export default function CartModal({
               </button>
             </div>
           ) : phase === "agent" ? (
-            /* ── NHIỀU trợ lý đặt SONG SONG tại các cửa hàng bằng tài khoản Affree.
+            /* ── NHIỀU trợ lý AAAI đặt SONG SONG tại các cửa hàng bằng tài khoản Affree.
                   Mỗi cửa hàng: recap (thông tin bên trái + QR riêng bên phải) rồi mới
                   tới tiến trình — QR của TẤT CẢ source hiện đồng thời ngay từ đầu. ── */
             <>
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs text-amber-800">
-                🤖 {t("Affree chạy nhiều trợ lý đặt đồng thời tại các cửa hàng bằng tài khoản Affree — mỗi cửa hàng chỉ dừng ở bước thanh toán của nó.")}
+                🤖 {t("Affree chạy nhiều trợ lý AAAI đặt đồng thời tại các cửa hàng bằng tài khoản Affree — mỗi cửa hàng chỉ dừng ở bước thanh toán của nó.")}
               </div>
               {agentPlan.map((sp, i) => {
                 const g = sp.group;
@@ -561,13 +637,7 @@ export default function CartModal({
                     className={`mb-3 rounded-2xl border p-3 ${doneStore ? "border-slate-200" : "border-emerald-300"}`}
                   >
                     <div className="mb-2 flex items-center gap-2">
-                      <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-100 text-xs font-bold text-emerald-700 ring-1 ring-slate-200">
-                        {g.storeName.slice(0, 2).toUpperCase()}
-                        {chainLogo(g.chain) && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={chainLogo(g.chain)} alt={g.storeName} className="absolute inset-0 h-full w-full bg-white object-contain p-0.5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                        )}
-                      </span>
+                      <ChainBadge chain={g.chain} size={32} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-800">{g.storeName}</p>
                         <p className="text-xs text-slate-500">
@@ -611,7 +681,8 @@ export default function CartModal({
                               </p>
                               {(item.autoQty ?? 0) > 0 && (
                                 <p className="mt-0.5 text-[10px] font-medium text-blue-500">
-                                  +{item.autoQty} tự thêm để đủ mua tối thiểu {chainMinOrder(g.chain as Parameters<typeof chainMinOrder>[0]) > 0 ? `(${formatMoney(chainMinOrder(g.chain as Parameters<typeof chainMinOrder>[0]), g.currency)})` : ""}
+                                  {t("Mua tối thiểu: {amount}.", { amount: formatMoney(chainMinOrder(g.chain as Parameters<typeof chainMinOrder>[0]), g.currency) })}{" "}
+                                  {t("(+{n} tự thêm để đủ)", { n: item.autoQty ?? 0 })}
                                 </p>
                               )}
                             </div>
@@ -644,7 +715,7 @@ export default function CartModal({
                       )}
                     </div>
 
-                    {/* Tiến trình của trợ lý cửa hàng này */}
+                    {/* Tiến trình của trợ lý AAAI cửa hàng này */}
                     {(
                       <div className="space-y-1.5">
                         {sp.steps.map((st, k) => {
@@ -739,6 +810,10 @@ export default function CartModal({
             </>
           ) : (
             <>
+              {/* Banner bản mô phỏng — ĐỒNG BỘ với form Mua ngay (OrderAgentModal) */}
+              <div className="mb-4 rounded-lg border border-amber-300/40 bg-amber-100/30 px-3 py-2 text-xs text-amber-900">
+                {t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý AAAI tự thao tác và dừng lại khi cần bạn.")}
+              </div>
               {/* Thông tin chung — module chung với Mua ngay / Mua cả túi (OrderInfoSection) */}
               <OrderInfoSection
                 lang={lang}
@@ -759,18 +834,7 @@ export default function CartModal({
                 >
                   {/* Store header */}
                   <div className="mb-2.5 flex items-center gap-2">
-                    <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-100 text-xs font-bold text-emerald-700 ring-1 ring-slate-200">
-                      {group.storeName.slice(0, 2).toUpperCase()}
-                      {chainLogo(group.chain) && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={chainLogo(group.chain)}
-                          alt={group.storeName}
-                          className="absolute inset-0 h-full w-full bg-white object-contain p-0.5"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                        />
-                      )}
-                    </span>
+                    <ChainBadge chain={group.chain} size={32} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-slate-800 truncate">{group.storeName}</p>
                       {group.storeDetail && group.storeDetail !== group.storeName && (
@@ -817,7 +881,8 @@ export default function CartModal({
                           </p>
                           {(item.autoQty ?? 0) > 0 && (
                             <p className="mt-0.5 text-[10px] font-medium text-blue-500">
-                              +{item.autoQty} tự thêm để đủ mua tối thiểu {chainMinOrder(group.chain as Parameters<typeof chainMinOrder>[0]) > 0 ? `(${formatMoney(chainMinOrder(group.chain as Parameters<typeof chainMinOrder>[0]), group.currency)})` : ""}
+                              {t("Mua tối thiểu: {amount}.", { amount: formatMoney(chainMinOrder(group.chain as Parameters<typeof chainMinOrder>[0]), group.currency) })}{" "}
+                              {t("(+{n} tự thêm để đủ)", { n: item.autoQty ?? 0 })}
                             </p>
                           )}
                         </div>
@@ -904,6 +969,71 @@ export default function CartModal({
                   </div>
                 </section>
               ))}
+
+            {/* Đề xuất "Chọn lại nơi mua" — CHỈ khi giỏ có đúng 1 sản phẩm (đồng bộ form Mua ngay) */}
+            {showRepick && singleItem && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs text-amber-800">
+                  📍 {geocoding
+                    ? t("đang định vị & tính khoảng cách theo địa chỉ giao…")
+                    : deliveryLoc
+                      ? t("khoảng cách dưới đây tính từ địa chỉ giao, gần nhất xếp trên. Chọn lại nơi mua:")
+                      : t("Cùng món này còn bán ở cửa hàng khác — chọn lại nơi mua:")}
+                </p>
+
+                {/* Lọc: gần / rẻ */}
+                <div className="mt-2 inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium">
+                  <button
+                    onClick={() => setRepickSort("near")}
+                    className={`rounded-md px-3 py-1 transition ${repickSort === "near" ? "bg-emerald-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    {t("Gần nhất")}
+                  </button>
+                  <button
+                    onClick={() => setRepickSort("cheap")}
+                    className={`rounded-md px-3 py-1 transition ${repickSort === "cheap" ? "bg-emerald-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    {t("Rẻ nhất")}
+                  </button>
+                </div>
+
+                <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
+                  {storeChoices.map((o) => {
+                    const active = o.store.id === singleItem.offer.store.id;
+                    return (
+                      <button
+                        key={o.store.id}
+                        onClick={() => { if (!active) onSwitchStore?.(singleItem.product.id, singleItem.offer.store.id, o); }}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition ${active ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500" : "border-slate-200 bg-white hover:border-slate-300"}`}
+                      >
+                        <ChainBadge chain={o.store.chain} />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="flex min-w-0">
+                            <MarqueeText className="font-medium text-slate-800">{o.store.name}</MarqueeText>
+                          </span>
+                          <span className="mt-0.5 flex flex-wrap items-center gap-1">
+                            <span className="text-xs text-slate-500">
+                              {o.distanceKm != null ? `${o.distanceKm.toFixed(1)} km` : t("Online")}
+                            </span>
+                            {o.store.id === cheapestId && (
+                              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">{t("Rẻ nhất")}</span>
+                            )}
+                            {o.store.id === nearestId && (
+                              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">{t("Gần nhất")}</span>
+                            )}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span className="block font-semibold text-emerald-600">{formatMoney(o.price, storeCurrency(o.store.id))}</span>
+                          {active && (<span className="text-[11px] font-medium text-emerald-600">{t("Đang chọn")}</span>)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* ── Thanh toán ── */}
             <section className="mb-3 rounded-2xl border border-slate-200 p-3">
               <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -922,12 +1052,20 @@ export default function CartModal({
                 ))}
               </div>
 
-              {/* QR/COD: chỉ chọn ở giỏ, thao tác ở bước trợ lý. */}
-              {(payMethod === "qr" || payMethod === "cod") && (
+              {/* Chưa chọn phương thức → nhắc (amber), ĐỒNG BỘ form Mua ngay. */}
+              {payMethod === null && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  {t("Chọn phương thức thanh toán để tiếp tục.")}
+                </p>
+              )}
+              {/* Chú thích theo phương thức — ĐỒNG BỘ form Mua ngay: hiện cho cả QR / Thẻ / COD. */}
+              {payMethod && (
                 <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
                   {payMethod === "qr"
-                    ? "📱 " + t("Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.")
-                    : "💵 " + t("Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.")}
+                    ? "📱 " + t("Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.")
+                    : payMethod === "cod"
+                      ? "💵 " + t("Trợ lý AAAI sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
+                      : "💳 " + t("Trợ lý AAAI sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
                 </p>
               )}
 
@@ -1017,7 +1155,7 @@ export default function CartModal({
 
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-slate-400">
-                      {"✓ " + t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel })}
+                      {"✓ " + t("{card} sẽ được trợ lý AAAI dùng thanh toán tự động.", { card: maskedCardLabel })}
                     </p>
                     <button
                       type="button"
@@ -1072,15 +1210,19 @@ export default function CartModal({
                       maxLength={4}
                       value={cardCvv}
                       onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, ""))}
-                      placeholder="CVV"
+                      placeholder="CVV •••"
                       className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                     />
                   </div>
-                  <p className="text-[11px] text-slate-400">
-                    {cardReady
-                      ? "✓ " + t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel })
-                      : "💳 " + t("Điền đủ để trợ lý tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng.")}
-                  </p>
+                  {/* Lưu thẻ + ghi chú bảo mật — ĐỒNG BỘ với form Mua ngay (OrderAgentModal) */}
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                    <input type="checkbox" checked={cardSaved} onChange={(e) => setCardSaved(e.target.checked)} className="accent-emerald-600" />
+                    {t("Lưu thẻ để mua nhanh lần sau")}
+                  </label>
+                  <div className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    {t("Thông tin thẻ được mã hoá, không lưu số thẻ thật, không chia sẻ bên thứ 3.")}
+                  </div>
                 </div>
               )}
             </section>
@@ -1088,17 +1230,17 @@ export default function CartModal({
           )}
         </div>
 
-        {/* Footer — chỉ ở bước giỏ (bước trợ lý có nút thanh toán riêng inline) */}
+        {/* Footer — chỉ ở bước giỏ (bước trợ lý AAAI có nút thanh toán riêng inline) */}
         {phase === "cart" && (
           <div className="shrink-0 border-t border-slate-100 px-4 py-3">
             <div className="mb-2.5 flex items-baseline justify-between">
               <span className="text-sm text-slate-500">{t("Tổng cộng")}</span>
-              <span className="text-lg font-bold text-rose-600">{formatMoney(grandTotal, "VND")}</span>
+              <span className="text-lg font-bold text-rose-600">{formatMoney(grandTotal, storeGroups[0]?.currency ?? "VND")}</span>
             </div>
             <button
               onClick={() => {
                 // onOrderWithAgent trả true nếu đã tự xử lý (vd giỏ toàn nhạc → mở form nhạc).
-                // Trả false/không có → chạy mô phỏng trợ lý đặt từng cửa hàng (startAgent).
+                // Trả false/không có → chạy mô phỏng trợ lý AAAI đặt từng cửa hàng (startAgent).
                 const offers = storeGroups.map((g) => g.items[0].offer);
                 if (onOrderWithAgent && onOrderWithAgent(offers, {
                   name,
@@ -1126,13 +1268,16 @@ export default function CartModal({
                 <circle cx="20" cy="21" r="1" />
                 <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
               </svg>
-              {t("Để trợ lý đặt giúp →")} ({storeGroups.length} {t("cửa hàng")})
+              {t("Để trợ lý AAAI đặt giúp →").replace(/\s*→\s*/g, "")} ({storeGroups.length} {t("cửa hàng")})
             </button>
             {orderHint && (
               <p className="mt-1.5 text-center text-xs text-slate-400">
                 {orderHint}
               </p>
             )}
+            <p className="mt-1.5 text-center text-[10px] text-slate-400">
+              {t("Phục vụ bởi Affree Agentic AI - AAAI")}
+            </p>
           </div>
         )}
       </div>
@@ -1147,6 +1292,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+/** Geocode địa chỉ giao, nuốt lỗi → null (đồng bộ với OrderAgentModal). */
+async function safeGeocode(address: string) {
+  try {
+    return await geocode(address);
+  } catch {
+    return null;
+  }
 }
 
 /** Dòng "nhãn — giá trị" trong khối tổng kết đơn (đồng bộ với Mua ngay / Mua cả túi). */

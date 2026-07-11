@@ -14,6 +14,12 @@ import { SubCatBar } from "@/components/SubCatBar";
 import { categoryGroup, GROUP_TILE, DEFAULT_TILE_EMOJIS } from "@/lib/categories";
 import { type Lang, tr } from "@/lib/i18n";
 import { slugify } from "@/lib/slug";
+import { TrimmedLogo } from "@/components/TrimmedLogo";
+
+// Glass tile giống hệt "Nhãn tài trợ" ở trang chủ (page.tsx TILE_GLASS) để logo
+// kênh bán hàng online hiển thị đồng phong cách với logo nhãn tài trợ.
+const TILE_GLASS =
+  "rounded-[22px] ring-1 ring-black/[0.06] shadow-[0_6px_18px_-6px_rgba(15,23,42,0.18),0_2px_5px_-2px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.75)] transition duration-200 group-hover:shadow-[0_14px_30px_-8px_rgba(15,23,42,0.26),0_4px_10px_-2px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)]";
 
 interface Props {
   store: Store;
@@ -44,12 +50,14 @@ interface Props {
   onDealInfo?: (product: Product) => void;
   onDealAdd?: (product: Product) => void;
   onDealBuy?: (product: Product) => void;
+  /** Bấm tên cửa hàng trên card "Giá hời" → mở trang cửa hàng đó. */
+  onDealStore?: (deal: DealRow) => void;
 }
 
 // 1 dòng sản phẩm trong trang: offer + product + cửa hàng THẬT bán offer đó (brand mode).
 type PageItem = { offer: Offer; product: Product; realStore: Store | null; dist: number | null };
 
-export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, servedBy, brandTag, behind = false, onClose, onBuy, onAddToCart, cartQtyFor, deals, dealsRadiusKm, setDealsRadiusKm, dealsEffKm, onDealInfo, onDealAdd, onDealBuy }: Props) {
+export default function StoreProductsPage({ store, offers, productMap, userLoc, lang, headerH = 0, groupEmoji = {}, servedBy, brandTag, behind = false, onClose, onBuy, onAddToCart, cartQtyFor, deals, dealsRadiusKm, setDealsRadiusKm, dealsEffKm, onDealInfo, onDealAdd, onDealBuy, onDealStore }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
   // Lọc theo nhãn hàng (deep-link ?nhanhang=…). Bật mặc định khi có brandTag; bấm × để bỏ.
   const [brandFilterOn, setBrandFilterOn] = useState(!!brandTag);
@@ -104,6 +112,10 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   // Brand mode (bấm sponsor logo): store là synthetic `__brand__<name>` — offers thuộc
   // NHIỀU cửa hàng thật khác nhau (fan-out theo chuỗi), phải gom về 1 card/sản phẩm.
   const isBrandMode = store.id.startsWith("__brand__");
+  // Chain mode (bấm tên cửa hàng ở "Giá hời"): store synthetic `__chain__<chain>` — offers
+  // cùng chuỗi nhưng nhiều điểm bán → dedup gom về 1 card/sản phẩm giống brand mode.
+  const isChainMode = store.id.startsWith("__chain__");
+  const isMultiStore = isBrandMode || isChainMode;
 
   const items = useMemo<PageItem[]>(() => {
     const all: PageItem[] = offers
@@ -121,8 +133,8 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
     const filtered = brandFilterOn && brandSlug
       ? all.filter((x) => slugify(x.product.brand || "") === brandSlug)
       : all;
-    if (!isBrandMode) return filtered;
-    // Brand mode: cùng 1 sản phẩm có thể có N offer (mỗi cửa hàng 1 offer) → giữ offer
+    if (!isMultiStore) return filtered;
+    // Brand/chain mode: cùng 1 sản phẩm có thể có N offer (mỗi cửa hàng 1 offer) → giữ offer
     // TỐT NHẤT: còn hàng trước, rồi gần nhất (offer không rõ vị trí xếp sau), rồi rẻ nhất.
     const best = new Map<string, PageItem>();
     for (const it of filtered) {
@@ -135,7 +147,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
       if (better > 0) best.set(it.product.id, it);
     }
     return [...best.values()];
-  }, [offers, productMap, userLoc, isBrandMode, brandFilterOn, brandSlug]);
+  }, [offers, productMap, userLoc, isMultiStore, brandFilterOn, brandSlug]);
 
   // Tên nhãn hàng hiển thị trên tag: lấy đúng chữ gốc từ sản phẩm khớp, fallback brandTag.
   const brandLabel = useMemo(() => {
@@ -176,7 +188,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
   // ở đâu chỉ thấy cửa hàng vùng đó, đồng bộ với scope vùng của bản đồ/so sánh.
   // Chưa rõ vị trí user / store không tọa độ → hiện tên cửa hàng, không kèm khoảng cách.
   const storeLineFor = (it: PageItem) => {
-    if (!isBrandMode || !it.realStore) return undefined;
+    if (!isMultiStore || !it.realStore) return undefined;
     if (it.dist != null && it.dist >= 100) return undefined; // ngoài vùng → ẩn
     return `🛒 ${it.realStore.name}${it.dist != null ? ` · 📍${fmtDist(it.dist)}` : ""}`;
   };
@@ -318,10 +330,10 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                           key={s.name}
                           type="button"
                           onClick={() => { setRegService(s); setRegSent(false); }}
-                          className="group flex w-32 shrink-0 flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md active:translate-y-0 active:scale-[0.98]"
+                          className="group flex w-24 shrink-0 flex-col items-center gap-1.5 text-center transition hover:-translate-y-0.5 active:scale-95"
                         >
                           <ServiceLogo name={s.name} logo={s.logo} />
-                          <span className="w-full truncate text-sm font-semibold text-slate-700 transition group-hover:text-emerald-700">{s.name}</span>
+                          <span className="block min-h-[2rem] w-full truncate text-[12px] font-medium leading-tight text-slate-600 transition group-hover:text-emerald-700">{s.name}</span>
                         </button>
                       ))}
                     </div>
@@ -343,6 +355,7 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
                     onAdd={onDealAdd}
                     onBuy={onDealBuy}
                     cartQtyFor={(id) => cartQtyFor?.(id) ?? 0}
+                    onStore={onDealStore}
                   />
                 )}
 
@@ -458,24 +471,29 @@ export default function StoreProductsPage({ store, offers, productMap, userLoc, 
 
 /** Logo dịch vụ tạo web: thử ảnh (Google Drive cần referrerPolicy no-referrer); vỡ ảnh → chữ đầu. */
 function ServiceLogo({ name, logo }: { name: string; logo: string }) {
-  const [errored, setErrored] = useState(false);
-  if (logo && !errored) {
+  // Đồng phong cách với logo "Nhãn tài trợ": TrimmedLogo tự cắt lề trắng + dò màu nền
+  // chủ đạo của brand → paint background card đúng màu đó để logo fill nguyên hình,
+  // không méo/crop, trong khung glass tile 80×80 giống trang chủ.
+  const [fill, setFill] = useState<string | undefined>(undefined);
+  if (logo) {
     return (
-      <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white p-2 ring-1 ring-slate-100 shadow-sm">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+      <span
+        className={`flex h-20 w-20 items-center justify-center overflow-hidden p-2 ${TILE_GLASS}`}
+        style={{ backgroundColor: fill || "#ffffff" }}
+      >
+        <TrimmedLogo
           src={logo}
           alt={name}
-          referrerPolicy="no-referrer"
-          loading="lazy"
-          onError={() => setErrored(true)}
           className="h-full w-full object-contain"
+          onResult={({ fillColor }) => {
+            if (fillColor) setFill((c) => (c === fillColor ? c : fillColor));
+          }}
         />
       </span>
     );
   }
   return (
-    <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-emerald-50 text-xl font-bold text-emerald-700 ring-1 ring-emerald-100">
+    <span className={`flex h-20 w-20 items-center justify-center bg-gradient-to-br from-emerald-100 to-emerald-50 text-xl font-bold text-emerald-700 ${TILE_GLASS}`}>
       {name.slice(0, 2).toUpperCase()}
     </span>
   );

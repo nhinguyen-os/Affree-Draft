@@ -134,6 +134,7 @@ const EN_DICT: Record<string, string> = {
   "3–5 ngày": "3–5 days",
   'Chọn đơn vị vận chuyển "{ship}" ({eta})…': 'Selecting carrier "{ship}" ({eta})…',
   "Xem tất cả →": "See all →",
+  "Xem tất cả sản phẩm của {store}": "See all products from {store}",
   "Quay lại trang chủ": "Back to home",
   "Quay lại trang chính": "Back to main page",
   "Quay lại": "Back",
@@ -307,7 +308,7 @@ const EN_DICT: Record<string, string> = {
   // Order agent modal — header & banner
   "Đã đặt hàng": "Order placed",
   "Phục vụ bởi Agentic AI": "Powered by Agentic AI",
-  "Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.":
+  "Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý AAAI tự thao tác và dừng lại khi cần bạn.":
     "Simulation — not connected to a real site. It shows how the assistant works on its own and pauses when it needs you.",
 
   // Order agent modal — form
@@ -335,6 +336,8 @@ const EN_DICT: Record<string, string> = {
     "locating & computing distance by delivery address…",
   "khoảng cách dưới đây tính từ địa chỉ giao, gần nhất xếp trên. Chọn lại nơi mua:":
     "distances below are from the delivery address, nearest first. Pick a store again:",
+  "Cùng món này còn bán ở cửa hàng khác — chọn lại nơi mua:":
+    "This item is also sold at other stores — pick a store again:",
   "chưa xác định được toạ độ địa chỉ giao (khoảng cách tạm tính từ vị trí cũ). Chọn lại nơi mua:":
     "couldn't resolve the delivery address coordinates (distance estimated from old location). Pick a store again:",
   "Online": "Online",
@@ -345,15 +348,15 @@ const EN_DICT: Record<string, string> = {
   "{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.":
     "{chain} supports: {payments}. Affree only places COD orders — no card info collected.",
   "Tạm tính": "Subtotal",
-  "Để trợ lý đặt giúp →": "Let the assistant order →",
+  "Để trợ lý AAAI đặt giúp →": "Let the assistant order →",
   "Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.":
     "Enter your name, phone number and address to start.",
 
   // Order agent modal — running steps
-  "🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.":
+  "🔐 Trợ lý AAAI KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.":
     "🔐 The assistant does NOT enter your password. Log in yourself, then continue.",
   "Tôi đã đăng nhập xong →": "I've logged in →",
-  "🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.":
+  "🔐 Trợ lý AAAI không tự đọc được OTP — bạn nhập mã giúp.":
     "🔐 The assistant can't read the OTP — please enter the code.",
   "Đang chờ {chain} gửi mã…": "Waiting for {chain} to send a code…",
   "Tin nhắn mô phỏng từ {chain}": "Simulated message from {chain}",
@@ -362,10 +365,10 @@ const EN_DICT: Record<string, string> = {
   "Gửi": "Submit",
   "Mã chưa đúng — nhập đúng {otp} (hoặc bấm “Điền giúp”).":
     "Wrong code — enter {otp} (or tap “Fill in”).",
-  "🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).":
+  "🤖 Trợ lý AAAI không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).":
     "🤖 The assistant can't pass CAPTCHA. Please verify (simulated).",
   "Tôi không phải là người máy": "I'm not a robot",
-  "✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.":
+  "✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý AAAI mới đặt.":
     "✋ This final step can't be undone — you approve, then the assistant orders.",
   "Món": "Item",
   "Nơi bán": "Store",
@@ -374,7 +377,7 @@ const EN_DICT: Record<string, string> = {
   "Tổng": "Total",
   "Xác nhận đặt hàng": "Confirm order",
   "Đặt hàng thành công!": "Order placed!",
-  "Trợ lý đã đặt đơn trên {chain}. Mã đơn:": "The assistant placed your order on {chain}. Order code:",
+  "Trợ lý AAAI đã đặt đơn trên {chain}. Mã đơn:": "The assistant placed your order on {chain}. Order code:",
   "Xong": "Done",
 
   // Order agent modal — delivery slots
@@ -442,16 +445,16 @@ const EN_DICT: Record<string, string> = {
   "chuyên trang": "storefronts",
   "nguồn": "sources",
   "Đã đặt cả túi": "Bundle ordered",
-  "Bản mô phỏng — chưa kết nối web thật. Trợ lý đặt cả túi tại từng nguồn đích.": "Simulation — not connected to real sites. The assistant orders the whole bundle directly from each source.",
+  "Bản mô phỏng — chưa kết nối web thật. Trợ lý AAAI đặt cả túi tại từng nguồn đích.": "Simulation — not connected to real sites. The assistant orders the whole bundle directly from each source.",
   "Đặt {n} món trên {source}…": "Ordering {n} item(s) on {source}…",
   "Điền thông tin giao hàng…": "Filling in delivery details…",
   "Xác nhận & gửi đơn (COD)…": "Confirm & place order (COD)…",
   "Xác nhận & gửi đơn…": "Confirm & place order…",
-  "Túi gom món từ {n} nguồn → trợ lý đặt trực tiếp tại từng nguồn đích, giao theo từng nguồn.": "This bundle spans {n} sources → the assistant orders directly from each source, delivered per source.",
+  "Túi gom món từ {n} nguồn → trợ lý AAAI đặt trực tiếp tại từng nguồn đích, giao theo từng nguồn.": "This bundle spans {n} sources → the assistant orders directly from each source, delivered per source.",
   "Đã đặt cả túi thành công!": "Bundle ordered successfully!",
-  "Trợ lý đã đặt {n} món từ {m} nguồn. Mã đơn:": "The assistant ordered {n} items from {m} sources. Order code:",
+  "Trợ lý AAAI đã đặt {n} món từ {m} nguồn. Mã đơn:": "The assistant ordered {n} items from {m} sources. Order code:",
   "Tạm tính cả túi": "Bundle subtotal",
-  "Để trợ lý đặt cả túi →": "Let the assistant order the bundle →",
+  "Để trợ lý AAAI đặt cả túi →": "Let the assistant order the bundle →",
   "Đã đặt cả túi {tui}": "Ordered bundle {tui}",
   // Khúc Chạm Plaza — trang chi tiết album + card bài hát
   "Bài hát": "Song",
@@ -482,6 +485,10 @@ const EN_DICT: Record<string, string> = {
   "Đặt hàng tất cả": "Order all",
   "Tổng cộng": "Total",
   "{n} món": "{n} items",
+  "{n} đơn hàng": "{n} orders",
+  "Đơn ngày {d}": "Order on {d}",
+  "+{n} món khác": "+{n} more",
+  "{n} nguồn": "{n} sources",
   "{n} túi": "{n} bundles",
   "Sản phẩm": "Product",
   "sản phẩm": "products",
@@ -686,6 +693,14 @@ const EN_DICT: Record<string, string> = {
   "Gửi đề nghị cấp phép": "Send licensing request",
   "Gửi lời yêu thương": "Send your love",
   "Ghi chú": "Note",
+  "Chi tiết": "Details",
+  "Chi tiết đơn hàng": "Order details",
+  "Đơn giá": "Unit price",
+  "Thành tiền": "Total",
+  "Người mua": "Buyer",
+  "Địa chỉ": "Address",
+  "Thời gian": "Time",
+  "Mã đơn": "Order ID",
   "Kết nối mua bán · Không thu phí · Giá hời quanh đây": "Connecting buyers & sellers · No fees · Great deals nearby",
   "Vận hành bởi": "Operated by",
   "Affree là nền tảng so sánh giá và kết nối mua bán, không trực tiếp kinh doanh hàng hóa.": "Affree is a price-comparison and buy–sell connection platform; it does not directly sell goods.",
@@ -703,7 +718,7 @@ const EN_DICT: Record<string, string> = {
   "Đặt thành công tại {chain}": "Ordered successfully at {chain}",
   "Đã ghi nhận đơn hàng": "Order recorded",
   "QR chuyển khoản": "Bank-transfer QR",
-  "Affree chạy nhiều trợ lý đặt đồng thời tại các cửa hàng bằng tài khoản Affree — mỗi cửa hàng chỉ dừng ở bước thanh toán của nó.": "Affree runs multiple ordering assistants at once across stores using the Affree account — each store only pauses at its own payment step.",
+  "Affree chạy nhiều trợ lý AAAI đặt đồng thời tại các cửa hàng bằng tài khoản Affree — mỗi cửa hàng chỉ dừng ở bước thanh toán của nó.": "Affree runs multiple ordering assistants at once across stores using the Affree account — each store only pauses at its own payment step.",
   "Đang chờ chuyển khoản…": "Waiting for bank transfer…",
   "Chờ bạn thanh toán…": "Waiting for your payment…",
   "+{n} sản phẩm khác": "+{n} more products",
@@ -714,7 +729,7 @@ const EN_DICT: Record<string, string> = {
   "Tên chủ thẻ": "Cardholder name",
   "Thanh toán {amount}": "Pay {amount}",
   "Nhập 1 lần — các cửa hàng sau tự dùng lại thẻ này.": "Enter once — later stores reuse this card automatically.",
-  "Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.": "The assistant will show a QR code for you to scan at each store when ordering.",
+  "Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.": "The assistant will show a QR code for you to scan at each store when ordering.",
   "Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.": "Cash on delivery (COD) — the delivery staff collects cash.",
   "Chọn thẻ": "Choose card",
   "Ẩn số thẻ": "Hide card number",
@@ -726,10 +741,10 @@ const EN_DICT: Record<string, string> = {
   "Nhập OTP 6 số": "Enter 6-digit OTP",
   "Xác nhận": "Confirm",
   "OTP chưa đúng — thử lại.": "Incorrect OTP — try again.",
-  "{card} sẽ được trợ lý dùng thanh toán tự động.": "{card} will be used by the assistant for automatic payment.",
+  "{card} sẽ được trợ lý AAAI dùng thanh toán tự động.": "{card} will be used by the assistant for automatic payment.",
   "Dùng thẻ khác": "Use another card",
   "Dùng thẻ đã lưu": "Use saved card",
-  "Điền đủ để trợ lý tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng.": "Fill in fully so the assistant can pay automatically — or leave blank and enter at the ordering step.",
+  "Điền đủ để trợ lý AAAI tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng.": "Fill in fully so the assistant can pay automatically — or leave blank and enter at the ordering step.",
   "Album Mùa Hè Sôi Động 2026": "Vibrant Summer 2026 Album",
   "Âm nhạc và dự báo thời tiết": "Music and weather forecast",
   "Gửi đề nghị nhận nhạc bản quyền & khai thác thương mại": "Send a request for licensed music & commercial use",
@@ -832,7 +847,7 @@ const EN_DICT: Record<string, string> = {
   "Mở checkout Co.op": "Open Co.op checkout",
   "Đặt hàng Co.op thành công": "Co.op order placed successfully",
   "Đã tạo giỏ Co.op": "Co.op cart created",
-  "Trợ lý đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.": "The assistant is orchestrating a real order session on the source website and will pause at steps needing your confirmation / OTP / payment.",
+  "Trợ lý AAAI đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.": "The assistant is orchestrating a real order session on the source website and will pause at steps needing your confirmation / OTP / payment.",
   "Co.op đang dùng luồng thật: Affree đăng nhập bằng tài khoản Affree rồi thêm sản phẩm vào giỏ Co.op — bạn không cần tài khoản.": "Co.op uses the real flow: Affree logs in with the Affree account then adds products to the Co.op cart — you don't need an account.",
   "Nội dung: AFFREE {phone}": "Note: AFFREE {phone}",
   "Số lượng tối thiểu: {n} sản phẩm/đơn.": "Minimum quantity: {n} products/order.",
@@ -840,12 +855,12 @@ const EN_DICT: Record<string, string> = {
   "(+{n} tự thêm để đủ)": "(+{n} added automatically to meet minimum)",
   "(còn thiếu {amount})": "({amount} short)",
   "Email (nhận hoá đơn)": "Email (to receive invoice)",
-  "Trợ lý sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.": "The assistant will place a COD order — pay cash on delivery.",
-  "Trợ lý sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.": "The assistant will pause at the payment step for you to complete on the real website then confirm.",
-  "Thẻ đã lưu sẽ được trợ lý dùng thanh toán tự động.": "The saved card will be used by the assistant for automatic payment.",
+  "Trợ lý AAAI sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.": "The assistant will place a COD order — pay cash on delivery.",
+  "Trợ lý AAAI sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.": "The assistant will pause at the payment step for you to complete on the real website then confirm.",
+  "Thẻ đã lưu sẽ được trợ lý AAAI dùng thanh toán tự động.": "The saved card will be used by the assistant for automatic payment.",
   "Lưu thẻ để mua nhanh lần sau": "Save card for faster checkout next time",
   "Thông tin thẻ được mã hoá, không lưu số thẻ thật, không chia sẻ bên thứ 3.": "Card details are encrypted, real card numbers aren't stored, and nothing is shared with third parties.",
-  "Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý.": "The live TXNN flow will pause at the QR step for you to pay on the real website then confirm to the assistant.",
+  "Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý AAAI.": "The live TXNN flow will pause at the QR step for you to pay on the real website then confirm to the assistant.",
   "{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.": "{chain} supports: {payments}. Affree will open the payment screen when you need to complete the transaction.",
   "Đã dùng token cache Co.op để vào giỏ": "Used the Co.op cached token to enter the cart",
   "Affree đã đăng nhập Co.op bằng tài khoản Affree": "Affree logged into Co.op with the Affree account",
@@ -864,14 +879,14 @@ const EN_DICT: Record<string, string> = {
   "Đã gửi lựa chọn: {choice}": "Choice sent: {choice}",
   "Nhập OTP thật bạn vừa nhận được rồi bấm Gửi để worker tiếp tục.": "Enter the real OTP you just received then click Send for the worker to continue.",
   "📱 Bạn đã chọn QR chuyển khoản từ đầu — quét mã rồi bấm xác nhận.": "📱 You chose bank-transfer QR from the start — scan the code then click confirm.",
-  "💳 Thông tin thẻ chưa đủ — bổ sung để trợ lý thanh toán giúp bạn.": "💳 Card details are incomplete — add them so the assistant can pay for you.",
+  "💳 Thông tin thẻ chưa đủ — bổ sung để trợ lý AAAI thanh toán giúp bạn.": "💳 Card details are incomplete — add them so the assistant can pay for you.",
   "Đã chuyển khoản →": "Transferred →",
   "Xác nhận thẻ →": "Confirm card →",
   "💳 Bước 1: worker đang ưu tiên cast vùng QR ở đầu popup để bạn quét/thanh toán trước.": "💳 Step 1: the worker is prioritizing casting the QR area at the top of the popup so you scan/pay first.",
   "✅ Bước 2: sau khi thanh toán, worker đang focus vùng cuối popup để bạn bấm nút xác nhận trên website thật.": "✅ Step 2: after paying, the worker focuses the bottom of the popup so you click the confirm button on the real website.",
   "Thông tin đặt hàng": "Order info",
   "Tên người đặt": "Orderer name",
-  "Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.": "These two fields were sent to the worker when the session was created; if the source site currently doesn't render the matching fields, the assistant still keeps the correct buyer data to continue the payment flow.",
+  "Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý AAAI vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.": "These two fields were sent to the worker when the session was created; if the source site currently doesn't render the matching fields, the assistant still keeps the correct buyer data to continue the payment flow.",
   "Bước 1: mã QR thanh toán": "Step 1: payment QR code",
   "Bước 2: nút xác nhận cuối": "Step 2: final confirm button",
   "Worker đang crop vùng QR trong popup thật. Quét/chuyển khoản xong thì bấm nút chuyển xuống nút xác nhận.": "The worker is cropping the QR area in the real popup. After scanning/transferring, click to move down to the confirm button.",
@@ -882,7 +897,7 @@ const EN_DICT: Record<string, string> = {
   "Chuyển xuống nút xác nhận": "Move to confirm button",
   "Mở popup lớn để thao tác": "Open large popup to interact",
   "Mã QR thanh toán": "Payment QR code",
-  "Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.": "QR fallback: the worker couldn't cast the real payment popup. You can scan this code then report back for the assistant to verify.",
+  "Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý AAAI xác minh.": "QR fallback: the worker couldn't cast the real payment popup. You can scan this code then report back for the assistant to verify.",
   "Chưa lấy được popup-focus frame từ worker. Bạn có thể mở trang nguồn để thanh toán thủ công rồi quay lại báo hoàn tất.": "Couldn't get the popup-focus frame from the worker. You can open the source page to pay manually then come back to report completion.",
   "Đang kiểm tra thanh toán...": "Checking payment...",
   "Tôi đã thanh toán xong, xuống nút xác nhận": "I've finished paying, go to the confirm button",

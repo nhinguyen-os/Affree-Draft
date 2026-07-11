@@ -10,7 +10,7 @@ import { type Lang, tr } from "@/lib/i18n";
  * cấu trúc + style lấy theo form giỏ hàng (CartModal) làm chuẩn. Dùng cho form Mua cả túi
  * (TuiAgentModal) và các form đặt hàng khác cần chọn thanh toán giống giỏ.
  * State gói trong hook usePaymentState() để form cha đọc được method/cardReady cho gating
- * + các bước trợ lý.
+ * + các bước trợ lý AAAI.
  */
 
 // Loại thẻ chấp nhận — chip sáng theo đầu số đang gõ (đồng bộ CartModal).
@@ -37,7 +37,7 @@ export function detectCardBrand(num: string): CardBrand | null {
 
 export type PayMethod = "qr" | "card" | "cod";
 
-/** State thanh toán dùng chung giữa PaymentSection (UI) và form cha (gating + bước trợ lý). */
+/** State thanh toán dùng chung giữa PaymentSection (UI) và form cha (gating + bước trợ lý AAAI). */
 export function usePaymentState() {
   const [method, setMethod] = useState<PayMethod | null>(null);
   const [cardNumber, setCardNumber] = useState("");
@@ -54,6 +54,8 @@ export function usePaymentState() {
     return () => { alive = false; };
   }, []);
   const [useNewCard, setUseNewCard] = useState(false);
+  // Tick "Lưu thẻ để mua nhanh lần sau" — ĐỒNG BỘ với form Mua ngay / giỏ hàng.
+  const [saveForLater, setSaveForLater] = useState(true);
   // Xem full số thẻ đã lưu: bấm 👁 → OTP (mô phỏng) → nhập đúng mới hiện.
   const [otpCode, setOtpCode] = useState<string | null>(null);
   const [otpInput, setOtpInput] = useState("");
@@ -73,7 +75,7 @@ export function usePaymentState() {
 
   /** Gọi khi bắt đầu đặt: thẻ MỚI hợp lệ → lưu lại (localStorage, không CVV) cho lần sau. */
   const commitCard = () => {
-    if (method === "card" && !usingSavedCard && newCardReady) {
+    if (method === "card" && !usingSavedCard && newCardReady && saveForLater) {
       saveCard({ number: cardNumber, name: cardName, exp: cardExp, brand: detectCardBrand(cardNumber) });
     }
   };
@@ -81,7 +83,7 @@ export function usePaymentState() {
   return {
     method, setMethod,
     cardNumber, setCardNumber, cardName, setCardName, cardExp, setCardExp, cardCvv, setCardCvv,
-    savedCard, useNewCard, setUseNewCard,
+    savedCard, useNewCard, setUseNewCard, saveForLater, setSaveForLater,
     otpCode, setOtpCode, otpInput, setOtpInput, otpError, setOtpError,
     cardRevealed, setCardRevealed,
     usingSavedCard, newCardReady, cardReady, cardBrand, cardLast4,
@@ -93,7 +95,7 @@ export type PaymentState = ReturnType<typeof usePaymentState>;
 const CARD_INPUT_CLS =
   "w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100";
 
-/** Bộ 4 ô nhập thẻ mới — dùng ở section Thanh toán lẫn bước trợ lý (pause pay-card). */
+/** Bộ 4 ô nhập thẻ mới — dùng ở section Thanh toán lẫn bước trợ lý AAAI (pause pay-card). */
 export function CardInputs({ pay, lang = "vi" }: { pay: PaymentState; lang?: Lang }) {
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
   return (
@@ -128,7 +130,7 @@ export function CardInputs({ pay, lang = "vi" }: { pay: PaymentState; lang?: Lan
           maxLength={4}
           value={pay.cardCvv}
           onChange={(e) => pay.setCardCvv(e.target.value.replace(/\D/g, ""))}
-          placeholder="CVV"
+          placeholder="CVV •••"
           className={CARD_INPUT_CLS}
         />
       </div>
@@ -140,7 +142,7 @@ export default function PaymentSection({
   pay,
   lang = "vi",
   phone = "",
-  qrHintVi = "Trợ lý sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.",
+  qrHintVi = "Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.",
   className = "",
   methods = ["qr", "card", "cod"],
   flow = "agentic",
@@ -157,8 +159,8 @@ export default function PaymentSection({
   /** TUỲ LOẠI ĐƠN: phương thức được phép (vd nhạc = ["qr","card"], bỏ COD). */
   methods?: PayMethod[];
   /**
-   * "agentic" = trợ lý đặt hộ từng cửa hàng (QR/thẻ thao tác ở bước sau) — mặc định.
-   * "direct" = đặt trả ngay tại form (nhạc/sản phẩm số): QR hiện mã QUÉT NGAY, chữ không nhắc "trợ lý".
+   * "agentic" = trợ lý AAAI đặt hộ từng cửa hàng (QR/thẻ thao tác ở bước sau) — mặc định.
+   * "direct" = đặt trả ngay tại form (nhạc/sản phẩm số): QR hiện mã QUÉT NGAY, chữ không nhắc "trợ lý AAAI".
    */
   flow?: "agentic" | "direct";
   /** flow="direct" + method="qr": chuỗi encode vào QR để hiện mã quét ngay. null = chỉ hiện gợi ý. */
@@ -169,17 +171,17 @@ export default function PaymentSection({
   const t = (vi: string, vars?: Record<string, string | number>) => tr(lang, vi, vars);
   const maskedCardLabel = `${pay.cardBrand ?? t("Thẻ")} ****${pay.cardLast4}`;
   const direct = flow === "direct";
-  // Chữ ghi chú thẻ tuỳ flow: direct (trả ngay) không nhắc "trợ lý".
+  // Chữ ghi chú thẻ tuỳ flow: direct (trả ngay) không nhắc "trợ lý AAAI".
   const cardReadyNote =
     "✓ " +
     (direct
       ? t("Dùng {card} thanh toán.", { card: maskedCardLabel })
-      : t("{card} sẽ được trợ lý dùng thanh toán tự động.", { card: maskedCardLabel }));
+      : t("{card} sẽ được trợ lý AAAI dùng thanh toán tự động.", { card: maskedCardLabel }));
   const cardEmptyNote =
     "💳 " +
     (direct
       ? t("Điền đủ thông tin thẻ để đặt.")
-      : t("Điền đủ để trợ lý tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng."));
+      : t("Điền đủ để trợ lý AAAI tự thanh toán — hoặc bỏ trống, nhập ở bước đặt hàng."));
 
   // Bấm 👁: đang hiện → che lại; đang che → sinh OTP 6 số (mô phỏng), nhập đúng mới hiện.
   const requestRevealCard = () => {
@@ -254,10 +256,17 @@ export default function PaymentSection({
         )
       )}
 
-      {/* COD (chỉ khi methods có "cod"): thao tác ở bước trợ lý. */}
+      {/* COD (chỉ khi methods có "cod"): thao tác ở bước trợ lý AAAI. */}
       {pay.method === "cod" && (
         <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          {"💵 " + t("Thanh toán khi nhận hàng (COD) — nhân viên giao hàng thu tiền mặt.")}
+          {"💵 " + t("Trợ lý AAAI sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")}
+        </p>
+      )}
+
+      {/* Chú thích trên khi chọn Thẻ — chỉ luồng agentic (túi), ĐỒNG BỘ form Mua ngay/giỏ. */}
+      {pay.method === "card" && !direct && (
+        <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          💳 {t("Trợ lý AAAI sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
         </p>
       )}
 
@@ -343,7 +352,21 @@ export default function PaymentSection({
           )}
           {brandChipsRow}
           <CardInputs pay={pay} lang={lang} />
-          <p className="text-[11px] text-slate-400">{pay.cardReady ? cardReadyNote : cardEmptyNote}</p>
+          {/* direct (nhạc): giữ note ngắn; agentic (túi): checkbox "Lưu thẻ" + ghi chú bảo mật như form Mua ngay/giỏ. */}
+          {direct ? (
+            <p className="text-[11px] text-slate-400">{pay.cardReady ? cardReadyNote : cardEmptyNote}</p>
+          ) : (
+            <>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={pay.saveForLater} onChange={(e) => pay.setSaveForLater(e.target.checked)} className="accent-emerald-600" />
+                {t("Lưu thẻ để mua nhanh lần sau")}
+              </label>
+              <div className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                {t("Thông tin thẻ được mã hoá, không lưu số thẻ thật, không chia sẻ bên thứ 3.")}
+              </div>
+            </>
+          )}
         </div>
       )}
     </section>

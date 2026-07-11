@@ -196,11 +196,23 @@ export function parsePriorityCsv(csv: string): PriorityProfile[] {
   return out;
 }
 
-/** Chuyển Google Drive /view link → direct image URL (uc?export=view). */
+/**
+ * Chuẩn hoá link Google Drive → URL ảnh trực tiếp (lh3.googleusercontent.com/d/<id>).
+ * Nhận cả 3 dạng thường bị dán nhầm: "file/d/<id>", "open?id=<id>", "uc?id=<id>".
+ * Link THƯ MỤC ("/drive/.../folders/<id>") KHÔNG phải ảnh → trả "" để caller hiện fallback
+ * (chữ viết tắt) thay vì icon ảnh vỡ. (Vd Astra Bean từng dán nhầm link folder.)
+ */
 function normalizeDriveUrl(url: string): string {
   if (!url) return url;
-  const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
-  if (m) return `https://lh3.googleusercontent.com/d/${m[1]}`;
+  // Link thư mục: không có ảnh đơn để hiển thị → coi như không có logo.
+  if (/drive\.google\.com\/(drive\/|.*\/folders\/)/.test(url)) return "";
+  // file/d/<id>/view
+  const mFile = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+  // Kèm =s0 (giữ size gốc): lh3 .../d/<id> TRẦN trả HTML 0-byte khi fetch phía server → thêm size mới ra ảnh.
+  if (mFile) return `https://lh3.googleusercontent.com/d/${mFile[1]}=s0`;
+  // open?id=<id> hoặc uc?export=view&id=<id>
+  const mId = url.match(/drive\.google\.com\/[^?]*\?[^#]*\bid=([^&#]+)/);
+  if (mId) return `https://lh3.googleusercontent.com/d/${mId[1]}=s0`;
   return url;
 }
 

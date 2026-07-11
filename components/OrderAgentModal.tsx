@@ -21,7 +21,7 @@ import { startBHXOrder, submitBHXOtp, submitBHXFinalConfirm, type BhxOrderRuntim
 
 /**
  * BẢN GIẢ LẬP (mock) — không gọi web thật.
- * Mô phỏng "trợ lý ảo" tự thao tác đặt hàng trên web cửa hàng, và DỪNG LẠI
+ * Mô phỏng "trợ lý AAAI ảo" tự thao tác đặt hàng trên web cửa hàng, và DỪNG LẠI
  * ở những bước chỉ con người làm được: nhập OTP, xác minh CAPTCHA, và bấm
  * xác nhận đặt hàng cuối cùng. Mục đích: cho thấy CƠ CHẾ pause → user nhập →
  * resume trước khi làm thật.
@@ -360,7 +360,7 @@ export default function OrderAgentModal({
     saveProfile({ name, phone, address });
   }, [name, phone, address]);
 
-  // Trạng thái chạy của trợ lý
+  // Trạng thái chạy của trợ lý AAAI
   const [stepIndex, setStepIndex] = useState(0);
   const placedRef = useRef(false);
   const [otp, setOtp] = useState("");
@@ -380,6 +380,8 @@ export default function OrderAgentModal({
   // KHÔNG mặc định chọn phương thức thanh toán — user tự chọn (null = chưa chọn).
   const [demoPayMethod, setDemoPayMethod] = useState<DemoPayMethod | null>(null);
   const [cardNum, setCardNum] = useState("");
+  // Tên chủ thẻ — ô riêng, ĐỒNG BỘ với form giỏ hàng (CartModal): bắt buộc điền, lưu kèm thẻ.
+  const [cardName, setCardName] = useState("");
   const [cardExp, setCardExp] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   const [cardSaved, setCardSaved] = useState(true);
@@ -396,7 +398,7 @@ export default function OrderAgentModal({
   const [useNewCard, setUseNewCard] = useState(false);
   const usingSavedCard = !!savedCard && !useNewCard;
   // Thẻ "sẵn sàng" — thẻ đã lưu, hoặc thẻ mới điền đủ ngay ở form (số + hạn + CVV) — như giỏ hàng.
-  const newCardReady = cardNum.replace(/\s/g, "").length >= 12 && /^\d{2}\/\d{2}$/.test(cardExp) && cardCvv.length >= 3;
+  const newCardReady = cardNum.replace(/\s/g, "").length >= 12 && cardName.trim().length > 0 && /^\d{2}\/\d{2}$/.test(cardExp) && cardCvv.length >= 3;
   const cardReady = usingSavedCard || newCardReady;
   const cardLast4 = (usingSavedCard && savedCard ? savedCard.number : cardNum).replace(/\D/g, "").slice(-4);
   // Loại thẻ + số che ****: hiện ở chỗ tóm tắt "Thanh toán" (đồng bộ maskedCardLabel của giỏ/túi).
@@ -448,7 +450,7 @@ export default function OrderAgentModal({
       setCardOtpError(true);
     }
   };
-  // Chọn "Thẻ" + dùng thẻ đã lưu → prefill số/hạn thẻ để bước trợ lý hiện sẵn, không bắt nhập lại.
+  // Chọn "Thẻ" + dùng thẻ đã lưu → prefill số/hạn thẻ để bước trợ lý AAAI hiện sẵn, không bắt nhập lại.
   useEffect(() => {
     if (demoPayMethod === "card" && usingSavedCard && savedCard && !cardNum) {
       setCardNum(savedCard.number);
@@ -592,7 +594,7 @@ export default function OrderAgentModal({
         s.push({ kind: "auto", label: t('Chọn đơn vị vận chuyển "{ship}" ({eta})…', { ship: t(shipSel.label), eta: t(shipSel.eta) }) });
       }
 
-      // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý áp dụng luôn, không hỏi lại.
+      // Phương thức thanh toán đã chọn ở form đặt hàng — trợ lý AAAI áp dụng luôn, không hỏi lại.
       // QR/Thẻ vẫn dừng để khách quét mã / nhập thẻ; COD chạy thẳng.
       if (demoPayMethod === "qr") {
         s.push({ kind: "payment-select", label: t("Thanh toán QR chuyển khoản") });
@@ -2524,20 +2526,17 @@ export default function OrderAgentModal({
         <div className="pointer-events-none absolute inset-x-0 top-0 h-20 rounded-t-3xl" style={{ background: "linear-gradient(170deg, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.06) 60%, rgba(255,255,255,0) 100%)" }} />
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/20 px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-bold text-slate-900">
-              {
-                phase === "done"
-                  ? isCoopReal
-                    ? t("Đã tạo giỏ Co.op")
-                    : t("Đã đặt hàng")
-                  : t("Phục vụ bởi Affree Agentic AI - AAAI")
-              }
-              {/* tên cũ: "Đặt hàng bằng trợ lý ảo" */}
-            </h2 >
-            <p className="truncate text-xs text-slate-700">
-              {activeOffer.product.name} · {chain}
-            </p>
+          <div className="min-w-0 flex-1">
+            {phase === "done" ? (
+              <h2 className="truncate text-base font-bold text-slate-900">
+                {isCoopReal ? t("Đã tạo giỏ Co.op") : t("Đã đặt hàng")}
+              </h2>
+            ) : (
+              // Header = "sản phẩm · cửa hàng"; dài hơn khung → tự chạy chữ (MarqueeText).
+              <MarqueeText className="text-base font-bold text-slate-900">
+                {`${activeOffer.product.name} · ${chain}`}
+              </MarqueeText>
+            )}
           </div >
           <button
             onClick={handleCloseModal}
@@ -2551,7 +2550,7 @@ export default function OrderAgentModal({
         </div >
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
-          {/* Banner: trợ lý thật, có human-gated checkpoints */}
+          {/* Banner: trợ lý AAAI thật, có human-gated checkpoints */}
           {/* Banner: bản mô phỏng */}
           <div
             className={`mb-4 rounded-lg border px-3 py-2 text-xs ${isTXNNReal
@@ -2563,13 +2562,13 @@ export default function OrderAgentModal({
           >
             {
               isTXNNReal
-                ? "🤝 " + t("Trợ lý đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
+                ? "🤝 " + t("Trợ lý AAAI đang điều phối phiên đặt hàng thật trên website nguồn và sẽ dừng ở các bước cần bạn xác nhận / OTP / thanh toán.")
                 : isCoopReal
                   ? t("Co.op đang dùng luồng thật: Affree đăng nhập bằng tài khoản Affree rồi thêm sản phẩm vào giỏ Co.op — bạn không cần tài khoản.")
-                  : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý tự thao tác và dừng lại khi cần bạn.")}
+                  : t("Bản mô phỏng — chưa kết nối web thật. Dùng để xem cơ chế trợ lý AAAI tự thao tác và dừng lại khi cần bạn.")}
           </div>
 
-          {/* Recap khi trợ lý chạy: sản phẩm + QR của source đặt TRÊN, tiến trình nằm dưới */}
+          {/* Recap khi trợ lý AAAI chạy: sản phẩm + QR của source đặt TRÊN, tiến trình nằm dưới */}
           {phase === "running" && (
             <div className="mb-4 flex items-stretch gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -2911,8 +2910,10 @@ export default function OrderAgentModal({
                   ) : (
                     <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
                       {demoPayMethod === "cod"
-                        ? "💵 " + t("Trợ lý sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
-                        : (demoPayMethod === "qr" ? "📱 " : "💳 ") + t("Trợ lý sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
+                        ? "💵 " + t("Trợ lý AAAI sẽ đặt đơn COD — trả tiền mặt khi nhận hàng.")
+                        : demoPayMethod === "qr"
+                          ? "📱 " + t("Trợ lý AAAI sẽ hiện mã QR để bạn quét tại từng cửa hàng khi đặt.")
+                          : "💳 " + t("Trợ lý AAAI sẽ dừng ở bước thanh toán để bạn hoàn tất trên website thật rồi xác nhận lại.")}
                     </p>
                   )}
 
@@ -3000,7 +3001,7 @@ export default function OrderAgentModal({
                       )}
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-[11px] text-slate-400">
-                          {"✓ " + t("Thẻ đã lưu sẽ được trợ lý dùng thanh toán tự động.")}
+                          {"✓ " + t("Thẻ đã lưu sẽ được trợ lý AAAI dùng thanh toán tự động.")}
                         </p>
                         <button
                           type="button"
@@ -3033,6 +3034,13 @@ export default function OrderAgentModal({
                         placeholder={t("Số thẻ") + " 0000 0000 0000 0000"}
                         className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                       />
+                      <input
+                        type="text"
+                        value={cardName}
+                        onChange={(e) => setCardName(e.target.value.toUpperCase())}
+                        placeholder={t("Tên chủ thẻ")}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                      />
                       <div className="flex gap-2">
                         <input
                           type="text"
@@ -3049,7 +3057,7 @@ export default function OrderAgentModal({
                           type="password"
                           maxLength={4}
                           value={cardCvv}
-                          onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                          onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
                           placeholder="CVV •••"
                           className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-mono outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                         />
@@ -3073,7 +3081,7 @@ export default function OrderAgentModal({
                   </div>
                   <p className="mt-1 text-[11px] text-slate-400">
                     {usesQrPayment
-                      ? t("Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý.")
+                      ? t("Flow TXNN live sẽ dừng ở bước QR để bạn thanh toán trên website thật rồi xác nhận lại cho trợ lý AAAI.")
                       : isCoopReal
                         ? t("{chain} hỗ trợ: {payments}. Affree sẽ mở màn hình thanh toán khi cần bạn hoàn tất giao dịch.", { chain, payments: cfg.payments.join(" · ") })
                         : t("{chain} hỗ trợ: {payments}. Affree chỉ đặt COD — không thu thập thông tin thẻ.", { chain, payments: cfg.payments.join(" · ") })}
@@ -3101,7 +3109,7 @@ export default function OrderAgentModal({
           )
           }
 
-          {/* PHASE 2: trợ lý chạy */}
+          {/* PHASE 2: trợ lý AAAI chạy */}
           {phase === "running" && isCoopReal && (
             <div className="space-y-3">
               <ol className="space-y-2.5">
@@ -3201,7 +3209,7 @@ export default function OrderAgentModal({
 
                         {/* Khối tương tác khi tới bước cần người */}
                         {isCurrent && s.kind === "login" && (
-                          <PauseBox tone="blue" hint={t("🔐 Trợ lý KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý AAAI KHÔNG nhập mật khẩu giúp bạn. Bạn tự đăng nhập rồi bấm tiếp.")}>
                             <button
                               onClick={() => {
                                 if (usesServerTimeline) {
@@ -3218,7 +3226,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "otp" && (
-                          <PauseBox tone="blue" hint={t("🔐 Trợ lý không tự đọc được OTP — bạn nhập mã giúp.")}>
+                          <PauseBox tone="blue" hint={t("🔐 Trợ lý AAAI không tự đọc được OTP — bạn nhập mã giúp.")}>
                             {!isBHXReal && !usesServerTimeline && !simOtp ? (
                               <div className="mb-2 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-500">
                                 <Spinner />
@@ -3296,7 +3304,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "captcha" && (
-                          <PauseBox tone="amber" hint={t("🤖 Trợ lý không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
+                          <PauseBox tone="amber" hint={t("🤖 Trợ lý AAAI không vượt CAPTCHA. Bạn xác minh giúp (mô phỏng).")}>
                             <button
                               onClick={() => {
                                 if (usesServerTimeline) {
@@ -3318,7 +3326,7 @@ export default function OrderAgentModal({
                         {isCurrent && s.kind === "payment-select" && (
                           <PauseBox tone="blue" hint={demoPayMethod === "qr"
                             ? t("📱 Bạn đã chọn QR chuyển khoản từ đầu — quét mã rồi bấm xác nhận.")
-                            : t("💳 Thông tin thẻ chưa đủ — bổ sung để trợ lý thanh toán giúp bạn.")}>
+                            : t("💳 Thông tin thẻ chưa đủ — bổ sung để trợ lý AAAI thanh toán giúp bạn.")}>
                             <div className="space-y-2">
                               {/* Phương thức đã chọn ở form đặt hàng — không hiện lại lựa chọn ở đây */}
                               {/* QR: KHÔNG vẽ lại ở bước này — mã đã hiện sẵn ở recap phía trên
@@ -3334,6 +3342,15 @@ export default function OrderAgentModal({
                                       value={cardNum}
                                       onChange={(e) => setCardNum(e.target.value.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim())}
                                       placeholder="1234 5678 9012 3456"
+                                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[11px] font-medium text-slate-500">{t("Tên chủ thẻ")}</label>
+                                    <input
+                                      value={cardName}
+                                      onChange={(e) => setCardName(e.target.value.toUpperCase())}
+                                      placeholder={t("Tên chủ thẻ")}
                                       className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
                                     />
                                   </div>
@@ -3354,7 +3371,7 @@ export default function OrderAgentModal({
                                       <label className="text-[11px] font-medium text-slate-500">CVV</label>
                                       <input
                                         value={cardCvv}
-                                        onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                                        onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
                                         placeholder="•••"
                                         type="password"
                                         className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
@@ -3400,7 +3417,7 @@ export default function OrderAgentModal({
                                 </label>
                               </div>
                               <p className="text-[11px] text-slate-400">
-                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
+                                {t("Hai thông tin này đã được gửi sang worker từ lúc tạo phiên; nếu site nguồn hiện không render field tương ứng, trợ lý AAAI vẫn giữ đúng dữ liệu buyer để tiếp tục flow thanh toán.")}
                               </p>
                             </div>
 
@@ -3477,7 +3494,7 @@ export default function OrderAgentModal({
                                   className="mx-auto max-h-72 w-auto rounded-lg border border-slate-200 bg-white"
                                 />
                                 <p className="mt-2 text-center text-xs text-slate-500">
-                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý xác minh.")}
+                                  {t("Fallback QR: worker chưa cast được popup thanh toán thật. Bạn có thể quét mã này rồi báo lại cho trợ lý AAAI xác minh.")}
                                 </p>
                               </div>
                             ) : (
@@ -3517,7 +3534,7 @@ export default function OrderAgentModal({
                         )}
 
                         {isCurrent && s.kind === "confirm" && (
-                          <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý mới đặt.")}>
+                          <PauseBox tone="emerald" hint={t("✋ Bước cuối không thể hoàn tác — bạn duyệt rồi trợ lý AAAI mới đặt.")}>
                             <div className="space-y-1.5 rounded-lg bg-white p-2.5 text-sm">
                               <Row k={t("Tên người đặt")} v={name} />
                               <Row k={t("Số điện thoại")} v={phone} />
@@ -3567,7 +3584,7 @@ export default function OrderAgentModal({
               <p className="mt-1 text-sm text-slate-500">
                 {isCoopReal
                   ? t("Affree đã login bằng luồng thật và tạo giỏ trong tài khoản {chain}. Mã giỏ:", { chain })
-                  : t("Trợ lý đã đặt đơn trên {chain}. Mã đơn:", { chain })}
+                  : t("Trợ lý AAAI đã đặt đơn trên {chain}. Mã đơn:", { chain })}
               </p>
               <p className="mt-1 text-base font-bold tracking-wide text-emerald-600">{orderCode}</p>
 
@@ -3756,7 +3773,7 @@ export default function OrderAgentModal({
           }
         </div >
 
-        {/* Footer sticky — Tạm tính + nút "Để trợ lý đặt giúp" luôn hiển thị (kể cả khi
+        {/* Footer sticky — Tạm tính + nút "Để trợ lý AAAI đặt giúp" luôn hiển thị (kể cả khi
             content trong popup dài tràn). Trước đây nút nằm trong vùng scroll → user
             phải cuộn xuống mới thấy, dễ tưởng popup bị cắt. */}
         {
@@ -3779,7 +3796,7 @@ export default function OrderAgentModal({
                 </div>
               ) : (
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-800">{t("Tạm tính")}</span>
+                  <span className="text-sm font-medium text-slate-800">{t("Tổng cộng")}</span>
                   <span className="text-lg font-bold text-emerald-600">{formatMoney(total, storeCurrency(activeOffer.store.id))}</span>
                 </div>
               )}
@@ -3789,7 +3806,7 @@ export default function OrderAgentModal({
                   flushProfile({ name, phone, address });
                   // Thẻ mới đủ thông tin + tick "Lưu thẻ" → nhớ lại cho lần sau (localStorage, không rời máy).
                   if (demoPayMethod === "card" && !usingSavedCard && cardSaved && cardNum.replace(/\s/g, "").length >= 12 && /^\d{2}\/\d{2}$/.test(cardExp)) {
-                    saveCard({ number: cardNum, name: name.trim().toUpperCase(), exp: cardExp, brand: null });
+                    saveCard({ number: cardNum, name: cardName.trim() || name.trim().toUpperCase(), exp: cardExp, brand: detectCardBrand(cardNum) });
                   }
                   // Snapshot: thẻ đã đủ ngay ở form → bước thẻ tự chạy, không hỏi nhập lại.
                   setCardConfirmed(demoPayMethod === "card" && cardReady);
@@ -3816,9 +3833,15 @@ export default function OrderAgentModal({
                   ? t("Đang tạo phiên đặt hàng…")
                   : coopBusy
                     ? t("Đang kết nối Co.op…")
-                    : isCoopReal
-                      ? t("Kết nối Co.op và thêm vào giỏ →")
-                      : t("Để trợ lý đặt giúp →")}
+                    : <>
+                        {/* Icon giỏ hàng — ĐỒNG BỘ với nút của form Giỏ hàng (CartModal) */}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="9" cy="21" r="1" />
+                          <circle cx="20" cy="21" r="1" />
+                          <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                        </svg>
+                        {t("Để trợ lý AAAI đặt giúp →").replace(/\s*→\s*/g, "")} (1 {t("cửa hàng")})
+                      </>}
               </button>
               {!canStart && (
                 <p className="mt-1.5 text-center text-xs text-slate-400">
@@ -3829,6 +3852,9 @@ export default function OrderAgentModal({
                       : t("Nhập đủ tên, số điện thoại và địa chỉ để bắt đầu.")}
                 </p>
               )}
+              <p className="mt-1.5 text-center text-[10px] text-slate-400">
+                {t("Phục vụ bởi Affree Agentic AI - AAAI")}
+              </p>
             </div>
           )
         }

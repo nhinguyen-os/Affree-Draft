@@ -22,6 +22,8 @@ export interface DealRow {
   currency: string;
   storeName: string;
   storeChain: string;
+  /** id cửa hàng THẬT bán deal này — để bấm tên cửa hàng mở trang cửa hàng đó. */
+  storeId?: string;
   km: number | null;
 }
 
@@ -59,9 +61,11 @@ interface Props {
   onAdd: (product: Product) => void;
   onBuy: (product: Product) => void;
   cartQtyFor: (productId: string) => number;
+  /** Bấm tên cửa hàng trên card → mở trang cửa hàng đó (chỉ khi row có storeName). */
+  onStore?: (deal: DealRow) => void;
 }
 
-export default function NearbyDeals({ rows, radiusKm, setRadiusKm, effKm, userLoc, lang, query = "", onInfo, onAdd, onBuy, cartQtyFor }: Props) {
+export default function NearbyDeals({ rows, radiusKm, setRadiusKm, effKm, userLoc, lang, query = "", onInfo, onAdd, onBuy, cartQtyFor, onStore }: Props) {
   const t = (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [arrows, setArrows] = useState({ left: false, right: false });
@@ -183,7 +187,22 @@ export default function NearbyDeals({ rows, radiusKm, setRadiusKm, effKm, userLo
                 <span className="text-[11px] text-slate-400 line-through">{formatMoney(d.was, d.currency)}</span>
               </div>
               <div className="mt-0.5 text-[11px] font-medium text-emerald-600">{t("Tiết kiệm {x}", { x: formatMoney(d.save, d.currency) })}</div>
-              <div className="mt-1 min-h-[16px] text-[11px] text-slate-500">{d.storeName && <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>}</div>
+              <div className="mt-1 min-h-[16px] text-[11px] text-slate-500">
+                {d.storeName && (
+                  onStore && (d.storeChain || d.storeId) ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onStore(d); }}
+                      title={t("Xem tất cả sản phẩm của {store}", { store: d.storeName })}
+                      className="flex w-full items-center gap-0.5 text-left font-medium text-emerald-700 transition hover:text-emerald-800 hover:underline"
+                    >
+                      <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>
+                    </button>
+                  ) : (
+                    <MarqueeText>{`🛒 ${d.storeName}`}</MarqueeText>
+                  )
+                )}
+              </div>
               <div className="mt-0.5 min-h-[16px] line-clamp-1 text-[11px] font-medium text-emerald-600">{d.km != null && <>📍 {t("cách bạn {km} km", { km: d.km.toFixed(1) })}</>}</div>
               {d.storeChain && chainMinOrder(d.storeChain) > 0 && (
                 <div className="mt-0.5 text-[10px] font-medium text-blue-500">{t("Mua tối thiểu {x}", { x: formatMoney(chainMinOrder(d.storeChain), d.currency) })}</div>

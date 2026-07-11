@@ -8,7 +8,7 @@ import { fetchDiscountMap } from "@/lib/sheet-discount";
 import { fetchSheetStores } from "@/lib/sheet-stores";
 import { fetchChainMinOrders } from "@/lib/sheet-store-rules";
 import { fetchSources } from "@/lib/sheet-sources";
-import { setDynamicStores, storeCurrency } from "@/lib/stores";
+import { setDynamicStores, setStoreCurrencies, storeCurrency } from "@/lib/stores";
 import type { Catalog, Chain, Offer, Product } from "@/lib/types";
 
 // KHÔNG prerender: response 10MB không cache được Next.js data cache (>2MB), nên prerender
@@ -93,8 +93,8 @@ export async function GET() {
   // Nạp danh sách cửa hàng vật lý từ tab "stores" + cấu hình tệp/ưu tiên hiển thị
   // (tab "tệp" & "ưu tiên hiển thị") song song TRƯỚC khi parse catalog.
   // Mọi nguồn sheet (admin sửa) dùng chung 30s để sửa sheet → reload là thấy gần như ngay.
-  const [, sheetGroups, similarGroups, discountMap, tui, minOrders, sources] = await Promise.all([
-    fetchSheetStores(30).then(setDynamicStores),
+  const [sheetStores, sheetGroups, similarGroups, discountMap, tui, minOrders, sources] = await Promise.all([
+    fetchSheetStores(30),
     fetchSheetGroups(30),
     fetchSimilarGroups(30),
     fetchDiscountMap(30),
@@ -102,8 +102,22 @@ export async function GET() {
     fetchChainMinOrders(60),
     fetchSources(60),
   ]);
+  setDynamicStores(sheetStores);
   const sourceLogos = sources.logos;
   const sourceNames = sources.names;
+
+  // Bảng tiền tệ dựng từ tab "Cửa hàng" (nguồn chuẩn) → gửi xuống client để "mọi sản phẩm
+  // lấy tiền tệ theo sheet cửa hàng", không phụ thuộc region-scope hay nguồn Map Server
+  // (Map Server không có cột Currency). Chỉ ghi store/chain có khai currency (giảm payload).
+  const storeCurrencies: Record<string, string> = {};
+  const chainCurrencies: Record<string, string> = {};
+  for (const s of sheetStores ?? []) {
+    if (!s.currency) continue;
+    const cur = s.currency.toUpperCase();
+    storeCurrencies[s.id] = cur;
+    if (s.chain) chainCurrencies[s.chain] = cur;
+  }
+  setStoreCurrencies(storeCurrencies, chainCurrencies);
 
   /**
    * Gắn cấu hình tệp/ưu tiên từ Google Sheet vào catalog — CHỈ khi catalog chưa
@@ -150,6 +164,8 @@ export async function GET() {
     minOrders,
     sourceLogos,
     sourceNames,
+    storeCurrencies,
+    chainCurrencies,
   });
 
   // Nguồn CHÍNH: đọc catalog thẳng từ sheet "Danh sách sản phẩm" (CSV). Lỗi/rỗng → rơi

@@ -2,20 +2,27 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatVnd } from "@/lib/util";
+import { formatMoney } from "@/lib/util";
 import { Logo } from "@/components/Logo";
 import { type Lang, langForCountry, readSavedCountry, tr } from "@/lib/i18n";
 import { fetchMe, type AuthUser } from "@/lib/auth";
+import { chainCurrency } from "@/lib/stores";
+import type { Chain } from "@/lib/types";
 
 type OrderRow = {
   id?: string;
   bought_at?: string;
   product_name?: string;
   store_name?: string;
+  /** Chuỗi/nguồn (tab purchases) — dùng suy tiền tệ. Có thể vắng nếu backend chưa trả cột này. */
+  chain?: string;
   qty?: number | string;
   unit_price?: number | string;
   total?: number | string;
 };
+
+/** Tiền tệ của 1 đơn — suy từ chain (nếu backend trả), fallback VND. */
+const orderCur = (o: OrderRow) => chainCurrency((o.chain ?? "") as Chain);
 
 /** Trang "Đơn hàng của tôi" — CHỈ danh sách đơn theo SĐT. Hồ sơ ở trang riêng /account. */
 export default function AccountOrdersPage() {
@@ -83,8 +90,8 @@ export default function AccountOrdersPage() {
                           )}
                         </div>
                         <div className="text-right">
-                          <div className="font-bold">{formatVnd(num(o.total))}</div>
-                          <div className="text-xs text-slate-500">{num(o.qty)} × {formatVnd(num(o.unit_price))}</div>
+                          <div className="font-bold">{formatMoney(num(o.total), orderCur(o))}</div>
+                          <div className="text-xs text-slate-500">{num(o.qty)} × {formatMoney(num(o.unit_price), orderCur(o))}</div>
                         </div>
                       </div>
                     </li>

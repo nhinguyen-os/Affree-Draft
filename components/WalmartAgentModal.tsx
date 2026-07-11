@@ -5,6 +5,7 @@ import type { RankedOffer } from "@/lib/types";
 import { chainLabel, storeCurrency } from "@/lib/stores";
 import { formatMoney } from "@/lib/util";
 import { type Lang, tr } from "@/lib/i18n";
+import { MarqueeText } from "./MarqueeText";
 
 type Phase = "form" | "connecting" | "running" | "interactive" | "done" | "failed";
 type VariantOption = {
@@ -224,7 +225,7 @@ export default function WalmartAgentModal({
     if (!canStart) return;
     wsRef.current?.close();
     setAgentError("");
-    setAgentMessage(t("Đang kết nối trợ lý Walmart..."));
+    setAgentMessage(t("Đang kết nối trợ lý AAAI Walmart..."));
     setPauseContext(null);
     setRunIdx(0);
     setPhase("connecting");
@@ -237,7 +238,7 @@ export default function WalmartAgentModal({
       ws.onopen = () => {
         setPhase("running");
         setRunIdx(1);
-        setAgentMessage(t("Trợ lý đã kết nối, đang kiểm tra tài khoản Walmart..."));
+        setAgentMessage(t("Trợ lý AAAI đã kết nối, đang kiểm tra tài khoản Walmart..."));
         sendOrder(ws);
       };
       ws.onmessage = (event) => {
@@ -307,7 +308,7 @@ export default function WalmartAgentModal({
             setPhase("done");
             onPlaced(code, offer);
           } else if (message.phase === "failed" || message.phase === "cancelled") {
-            setAgentError(String(message.error || t("Trợ lý Walmart chưa hoàn tất được đơn hàng.")));
+            setAgentError(String(message.error || t("Trợ lý AAAI Walmart chưa hoàn tất được đơn hàng.")));
             setPauseContext(null);
             setPhase("failed");
           }
@@ -341,7 +342,7 @@ export default function WalmartAgentModal({
     }
     setPauseContext(null);
     setPhase("running");
-    setAgentMessage(t("Đã nhận thao tác, trợ lý đang tiếp tục..."));
+    setAgentMessage(t("Đã nhận thao tác, trợ lý AAAI đang tiếp tục..."));
   }
 
   function handleColorSelect(group: string, option: VariantOption) {
@@ -460,11 +461,14 @@ export default function WalmartAgentModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200/70 px-4 py-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-bold text-slate-800">
-              {phase === "done" ? t("Đã đặt hàng Walmart") : t("Phục vụ bởi Affree Agentic AI - AAAI")}
-            </h2>
-            <p className="truncate text-xs text-slate-600">{offer.product.name} · {chain}</p>
+          <div className="min-w-0 flex-1">
+            {phase === "done" ? (
+              <h2 className="truncate text-base font-bold text-slate-800">{t("Đã đặt hàng Walmart")}</h2>
+            ) : (
+              <MarqueeText className="text-base font-bold text-slate-800">
+                {`${offer.product.name} · ${chain}`}
+              </MarqueeText>
+            )}
           </div>
           <button type="button" onClick={onClose} className="shrink-0 rounded-full p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label={t("Đóng")}>
             <CloseIcon />
@@ -688,12 +692,15 @@ export default function WalmartAgentModal({
               onClick={startAgentOrder}
               className="flex h-11 w-full items-center justify-center rounded-xl bg-[#0071dc] text-sm font-bold text-white shadow-[0_10px_24px_rgba(0,113,220,0.18)] transition hover:bg-[#045ba8] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
             >
-              {t("Để trợ lý đặt giúp →")}
+              {t("Để trợ lý AAAI đặt giúp →").replace(/\s*→\s*/g, "")} (1 {t("cửa hàng")})
             </button>
             <p className="mt-2 text-center text-xs font-medium text-slate-400">
               {canStart
-                ? t("Trợ lý sẽ dùng tài khoản đặt hộ, cho chọn biến thể nếu có, rồi mới thêm vào giỏ.")
+                ? t("Trợ lý AAAI sẽ dùng tài khoản đặt hộ, cho chọn biến thể nếu có, rồi mới thêm vào giỏ.")
                 : t("Nhập đủ email, số điện thoại và địa chỉ giao hàng tại Mỹ để bắt đầu.")}
+            </p>
+            <p className="mt-1.5 text-center text-[10px] text-slate-400">
+              {t("Phục vụ bởi Affree Agentic AI - AAAI")}
             </p>
           </div>
         )}

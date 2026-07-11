@@ -68,7 +68,8 @@ let dynamicMinOrders: Record<string, number> | null = null;
 let dynamicSourceLogos: Record<string, string> | null = null;
 let dynamicSourceNames: Record<string, string> | null = null;
 
-/** Nạp map logo theo chain từ sheet (key SLUG-hoá). null/rỗng → dùng logo tĩnh. */
+/** Nạp map logo theo chain từ sheet (key SLUG-hoá). null/rỗng → dùng logo tĩnh.
+ *  (Link Google Drive đã được chuẩn hoá sang URL ảnh trực tiếp ở server — lib/sheet-sources.ts.) */
 export function setDynamicSourceLogos(map: Record<string, string> | null): void {
   if (!map || Object.keys(map).length === 0) { dynamicSourceLogos = null; return; }
   dynamicSourceLogos = Object.fromEntries(
@@ -122,6 +123,18 @@ function chainSlugify(s: string): string {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * Slug key GỐC của chuỗi khi `chain` thật ra là store-id dạng "LongMonaco_00001" /
+ * "astrabean_2" / "bhx-q1" (offer chưa resolve được store → chain = nguyên store-id).
+ * Bỏ hậu tố "-/_ + số" ở cuối rồi lấy phần trước "-" → "longmonaco" / "astrabean" / "bhx".
+ * Dùng làm KEY dự phòng khi slug đầy đủ không khớp map logo/tên nguồn.
+ */
+function chainBaseKey(chain: Chain): string {
+  const base = (chain ?? "").replace(/[-_]\d+$/, "");
+  const head = base.includes("-") ? base.split("-")[0] : base;
+  return chainSlugify(head);
+}
+
 /** Tìm chain (vd "astrabean") từ slug URL — match cả KEY và label trong SOURCE_META. */
 export function findChainBySlug(slug: string): Chain | null {
   const s = chainSlugify(slug);
@@ -146,7 +159,8 @@ export function chainColor(chain: Chain): string {
 export function chainLogo(chain: Chain): string | undefined {
   const key = (chain ?? "").toLowerCase();
   if (dynamicSourceLogos) {
-    const sl = dynamicSourceLogos[chainSlugify(chain)];
+    // Khớp slug đầy đủ trước; nếu chain là store-id "LongMonaco_00001" → thử key gốc "longmonaco".
+    const sl = dynamicSourceLogos[chainSlugify(chain)] ?? dynamicSourceLogos[chainBaseKey(chain)];
     if (sl) return sl;
   }
   const meta = SOURCE_META[chain] ?? SOURCE_META[key];
@@ -256,11 +270,64 @@ export function getStore(id: string): Store | undefined {
 }
 
 /**
- * Tiền tệ của một cửa hàng (theo store_id). Ưu tiên cột currency từ tab "stores",
- * fallback theo tiền tệ mặc định của nguồn (SOURCE_META), cuối cùng "VND".
+ * Bảng tiền tệ nạp từ TOÀN BỘ tab "Cửa hàng" (nguồn chuẩn). Tách riêng khỏi dynamicStores
+ * vì trên CLIENT, dynamicStores bị ghi đè bằng cửa hàng từ Map Server (không có cột Currency)
+ * và bị region-scope cắt cửa hàng ngoài vùng (vd Walmart ở Mỹ) → getStore() không còn thấy
+ * currency. Map này do /api/catalog dựng từ sheet cửa hàng rồi gửi thẳng xuống client nên
+ * "mọi sản phẩm đều lấy tiền tệ theo cấu hình ở sheet cửa hàng", không phụ thuộc scope.
+ */
+let sheetCurrencyById: Record<string, string> | null = null;
+let sheetCurrencyByChain: Record<string, string> | null = null;
+
+/** Nạp bảng tiền tệ theo store_id + theo chain (từ sheet cửa hàng). null/rỗng → bỏ qua. */
+export function setStoreCurrencies(
+  byId: Record<string, string> | null,
+  byChain?: Record<string, string> | null,
+): void {
+  const clean = (m?: Record<string, string> | null, slugKey = false) => {
+    if (!m) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(m)) {
+      const cur = (v || "").trim().toUpperCase();
+      if (k && cur) out[slugKey ? chainSlugify(k) : k] = cur;
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  sheetCurrencyById = clean(byId);
+  sheetCurrencyByChain = clean(byChain, true);
+}
+
+/**
+ * Tiền tệ theo CHAIN (dùng cho nơi chỉ biết chuỗi chứ không có store_id trong dynamicStores,
+ * vd trang Lịch sử mua không nạp catalog). Ưu tiên bảng tiền tệ từ sheet cửa hàng (nếu đã
+ * nạp), rồi SOURCE_META, cuối cùng "VND".
+ */
+export function chainCurrency(chain: Chain): string {
+  if (sheetCurrencyByChain) {
+    const c = sheetCurrencyByChain[chainSlugify(chain)];
+    if (c) return c;
+  }
+  return ((SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()])?.currency || "VND").toUpperCase();
+}
+
+/**
+ * Tiền tệ của một cửa hàng (theo store_id). Thứ tự ưu tiên:
+ *   1. Bảng tiền tệ từ sheet cửa hàng theo store_id (setStoreCurrencies) — nguồn chuẩn.
+ *   2. Cột currency của store đang nạp (getStore) — khi sheet còn trong dynamicStores.
+ *   3. Bảng tiền tệ theo chain (sheet) — cho offer nguồn online (storeId = chain).
+ *   4. Tiền tệ mặc định của nguồn (SOURCE_META).
+ *   5. "VND".
  */
 export function storeCurrency(id?: string): string {
   if (!id) return "VND";
+  if (sheetCurrencyById && sheetCurrencyById[id]) return sheetCurrencyById[id];
   const s = getStore(id);
-  return (s?.currency || (s ? SOURCE_META[s.chain]?.currency : "") || "VND").toUpperCase();
+  if (s?.currency) return s.currency.toUpperCase();
+  // Offer nguồn online: storeId chính là chain slug (vd "walmart"); store vật lý: dùng s.chain.
+  const chain = s?.chain ?? id;
+  if (sheetCurrencyByChain) {
+    const c = sheetCurrencyByChain[chainSlugify(chain)];
+    if (c) return c;
+  }
+  return ((SOURCE_META[chain] ?? SOURCE_META[(chain ?? "").toLowerCase()])?.currency || "VND").toUpperCase();
 }

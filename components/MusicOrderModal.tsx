@@ -174,7 +174,7 @@ export default function MusicOrderModal({
               </section>
 
               {/* ── Thanh toán — DÙNG CHUNG PaymentSection. Riêng loại "nhạc": chỉ QR/Thẻ (bỏ COD),
-                  flow "direct" (đặt trả ngay → QR hiện mã quét luôn, không qua bước trợ lý). ── */}
+                  flow "direct" (đặt trả ngay → QR hiện mã quét luôn, không qua bước trợ lý AAAI). ── */}
               <PaymentSection
                 pay={pay}
                 lang={lang}

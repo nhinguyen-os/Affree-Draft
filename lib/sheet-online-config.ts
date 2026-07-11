@@ -38,11 +38,18 @@ const DEFAULTS: OnlineConfig = {
   zaloOa: "https://zalo.me/740569612756449830",
 };
 
-/** Chuyển Google Drive /view link → direct image URL (lh3.googleusercontent) để <img> hiển thị được. */
+/**
+ * Chuyển link Google Drive → URL ảnh trực tiếp (lh3.googleusercontent) để <img> hiển thị được.
+ * Nhận "file/d/<id>", "open?id=<id>", "uc?id=<id>"; link THƯ MỤC (/folders/) → "" (không phải ảnh).
+ */
 function normalizeDriveUrl(url: string): string {
   if (!url) return url;
-  const m = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
-  if (m) return `https://lh3.googleusercontent.com/d/${m[1]}`;
+  if (/drive\.google\.com\/(drive\/|.*\/folders\/)/.test(url)) return "";
+  const mFile = url.match(/drive\.google\.com\/file\/d\/([^/?#]+)/);
+  // Kèm =s0 (giữ size gốc): lh3 .../d/<id> TRẦN trả HTML 0-byte khi fetch phía server → thêm size mới ra ảnh.
+  if (mFile) return `https://lh3.googleusercontent.com/d/${mFile[1]}=s0`;
+  const mId = url.match(/drive\.google\.com\/[^?]*\?[^#]*\bid=([^&#]+)/);
+  if (mId) return `https://lh3.googleusercontent.com/d/${mId[1]}=s0`;
   return url;
 }
 
