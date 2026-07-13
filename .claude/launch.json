@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "affree-staging-7",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "next",
+        "dev",
+        "--port",
+        "3016"
+      ],
+      "port": 3016
+    }
+  ]
+}
